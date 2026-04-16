@@ -1116,7 +1116,7 @@ class Arm3DControlPanel(tk.Frame):
     """
 
     _JOINT_LABELS = ["J1 Base", "J2 Hombro", "J3 Codo", "J4 Muñeca V", "J5 Muñeca R", "J6 Pinza"]
-    _JOINT_LIMITS = [(-90, 90), (-75, 75), (-90, 90), (-90, 90), (-90, 90), (-80, -17)]
+    _JOINT_LIMITS = [(0, 180), (15, 165), (0, 180), (0, 180), (0, 180), (10, 73)]
 
     def __init__(self, parent, application: 'MainApplication' = None, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
@@ -1149,10 +1149,10 @@ class Arm3DControlPanel(tk.Frame):
                 width=12, showvalue=False,
                 command=lambda val, idx=i: self._on_slider(idx, val)
             )
-            slider.set(0)
+            slider.set(90)
             slider.grid(row=i, column=1, padx=2, pady=1, sticky="ew")
 
-            val_lbl = tk.Label(sliders_container, text="  0°",
+            val_lbl = tk.Label(sliders_container, text=" 90°",
                                bg=DARK_BLUE, fg="white",
                                font=("Consolas", 9), width=5, anchor="w")
             val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="w")
@@ -1228,7 +1228,7 @@ class Arm3DControlPanel(tk.Frame):
         try:
             float_val = float(val)
             self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
-            self.application.controller.update_arm3d_joint(joint_idx, float_val)
+            self.application.controller.update_arm3d_joint(joint_idx, float_val - 90.0)
         except Exception:
             pass
 
@@ -1280,7 +1280,7 @@ class Arm3DControlPanel(tk.Frame):
                 joints = layer.motor3d.model.joints
                 for i, slider in enumerate(self._sliders):
                     if i < len(joints):
-                        val = int(joints[i])
+                        val = int(joints[i] + 90.0)
                         slider.set(val)
                         if i < len(self._val_labels):
                             self._val_labels[i].config(text=f"{val:>3}°")
@@ -1295,10 +1295,11 @@ class Arm3DControlPanel(tk.Frame):
             layer = self.application.controller.robot_layer
             if not isinstance(layer, _layers.Arm3DLayer):
                 return
-            limits = layer.motor3d.model.joint_limits  # lista de (min, max) en grados
+            limits = layer.motor3d.model.joint_limits  # lista de (min, max) en grados DH
             for i, slider in enumerate(self._sliders):
                 if i < len(limits):
-                    lim_min, lim_max = limits[i]
+                    lim_min = int(limits[i][0] + 90.0)
+                    lim_max = int(limits[i][1] + 90.0)
                     slider.configure(from_=lim_min, to=lim_max)
                     # Re-clampear valor actual al nuevo rango
                     current = slider.get()
@@ -1311,14 +1312,15 @@ class Arm3DControlPanel(tk.Frame):
 
 class Arm3DInfoPanel(tk.Frame):
     """Panel izquierdo de información en tiempo real del brazo robótico 3D.
-    Muestra coordenadas XYZ del efector final y ángulos articulares J1-J6.
+    Muestra coordenadas XYZ del efector final, ángulos articulares J1-J6 con
+    sus límites y estado de seguridad.
     Solo visible cuando el robot Braccio (opción 5) está activo.
     """
 
     def __init__(self, parent, *args, **kwargs):
         kwargs.setdefault('bg', DARK_BLUE)
         tk.Frame.__init__(self, parent, *args, **kwargs)
-        self.configure(width=170)
+        self.configure(width=210)
         self.pack_propagate(False)
 
         # Título
@@ -1331,7 +1333,7 @@ class Arm3DInfoPanel(tk.Frame):
         # --- Efector final ---
         tk.Label(self, text="Efector Final",
                  bg=DARK_BLUE, fg="#00E5CC",
-                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
 
         ee_frame = tk.Frame(self, bg=DARK_BLUE)
         ee_frame.pack(fill=tk.X, padx=8)
@@ -1341,9 +1343,9 @@ class Arm3DInfoPanel(tk.Frame):
             row = tk.Frame(ee_frame, bg=DARK_BLUE)
             row.pack(fill=tk.X, pady=1)
             tk.Label(row, text=f"{axis}:", bg=DARK_BLUE, fg="white",
-                     font=("Consolas", 10), width=3, anchor="e").pack(side=tk.LEFT)
+                     font=("Consolas", 9), width=3, anchor="e").pack(side=tk.LEFT)
             val = tk.Label(row, text="--- mm", bg=DARK_BLUE, fg="#00E5CC",
-                           font=("Consolas", 10), anchor="w")
+                           font=("Consolas", 9), anchor="w")
             val.pack(side=tk.LEFT, padx=4)
             self._lbl_ee[axis] = val
 
@@ -1358,15 +1360,20 @@ class Arm3DInfoPanel(tk.Frame):
         joints_frame.pack(fill=tk.X, padx=8)
 
         self._lbl_joints = []
+        self._lbl_joint_limits = []
         for i in range(6):
             row = tk.Frame(joints_frame, bg=DARK_BLUE)
             row.pack(fill=tk.X, pady=1)
             tk.Label(row, text=f"J{i + 1}:", bg=DARK_BLUE, fg="white",
-                     font=("Consolas", 10), width=3, anchor="e").pack(side=tk.LEFT)
+                     font=("Consolas", 9), width=3, anchor="e").pack(side=tk.LEFT)
             val = tk.Label(row, text="---°", bg=DARK_BLUE, fg="white",
-                           font=("Consolas", 10), anchor="w")
-            val.pack(side=tk.LEFT, padx=4)
+                           font=("Consolas", 9), width=5, anchor="w")
+            val.pack(side=tk.LEFT, padx=2)
+            lim = tk.Label(row, text="[---,---]", bg=DARK_BLUE, fg="#AACCFF",
+                           font=("Consolas", 8), anchor="w")
+            lim.pack(side=tk.LEFT, padx=2)
             self._lbl_joints.append(val)
+            self._lbl_joint_limits.append(lim)
 
         tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
 
@@ -1377,14 +1384,14 @@ class Arm3DInfoPanel(tk.Frame):
 
         self._lbl_status = tk.Label(self, text="OK",
                                     bg=DARK_BLUE, fg="#aaffaa",
-                                    font=("Consolas", 9), wraplength=155,
+                                    font=("Consolas", 9), wraplength=195,
                                     justify=tk.LEFT, anchor="w")
         self._lbl_status.pack(anchor="w", padx=10, pady=2)
 
     def update(self, dof, joints, end_effector, in_workspace, singular,
-               safety_blocked, warning_message):
+               safety_blocked, warning_message, joint_limits=None):
         """Actualiza los valores mostrados. Llamado desde Arm3DHUD.update()."""
-        # Efector
+        # Efector actual
         if end_effector and len(end_effector) >= 3:
             for axis, val in zip(["X", "Y", "Z"], end_effector):
                 self._lbl_ee[axis].config(text=f"{val:.0f} mm")
@@ -1392,12 +1399,17 @@ class Arm3DInfoPanel(tk.Frame):
             for axis in ["X", "Y", "Z"]:
                 self._lbl_ee[axis].config(text="--- mm")
 
-        # Articulaciones
-        for i, lbl in enumerate(self._lbl_joints):
+        # Articulaciones con límites
+        for i, (val_lbl, lim_lbl) in enumerate(zip(self._lbl_joints, self._lbl_joint_limits)):
             if joints and i < len(joints):
-                lbl.config(text=f"{joints[i]:.0f}°")
+                val_lbl.config(text=f"{joints[i]:.0f}°")
             else:
-                lbl.config(text="---°")
+                val_lbl.config(text="---°")
+            if joint_limits and i < len(joint_limits):
+                mn, mx = joint_limits[i]
+                lim_lbl.config(text=f"[{mn:.0f}°,{mx:.0f}°]")
+            else:
+                lim_lbl.config(text="[---,---]")
 
         # Estado
         if safety_blocked:

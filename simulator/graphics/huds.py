@@ -559,7 +559,7 @@ class Arm3DHUD(HUD):
                                 anchor="w", fill="white", tags="arm3d_static_hud")
 
     def update(self, dof, joints, end_effector, in_workspace, singular,
-               safety_blocked, warning_message):
+               safety_blocked, warning_message, joint_limits=None):
         """
         Actualiza los valores mostrados en el HUD.
 
@@ -571,6 +571,7 @@ class Arm3DHUD(HUD):
             singular       : bool
             safety_blocked : bool
             warning_message: str con el mensaje de aviso
+            joint_limits   : lista de tuplas (min, max) por articulación
         """
         if self.canvas is None:
             return
@@ -585,7 +586,7 @@ class Arm3DHUD(HUD):
         self.canvas.create_text(110, 45, text=ee_text, font=("Consolas", 12),
                                 anchor="w", fill="#00E5CC", tags="arm3d_dynamic_hud")
 
-        # Ángulos articulares
+        # Ángulos articulares con límites
         if joints:
             joint_text = "  ".join("J{}={:.0f}°".format(i + 1, v) for i, v in enumerate(joints))
         else:
@@ -617,4 +618,5 @@ class Arm3DHUD(HUD):
         # Actualizar también el panel de info lateral si está conectado
         if self._info_panel is not None:
             self._info_panel.update(dof, joints, end_effector, in_workspace, singular,
-                                    safety_blocked, warning_message)
+                                    safety_blocked, warning_message,
+                                    joint_limits=joint_limits)

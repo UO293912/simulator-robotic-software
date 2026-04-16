@@ -3,6 +3,7 @@ import graphics.robot_drawings as robot_drawings
 import graphics.huds as huds
 import robot_components.robots as robots
 import files.files_reader as filesr
+import time
 from motor3d.api import Motor3DApi
 
 
@@ -549,6 +550,8 @@ class Arm3DLayer(Layer):
         self.safety_blocked = False
         self.warning_message = ""
         self._canvas = None
+        self._current_joints = None  # ángulos animados actuales (interpolados)
+        self._last_sync_time = None
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
 
@@ -567,6 +570,8 @@ class Arm3DLayer(Layer):
         self.is_drawing = False
         self.safety_blocked = False
         self.warning_message = ""
+        self._current_joints = None  # resetear animación
+        self._last_sync_time = None
         if self._canvas is not None:
             try:
                 self._canvas.delete("all")
@@ -678,21 +683,52 @@ class Arm3DLayer(Layer):
     # Helpers privados
     # ------------------------------------------------------------------
 
+    # Velocidad de animación en grados por segundo.
+    # Se usa tiempo real y no "grados por frame" para que el movimiento
+    # no dependa de los FPS del render 3D.
+    _ANIM_SPEED_DPS = 95.0
+
     def __sync_from_servos(self):
-        """Lee valores de servo del ArmHardwareRobot y los pasa al motor 3D."""
+        """Lee los valores objetivo de los servos e interpola suavemente hacia ellos."""
         servo_values = self.robot.get_servo_values()
-        for i, sv in enumerate(servo_values):
-            dh_angle = float(sv) - 90.0
-            self.motor3d.model.set_joint(i, dh_angle)
+        targets = [float(sv) - 90.0 for sv in servo_values]
+        now = time.monotonic()
+
+        # Inicializar posición actual en el primer frame
+        if self._current_joints is None:
+            self._current_joints = list(targets)
+            self._last_sync_time = now
+
+        if self._last_sync_time is None:
+            dt = 0.016
+        else:
+            # Permitimos frames lentos (p. ej. 5 FPS) sin frenar artificialmente
+            # la animación. Solo se limita para evitar saltos enormes tras pausas
+            # largas o al reanudar depuración.
+            dt = max(0.0, min(0.25, now - self._last_sync_time))
+        self._last_sync_time = now
+
+        speed = self._ANIM_SPEED_DPS * dt
+        for i, target in enumerate(targets):
+            curr = self._current_joints[i]
+            diff = target - curr
+            if abs(diff) <= speed:
+                self._current_joints[i] = target
+            else:
+                self._current_joints[i] = curr + speed * (1.0 if diff > 0 else -1.0)
+            self.motor3d.model.set_joint(i, self._current_joints[i])
+
         self.motor3d.scene.update()
 
     def _update_hud(self, safety):
         ee = self.motor3d.scene.get_end_effector()
-        joints = list(self.motor3d.model.joints)
+        joints_servo = [j + 90.0 for j in self.motor3d.model.joints]
+        limits_servo = [(mn + 90.0, mx + 90.0) for mn, mx in self.motor3d.model.joint_limits]
         self.hud.update(
             dof=self.motor3d.model.dof,
-            joints=joints,
+            joints=joints_servo,
             end_effector=ee,
+            joint_limits=limits_servo,
             in_workspace=safety['in_workspace'],
             singular=safety['singular'],
             safety_blocked=safety['blocked'],

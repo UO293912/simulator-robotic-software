@@ -25,13 +25,16 @@ class SafetyManager:
         workspace_ok = in_workspace(points, max_reach)
         singular = near_singularity(points)
 
-        blocked = not workspace_ok or singular
+        # Solo se bloquea la ejecución cuando el efector está fuera del workspace.
+        # La singularidad es un aviso informativo: los eslabones alineados son
+        # una configuración válida (p. ej. la posición de reposo del Braccio).
+        blocked = not workspace_ok
         message = ""
 
         if not workspace_ok:
             message = "Posición fuera del espacio de trabajo del robot."
         elif singular:
-            message = "Singularidad detectada: eslabones alineados. Ajuste la posición manualmente."
+            message = "Aviso: eslabones alineados (singularidad). El movimiento puede ser impreciso."
 
         return {
             'in_workspace': workspace_ok,

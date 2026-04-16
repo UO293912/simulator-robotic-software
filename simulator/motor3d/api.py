@@ -159,6 +159,7 @@ class Motor3DApi:
         max_reach = self.model.max_reach()
         return self.safety_manager.evaluate(points, max_reach)
 
+
     # ------------------------------------------------------------------
     # Helpers privados
     # ------------------------------------------------------------------
