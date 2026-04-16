@@ -354,6 +354,26 @@ class TestRendering:
         assert r > 0 or g > 0 or b > 0, (
             "El color del punto más antiguo de la trayectoria no debe ser negro")
 
+    def test_arm3d_servo_sync_uses_real_time_not_frames(self, monkeypatch):
+        """La animación del Arm3D no debe depender del número de frames renderizados."""
+        import graphics.layers as layers_mod
+
+        layer = layers_mod.Arm3DLayer()
+        times = iter([0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2])
+        monkeypatch.setattr(layers_mod.time, "monotonic", lambda: next(times))
+
+        # Estado inicial: servo base en 90° -> joint DH = 0°
+        layer.robot.servo_base.value = 90
+        layer._Arm3DLayer__sync_from_servos()
+
+        # Nuevo objetivo: servo base en 0° -> joint DH = -90°
+        layer.robot.servo_base.value = 0
+        for _ in range(6):
+            layer._Arm3DLayer__sync_from_servos()
+
+        assert layer.motor3d.model.joints[0] <= -89.0, (
+            f"J1 debería alcanzar el objetivo por tiempo real, obtuvo {layer.motor3d.model.joints[0]:.1f}°")
+
 
 # ---------------------------------------------------------------------------
 # P-CU04-01 : Navegación 3D sin crash
@@ -467,20 +487,35 @@ class TestBraccioCompiler:
         assert b is not None
         assert b.board is None
 
-    def test_braccio_servo_movement_with_mock_board(self):
+    def test_braccio_servo_movement_with_mock_board(self, monkeypatch):
         """servo_movement debe actualizar los servos a través del board."""
+        import libraries.braccio as braccio_mod
         from libraries.braccio import Braccio, BRACCIO_PINS
 
         # Board mock con elementos servo mock
         class MockElem:
-            def __init__(self): self.last_pin = None; self.last_val = None
-            def set_value(self, pin, val): self.last_pin = pin; self.last_val = val
+            def __init__(self, value=90):
+                self.value = value
+                self.last_pin = None
+                self.last_val = None
+                self.writes = []
+
+            def set_value(self, pin, val):
+                self.value = val
+                self.last_pin = pin
+                self.last_val = val
+                self.writes.append(val)
 
         class MockBoard:
             def __init__(self):
                 self.elements = {pin: MockElem() for pin in BRACCIO_PINS.values()}
+                self.elements[BRACCIO_PINS['gripper']].value = 73
+
             def get_pin_element(self, pin):
                 return self.elements.get(pin)
+
+        delays = []
+        monkeypatch.setattr(braccio_mod, "_delay_ms", lambda ms: delays.append(ms))
 
         board = MockBoard()
         b = Braccio(board)
@@ -490,6 +525,166 @@ class TestBraccioCompiler:
         shoulder_pin = BRACCIO_PINS['shoulder']
         assert board.elements[shoulder_pin].last_val == 45, (
             f"El servo del hombro debe tener valor 45, obtuvo {board.elements[shoulder_pin].last_val}")
+        assert board.elements[shoulder_pin].writes[0] == 89
+        assert len(board.elements[shoulder_pin].writes) == 45
+        assert len(delays) == 45
+        assert set(delays) == {20}
+
+    def test_braccio_servo_movement_clamps_targets_and_step_delay(self, monkeypatch):
+        """servo_movement debe aplicar el clamping oficial de rangos y stepDelay."""
+        import libraries.braccio as braccio_mod
+
+        class MockElem:
+            def __init__(self, value=90):
+                self.value = value
+                self.last_val = value
+
+            def set_value(self, _pin, val):
+                self.value = val
+                self.last_val = val
+
+        class MockBoard:
+            def __init__(self):
+                self.elements = {
+                    pin: MockElem(73 if pin == braccio_mod.BRACCIO_PINS['gripper'] else 90)
+                    for pin in braccio_mod.BRACCIO_PINS.values()
+                }
+
+            def get_pin_element(self, pin):
+                return self.elements.get(pin)
+
+        delays = []
+        monkeypatch.setattr(braccio_mod, "_delay_ms", lambda ms: delays.append(ms))
+
+        board = MockBoard()
+        b = braccio_mod.Braccio(board)
+        b._resolve_servos()
+        b.servo_movement(5, 200, 0, 181, -1, 999, 0)
+
+        assert board.elements[braccio_mod.BRACCIO_PINS['base']].last_val == 180
+        assert board.elements[braccio_mod.BRACCIO_PINS['shoulder']].last_val == 15
+        assert board.elements[braccio_mod.BRACCIO_PINS['elbow']].last_val == 180
+        assert board.elements[braccio_mod.BRACCIO_PINS['wrist_ver']].last_val == 0
+        assert board.elements[braccio_mod.BRACCIO_PINS['wrist_rot']].last_val == 180
+        assert board.elements[braccio_mod.BRACCIO_PINS['gripper']].last_val == 10
+        assert delays, "ServoMovement debe esperar entre pasos"
+        assert set(delays) == {10}
+
+    def test_braccio_module_level_api_uses_active_standard_board(self, monkeypatch):
+        """La API de módulo de Braccio debe operar sobre standard.board."""
+        import libraries.standard as standard
+        import libraries.braccio as braccio
+
+        class MockElem:
+            def __init__(self, value=90):
+                self.value = value
+                self.last_pin = None
+                self.last_val = None
+
+            def set_value(self, pin, val):
+                self.value = val
+                self.last_pin = pin
+                self.last_val = val
+
+        class MockBoard:
+            def __init__(self):
+                self.elements = {
+                    pin: MockElem(73 if pin == braccio.BRACCIO_PINS['gripper'] else 90)
+                    for pin in braccio.BRACCIO_PINS.values()
+                }
+
+            def get_pin_element(self, pin):
+                return self.elements.get(pin)
+
+            def write_value(self, pin, val):
+                elem = self.elements.get(pin)
+                if elem is not None:
+                    elem.set_value(pin, val)
+                    return True
+                return False
+
+        original_board = standard.board
+        original_singleton = braccio._singleton
+        try:
+            monkeypatch.setattr(braccio, "_delay_ms", lambda _ms: None)
+            board = MockBoard()
+            standard.board = board
+            braccio._singleton = None
+            braccio.begin()
+            braccio.servo_movement(20, 90, 45, 90, 90, 90, 73)
+
+            shoulder_pin = braccio.BRACCIO_PINS['shoulder']
+            assert board.elements[shoulder_pin].last_val == 45
+        finally:
+            standard.board = original_board
+            braccio._singleton = original_singleton
+
+    def test_braccio_begin_allocates_fixed_servos_on_arm_robot_board(self, monkeypatch):
+        """Braccio.begin debe reservar los pines oficiales sobre el brazo 3D sin cableado previo."""
+        import libraries.standard as standard
+        import libraries.braccio as braccio
+        from robot_components.robots import ArmHardwareRobot
+
+        original_board = standard.board
+        original_singleton = braccio._singleton
+        try:
+            robot = ArmHardwareRobot()
+            monkeypatch.setattr(braccio, "_delay_ms", lambda _ms: None)
+            standard.board = robot.board
+            braccio._singleton = None
+
+            assert braccio.begin() == 1
+            assert robot.servo_base.pin == braccio.BRACCIO_PINS['base']
+            assert robot.servo_shoulder.pin == braccio.BRACCIO_PINS['shoulder']
+            assert robot.servo_elbow.pin == braccio.BRACCIO_PINS['elbow']
+            assert robot.servo_wrist_vertical.pin == braccio.BRACCIO_PINS['wrist_ver']
+            assert robot.servo_wrist.pin == braccio.BRACCIO_PINS['wrist_rot']
+            assert robot.servo_gripper.pin == braccio.BRACCIO_PINS['gripper']
+        finally:
+            standard.board = original_board
+            braccio._singleton = original_singleton
+
+    def test_arm3d_assigns_joints_by_attach_order(self):
+        """Servo.attach/write debe asignar J1..J6 por orden de attach, no por nombre."""
+        from graphics.layers import Arm3DLayer
+        from libraries.servo import Servo
+
+        layer = Arm3DLayer()
+        first = Servo(layer.robot.board, "gripper")
+        second = Servo(layer.robot.board, "base")
+
+        assert first.attach(10) == Servo.OK
+        assert second.attach(11) == Servo.OK
+
+        first.write(30)
+        second.write(120)
+        layer._Arm3DLayer__sync_from_servos()
+
+        assert layer.motor3d.model.joints[0] == -60.0
+        assert layer.motor3d.model.joints[1] == 30.0
+
+    def test_transpiler_initializes_servo_instances_with_board(self):
+        """Las declaraciones Servo deben crear instancias enlazadas a la placa activa."""
+        from compiler.transpiler import transpile
+
+        sketch = """
+#include <Servo.h>
+
+Servo base;
+Servo shoulder;
+
+void setup() {}
+void loop() {}
+"""
+        warns, errors, _ast_tree = transpile(sketch)
+        assert not warns
+        assert not errors
+
+        with open('temp/script_arduino.py', 'r', encoding='utf-8') as f:
+            code = f.read()
+
+        assert "base = Servo.Servo(standard.board)" in code
+        assert "shoulder = Servo.Servo(standard.board)" in code
 
 
 # ---------------------------------------------------------------------------
@@ -711,3 +906,80 @@ void loop() {
 
         assert ctrl.step_pending is True
         assert ctrl.paused is False
+
+    def test_setup_returns_false_when_setup_raises(self):
+        """Setup.execute debe devolver False si setup() falla en tiempo de ejecución."""
+        import compiler.commands as commands
+        import libraries.standard as standard
+        import robot_components.robot_state as state
+
+        class _MockConsole:
+            def __init__(self):
+                self.errors = []
+
+            def write_error(self, error):
+                self.errors.append(error)
+
+        class _MockRobot:
+            board = None
+
+        class _MockLayer:
+            robot = _MockRobot()
+
+        class _MockController:
+            robot_layer = _MockLayer()
+            console = _MockConsole()
+
+        original_module = commands.module
+        original_state = standard.state
+        try:
+            standard.state = state.State()
+
+            class _BrokenModule:
+                @staticmethod
+                def setup():
+                    raise RuntimeError("boom")
+
+            commands.module = _BrokenModule()
+            cmd = commands.Setup(_MockController())
+            cmd.ready = True
+
+            assert cmd.execute() is False
+            assert len(_MockController.console.errors) == 1
+        finally:
+            commands.module = original_module
+            standard.state = original_state
+
+    def test_drawing_loop_does_not_restart_when_execution_stopped(self):
+        """drawing_loop no debe relanzar loop() si executing ya es False."""
+        import graphics.controller as controller_mod
+        import graphics.screen_updater as screen_updater
+
+        ctrl = controller_mod.RobotsController.__new__(controller_mod.RobotsController)
+        ctrl.executing = False
+        ctrl.paused = False
+        ctrl.arm3d = False
+        ctrl.robot_layer = None
+
+        class _MockView:
+            keys_used = False
+
+            def after(self, *_args):
+                return None
+
+        class _MockLoopCommand:
+            def __init__(self):
+                self.calls = 0
+
+            def execute(self):
+                self.calls += 1
+
+        original_refresh = screen_updater.refresh
+        try:
+            ctrl.view = _MockView()
+            ctrl.loop_command = _MockLoopCommand()
+            screen_updater.refresh = lambda: None
+            ctrl.drawing_loop()
+            assert ctrl.loop_command.calls == 0
+        finally:
+            screen_updater.refresh = original_refresh
