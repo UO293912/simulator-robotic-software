@@ -9,7 +9,20 @@ Pines del Braccio:
     wrist_ver    → pin 6
     wrist_rot    → pin 5
     gripper      → pin 3
+
+Uso en sketch Arduino (simulador):
+    #include <Braccio.h>
+
+    void setup(){
+      Braccio.begin();
+    }
+
+    void loop(){
+      Braccio.ServoMovement(20, 90, 90, 90, 90, 90, 73);
+    }
 """
+
+import time
 
 # Pines estándar del Braccio
 BRACCIO_PINS = {
@@ -23,6 +36,38 @@ BRACCIO_PINS = {
 
 # Orden de los servos en servo_movement
 _SERVO_ORDER = ['base', 'shoulder', 'elbow', 'wrist_ver', 'wrist_rot', 'gripper']
+
+_DEFAULT_STEP_POSITIONS = {
+    'base': 90,
+    'shoulder': 90,
+    'elbow': 90,
+    'wrist_ver': 90,
+    'wrist_rot': 90,
+    'gripper': 73,
+}
+
+# Límites hardware en grados de servo (0–180).
+# Derivados de los límites DH del preset braccio_tinkerkit: servo = dh_angle + 90.
+_SERVO_LIMITS = {
+    'base':      (0,   180),
+    'shoulder':  (15,  165),
+    'elbow':     (0,   180),
+    'wrist_ver': (0,   180),
+    'wrist_rot': (0,   180),
+    'gripper':   (10,  73),
+}
+
+
+def _delay_ms(ms):
+    """Aplica un retardo compatible con el runtime Arduino del simulador."""
+    try:
+        import libraries.standard as _standard
+        if getattr(_standard, "state", None) is not None:
+            _standard.delay(ms)
+            return
+    except Exception:
+        pass
+    time.sleep(ms / 1000.0)
 
 
 def get_name():
@@ -48,6 +93,41 @@ def get_not_implemented():
     return []
 
 
+# ---------------------------------------------------------------------------
+# Singleton de módulo (patrón idéntico al de serial.py / standard.py)
+# El código generado por code_generator.py produce llamadas del tipo
+#   import libraries.braccio as Braccio
+#   Braccio.begin()
+#   Braccio.servo_movement(...)
+# Por eso se necesitan estas funciones a nivel de módulo.
+# ---------------------------------------------------------------------------
+
+_singleton = None
+
+
+def _get_singleton():
+    """Devuelve la instancia singleton de Braccio, sincronizándola con la placa activa."""
+    global _singleton
+    import libraries.standard as _std
+    if _singleton is None or _singleton.board is not _std.board:
+        _singleton = Braccio(_std.board)
+    return _singleton
+
+
+def begin():
+    """Inicializa el Braccio y mueve al estado de reposo."""
+    return _get_singleton().begin()
+
+
+def servo_movement(step_delay, v_base, v_shoulder, v_elbow,
+                   v_wrist_ver, v_wrist_rot, v_gripper):
+    """Mueve los 6 servos del Braccio a las posiciones indicadas."""
+    return _get_singleton().servo_movement(
+        step_delay, v_base, v_shoulder, v_elbow,
+        v_wrist_ver, v_wrist_rot, v_gripper
+    )
+
+
 class Braccio:
     """
     Clase que simula la librería Braccio de Arduino.
@@ -59,11 +139,13 @@ class Braccio:
 
     def __init__(self, board=None):
         self.board = board
+        self._step_positions = None
         self._servos = {}  # pin → elemento servo
 
     def set_board(self, board):
         """Establece la placa y resuelve los elementos servo por pin."""
         self.board = board
+        self._step_positions = None
         self._resolve_servos()
 
     def _resolve_servos(self):
@@ -73,6 +155,10 @@ class Braccio:
             return
         for name, pin in BRACCIO_PINS.items():
             elem = self.board.get_pin_element(pin)
+            if elem is None:
+                arm_robot = getattr(self.board, "arm_robot", None)
+                if arm_robot is not None:
+                    elem = arm_robot.attach_servo_to_pin(pin, name)
             if elem is not None:
                 self._servos[pin] = elem
 
@@ -92,7 +178,7 @@ class Braccio:
         Mueve todos los servos del Braccio a las posiciones indicadas.
 
         Args:
-            step_delay : retardo entre pasos (ignorado en simulador)
+            step_delay : retardo entre pasos en ms (10-30 ms en la libreria oficial)
             v_base     : ángulo servo base (0-180°)
             v_shoulder : ángulo servo hombro (15-165°)
             v_elbow    : ángulo servo codo (0-180°)
@@ -107,16 +193,78 @@ class Braccio:
             self._resolve_servos()
 
         values = [v_base, v_shoulder, v_elbow, v_wrist_ver, v_wrist_rot, v_gripper]
-        names = _SERVO_ORDER
 
-        for name, value in zip(names, values):
-            pin = BRACCIO_PINS[name]
-            # Intentar escribir directamente al elemento servo
-            elem = self._servos.get(pin)
-            if elem is not None:
-                elem.set_value(pin, int(value))
-            elif self.board is not None:
-                # Fallback: usar write_value del board
-                self.board.write_value(pin, int(value))
+        # Validar rangos hardware y avisar en consola
+        self._validate_values(values)
+        step_delay = max(10, min(30, int(step_delay)))
+        targets = self._clamp_values(values)
+        step_positions = self._get_step_positions()
+
+        while True:
+            moved = False
+            for name, target in zip(_SERVO_ORDER, targets):
+                current = step_positions[name]
+                if current == target:
+                    continue
+                moved = True
+                current += 1 if target > current else -1
+                step_positions[name] = current
+                self._write_servo(name, current)
+
+            if not moved:
+                break
+
+            _delay_ms(step_delay)
+
+        self._step_positions = step_positions
 
         return self.OK
+
+    def _get_step_positions(self):
+        """Obtiene la posicion actual de trabajo usada por ServoMovement."""
+        if self._step_positions is not None:
+            return dict(self._step_positions)
+
+        step_positions = {}
+        for name in _SERVO_ORDER:
+            pin = BRACCIO_PINS[name]
+            elem = self._servos.get(pin)
+            if elem is not None and hasattr(elem, "value"):
+                step_positions[name] = int(elem.value)
+            else:
+                step_positions[name] = _DEFAULT_STEP_POSITIONS[name]
+        return step_positions
+
+    def _clamp_values(self, values):
+        """Ajusta los objetivos a los rangos seguros de la libreria oficial."""
+        clamped = []
+        for name, value in zip(_SERVO_ORDER, values):
+            lo, hi = _SERVO_LIMITS[name]
+            clamped.append(max(lo, min(hi, int(value))))
+        return clamped
+
+    def _write_servo(self, name, value):
+        """Escribe un paso de un grado sobre el servo indicado."""
+        pin = BRACCIO_PINS[name]
+        elem = self._servos.get(pin)
+        if elem is not None:
+            elem.set_value(pin, int(value))
+        elif self.board is not None:
+            self.board.write_value(pin, int(value))
+
+    def _validate_values(self, values):
+        """Emite advertencias en consola si algún valor está fuera del rango hardware."""
+        try:
+            import libraries.serial as _serial
+            import output.console as _console
+            if _serial.cons is None:
+                return
+            for name, value in zip(_SERVO_ORDER, values):
+                lo, hi = _SERVO_LIMITS[name]
+                if not (lo <= value <= hi):
+                    _serial.cons.write_warning(_console.Warning(
+                        "Braccio", 0, 0,
+                        f"ServoMovement: {name}={value}° fuera del rango permitido [{lo}°, {hi}°]"
+                    ))
+        except Exception:
+            pass
