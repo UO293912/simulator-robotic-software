@@ -314,8 +314,7 @@ def delay(ms):
         ms: the number of milliseconds to pause
     """
     state.exec_time_ms = int(time.time_ns() / 1000000) + ms
-    while time.time_ns() / 1000000 < state.exec_time_ms:
-        screen_updater.refresh()
+    time.sleep(ms / 1000.0)
 
 
 def delay_microseconds(us):

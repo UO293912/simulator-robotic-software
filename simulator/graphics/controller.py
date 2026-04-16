@@ -44,7 +44,7 @@ class RobotsController:
 
     def drawing_loop(self):
         screen_updater.refresh()
-        if not self.view.keys_used:
+        if self.executing and not self.view.keys_used:
             # RF3.1.2/RF3.3.4: pausar la ejecución del sketch cuando la seguridad está bloqueada.
             safety_blocked = (
                 self.arm3d
@@ -154,6 +154,7 @@ class RobotsController:
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
             self.view.show_arm3d_panel(False)
+            self.view.keys_used = True
             self.robot_layer = layers.MobileRobotLayer(2)
             self.board = False
         # Mobile Robot, 3 infrared
@@ -165,6 +166,7 @@ class RobotsController:
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
             self.view.show_arm3d_panel(False)
+            self.view.keys_used = True
             self.robot_layer = layers.MobileRobotLayer(3)
             self.board = False
         # Mobile Robot,  4 infrared
@@ -176,6 +178,7 @@ class RobotsController:
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
             self.view.show_arm3d_panel(False)
+            self.view.keys_used = True
             self.robot_layer = layers.MobileRobotLayer(4)
             self.board = False
         # Linear Actuator
@@ -187,6 +190,7 @@ class RobotsController:
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
             self.view.show_arm3d_panel(False)
+            self.view.keys_used = True
             self.robot_layer = layers.LinearActuatorLayer()
             self.board = False
         # Option for the Arduino Board
@@ -209,6 +213,9 @@ class RobotsController:
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
             self.view.show_arm3d_panel(True)
+            # El Arm3D no usa teclado para mover el robot: el sketch debe
+            # ejecutarse siempre. keys_used=False desbloquea drawing_loop.
+            self.view.keys_used = False
             self.robot_layer = layers.Arm3DLayer()
             self.board = False
             self.arm3d = True

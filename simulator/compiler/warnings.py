@@ -89,8 +89,9 @@ class WarningAnalyzer(ast_visitor.ASTVisitor):
                 name = function_call.name.element.type
                 if isinstance(name, ast.StringTypeNode):
                     lib_name = 'String'
-                else:
+                elif name is not None:
                     lib_name = name.type_name
+                # else: lib_name ya es el identificador (p. ej. "Braccio")
         else:
             f_name = function_call.name.value
             lib_name = "Standard"

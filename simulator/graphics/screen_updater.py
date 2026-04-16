@@ -1,4 +1,5 @@
 import time
+import threading
 import graphics.layers as layers
 
 
@@ -28,8 +29,10 @@ def update():
 
 def debug_line(line_no):
     """Llamado desde el código transpilado antes de cada sentencia.
-    Refresca la pantalla e implementa la pausa por breakpoint o modo paso a paso."""
-    refresh()
-    if controller is not None and controller.debug_should_pause_at_line(line_no):
-        from compiler.commands import ExecutionPaused
-        raise ExecutionPaused(line_no)
+    Cuando se ejecuta en el hilo principal refresca la pantalla y gestiona
+    breakpoints. Desde un hilo de fondo se omiten las operaciones de Tkinter."""
+    if threading.current_thread() is threading.main_thread():
+        refresh()
+        if controller is not None and controller.debug_should_pause_at_line(line_no):
+            from compiler.commands import ExecutionPaused
+            raise ExecutionPaused(line_no)

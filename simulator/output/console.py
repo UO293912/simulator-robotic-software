@@ -1,4 +1,5 @@
 import logging
+import threading
 from datetime import datetime
 import os
 from time import time
@@ -174,6 +175,9 @@ class Console:
         Arguments:
             error_msg: the error to write
         """
+        if threading.current_thread() is not threading.main_thread():
+            self.text_widget.after(0, lambda: self.write_error(error_msg))
+            return
         message = error_msg.to_string()
         m_type = 'error'
         self.__insert_text(message, m_type)
@@ -186,6 +190,9 @@ class Console:
         Arguments:
             warning_msg: the error to write
         """
+        if threading.current_thread() is not threading.main_thread():
+            self.text_widget.after(0, lambda: self.write_warning(warning_msg))
+            return
         message = warning_msg.to_string()
         m_type = 'warning'
         self.__insert_text(message, m_type)
