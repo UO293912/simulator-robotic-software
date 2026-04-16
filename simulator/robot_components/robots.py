@@ -437,6 +437,64 @@ class LinearActuator(Robot):
         self.joystick.pinb = -1
 
 
+class ArmHardwareRobot(Robot):
+    """
+    Robot hardware simulado del TinkerKit Braccio.
+    Contiene 6 servomotores pre-conectados a sus pines estándar.
+    Los valores de los servos son leídos por Arm3DLayer en cada fotograma.
+    """
+
+    # Pines estándar del Braccio (coinciden con libraries/braccio.py)
+    PIN_BASE = 11
+    PIN_SHOULDER = 10
+    PIN_ELBOW = 9
+    PIN_WRIST_VER = 6
+    PIN_WRIST_ROT = 5
+    PIN_GRIPPER = 3
+
+    def __init__(self):
+        super().__init__(boards.BQzumBT328())
+
+        self.servo_base = elements.Servo()
+        self.servo_shoulder = elements.Servo()
+        self.servo_elbow = elements.Servo()
+        self.servo_wrist_vertical = elements.Servo()
+        self.servo_wrist = elements.Servo()
+        self.servo_gripper = elements.Servo()
+
+        self._attach_all()
+
+    def _attach_all(self):
+        """Adjunta los servos a sus pines en la placa y pone el modo OUTPUT."""
+        servo_map = [
+            (self.PIN_BASE, self.servo_base),
+            (self.PIN_SHOULDER, self.servo_shoulder),
+            (self.PIN_ELBOW, self.servo_elbow),
+            (self.PIN_WRIST_VER, self.servo_wrist_vertical),
+            (self.PIN_WRIST_ROT, self.servo_wrist),
+            (self.PIN_GRIPPER, self.servo_gripper),
+        ]
+        for pin, servo in servo_map:
+            servo.pin = pin
+            self.board.attach_pin(pin, servo)
+            self.board.set_pin_mode(pin, boards.Board.OUTPUT)
+        self.robot_elements = [s for _, s in servo_map]
+
+    def get_servo_values(self):
+        """
+        Devuelve los valores actuales de los 6 servos en orden:
+        [base, shoulder, elbow, wrist_vertical, wrist_rot, gripper]
+        """
+        return [
+            self.servo_base.value,
+            self.servo_shoulder.value,
+            self.servo_elbow.value,
+            self.servo_wrist_vertical.value,
+            self.servo_wrist.value,
+            self.servo_gripper.value,
+        ]
+
+
 class ArduinoBoard(Robot):
 
     def __init__(self, pins):
