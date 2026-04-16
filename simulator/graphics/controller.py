@@ -17,13 +17,19 @@ class RobotsController:
         self.setup_command = commands.Setup(self)
         self.loop_command = commands.Loop(self)
         self.executing = False
+        self.paused = False        # True cuando la ejecución está pausada (breakpoint o Pause)
+        self.step_pending = False  # True cuando se ha pedido avanzar una sentencia
+        self._breakpoints = set()  # Líneas Arduino con breakpoint activo
         self.board = False
+        self.arm3d = False
         self.new = True
+        self._arm3d_loop_running = False  # evita múltiples instancias del render loop
 
     def execute(self, option_gamification):
         if not self.board:
             screen_updater.layer = self.robot_layer
             screen_updater.view = self.view
+            screen_updater.controller = self  # Para debug_line()
             self.view.abort_after()
             self.robot_layer.execute()
             self.console.clear()
@@ -39,16 +45,76 @@ class RobotsController:
     def drawing_loop(self):
         screen_updater.refresh()
         if not self.view.keys_used:
-            self.loop_command.execute()
+            # RF3.1.2/RF3.3.4: pausar la ejecución del sketch cuando la seguridad está bloqueada.
+            safety_blocked = (
+                self.arm3d
+                and isinstance(self.robot_layer, layers.Arm3DLayer)
+                and self.robot_layer.safety_blocked
+            )
+            # RF4.2.2: no ejecutar loop() cuando la simulación está pausada (breakpoint o Pause).
+            if not safety_blocked and not self.paused:
+                self.loop_command.execute()
         self.view.identifier = self.view.after(10, self.drawing_loop)
+
+    def arm3d_render_loop(self):
+        """Bucle de renderizado pasivo para el brazo 3D cuando no hay código ejecutándose."""
+        # Si el brazo ya no está activo, terminar el loop y liberar el flag
+        if not self.arm3d or not isinstance(self.robot_layer, layers.Arm3DLayer):
+            self._arm3d_loop_running = False
+            return
+        if self.executing:
+            # El drawing_loop ya renderiza; volver a comprobar en el próximo tick
+            self.view.after(50, self.arm3d_render_loop)
+            return
+        try:
+            layer = self.robot_layer
+            layer.motor3d.keyboard_camera(self.view.move_WASD)
+            if layer._canvas:
+                layer.motor3d.draw(layer._canvas)
+            safety = layer.motor3d.evaluate_safety()
+            layer._update_hud(safety)
+        except Exception:
+            pass
+        self.view.after(50, self.arm3d_render_loop)  # ~20 FPS, no saturar el hilo principal
 
     def stop(self):
         self.executing = False
+        self.paused = False
+        self.step_pending = False
         self.compile_command.reboot()
         self.setup_command.reboot()
         self.loop_command.reboot()
         self.robot_layer.stop()
         self.view.abort_after()
+
+    # ------------------------------------------------------------------
+    # Control de depuración (RF4.2.2 / RF4.2.3)
+    # ------------------------------------------------------------------
+
+    def toggle_pause(self):
+        """Alterna entre pausado y ejecutando (botón Pause/Play)."""
+        if self.executing:
+            self.paused = not self.paused
+            if not self.paused:
+                self.step_pending = False
+
+    def step_once(self):
+        """Ejecuta exactamente una sentencia más y vuelve a pausar (botón Step)."""
+        if self.executing:
+            self.step_pending = True
+            self.paused = False  # Permite un ciclo; debug_line() volverá a pausar
+
+    def set_breakpoints(self, lines):
+        """Establece el conjunto de líneas Arduino con breakpoint activo."""
+        self._breakpoints = set(lines)
+
+    def debug_should_pause_at_line(self, line_no):
+        """Consultado por screen_updater.debug_line(). Devuelve True si hay que pausar."""
+        if line_no in self._breakpoints or self.step_pending:
+            self.step_pending = False
+            self.paused = True
+            return True
+        return self.paused
 
     def zoom_in(self):
         self.robot_layer.zoom_in()
@@ -61,6 +127,10 @@ class RobotsController:
     def configure_layer(self, drawing_canvas, hud_canvas):
         self.robot_layer.set_canvas(drawing_canvas, hud_canvas)
         self.view.change_zoom_label(self.robot_layer.drawing.zoom_percentage())
+        if self.arm3d and isinstance(self.robot_layer, layers.Arm3DLayer):
+            if not self._arm3d_loop_running:
+                self._arm3d_loop_running = True
+                self.view.after(100, self.arm3d_render_loop)
 
     def configure_console(self, text_component):
         self.console = console.Console(text_component)
@@ -73,6 +143,8 @@ class RobotsController:
         """
         if self.robot_layer is not None:
             self.stop()
+        self.arm3d = False
+        self._arm3d_loop_running = False
         # Mobile Robot, 2 infrared
         if option == 0:
             self.view.show_circuit_selector(True)
@@ -81,6 +153,7 @@ class RobotsController:
             self.view.show_button_keys_movement(True)
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
+            self.view.show_arm3d_panel(False)
             self.robot_layer = layers.MobileRobotLayer(2)
             self.board = False
         # Mobile Robot, 3 infrared
@@ -91,6 +164,7 @@ class RobotsController:
             self.view.show_button_keys_movement(True)
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
+            self.view.show_arm3d_panel(False)
             self.robot_layer = layers.MobileRobotLayer(3)
             self.board = False
         # Mobile Robot,  4 infrared
@@ -101,6 +175,7 @@ class RobotsController:
             self.view.show_button_keys_movement(True)
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
+            self.view.show_arm3d_panel(False)
             self.robot_layer = layers.MobileRobotLayer(4)
             self.board = False
         # Linear Actuator
@@ -111,6 +186,7 @@ class RobotsController:
             self.view.show_button_keys_movement(True)
             self.view.show_buttons_gamification(False)
             self.view.show_key_drawing(False)
+            self.view.show_arm3d_panel(False)
             self.robot_layer = layers.LinearActuatorLayer()
             self.board = False
         # Option for the Arduino Board
@@ -121,8 +197,62 @@ class RobotsController:
             self.view.show_button_keys_movement(False)
             self.view.show_buttons_gamification(True)
             self.view.show_key_drawing(False)
+            self.view.show_arm3d_panel(False)
             self.robot_layer = layers.ArduinoBoardLayer()
             self.board = True
+        # Brazo robótico 3D (Braccio)
+        elif option == 5:
+            self.view.show_circuit_selector(False)
+            self.view.show_gamification_option_selector(False)
+            self.view.show_joystick(False)
+            self.view.show_button_keys_movement(False)
+            self.view.show_buttons_gamification(False)
+            self.view.show_key_drawing(False)
+            self.view.show_arm3d_panel(True)
+            self.robot_layer = layers.Arm3DLayer()
+            self.board = False
+            self.arm3d = True
+
+    def update_arm3d_joint(self, joint_idx, angle):
+        """Actualiza el ángulo articular del brazo 3D (llamado desde la GUI)."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.set_joint_angle(joint_idx, angle)
+
+    def solve_arm3d_ik(self, x, y, z):
+        """Lanza la cinemática inversa del brazo 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            return self.robot_layer.solve_ik(x, y, z)
+        return False, "No hay brazo 3D activo"
+
+    def drag_arm3d_camera(self, dx, dy, pan=False):
+        """Arrastra la cámara del brazo 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.drag_camera(dx, dy, pan=pan)
+
+    def reset_arm3d_camera(self):
+        """Resetea la cámara del brazo 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.reset_camera()
+
+    def toggle_arm3d_trail(self, show):
+        """Activa o desactiva la trayectoria del brazo 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.motor3d.set_show_trail(show)
+
+    def toggle_arm3d_joint_ranges(self, show):
+        """Activa o desactiva los arcos de rango articular del brazo 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.motor3d.set_show_joint_ranges(show)
+
+    def set_arm3d_camera_view(self, view_name):
+        """Aplica un preset de cámara 3D: 'front', 'side', 'iso', o None (libre)."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.set_camera_view(view_name)
+
+    def open_arm3d_config(self):
+        """Abre la ventana de configuración del brazo 3D (delegado a la vista)."""
+        if hasattr(self.view, 'open_arm3d_configuration'):
+            self.view.open_arm3d_configuration()
 
     def change_circuit(self, option):
         if self.robot_layer is not None:

@@ -3,6 +3,7 @@ import graphics.robot_drawings as robot_drawings
 import graphics.huds as huds
 import robot_components.robots as robots
 import files.files_reader as filesr
+from motor3d.api import Motor3DApi
 
 
 class Layer:
@@ -521,6 +522,182 @@ class ArduinoBoardLayer(Layer):
         Stops all the executing code and clears the canvas
         """
         self.is_drawing = False
+
+
+class Arm3DLayer(Layer):
+    """
+    Capa de integración entre el sistema legado S4R y el motor 3D.
+    Puente entre la GUI y Motor3DApi.
+
+    Conversión de ángulos:
+        joint_angle (DH) = servo_value - 90.0
+        servo_value       = clamp(angle + 90.0, 0, 180)
+    """
+
+    def __init__(self):
+        # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
+        import graphics.drawing as _drawing
+        self.drawing = _drawing.Drawing()
+        self.is_drawing = False
+        self.is_board = False
+        self.hud = huds.Arm3DHUD()
+        self.robot = robots.ArmHardwareRobot()
+        self.robot_drawing = None
+        self._zoom_percentage()
+
+        self.motor3d = Motor3DApi()
+        self.safety_blocked = False
+        self.warning_message = ""
+        self._canvas = None
+        # Sincronizar la escala del Drawing con el zoom inicial de la cámara
+        self.drawing.scale = self.motor3d.camera.zoom
+
+    def set_canvas(self, canvas, hud_canvas):
+        self._canvas = canvas
+        self.drawing.set_canvas(canvas)
+        self.hud.set_canvas(hud_canvas)
+        # Resetear el ID de imagen del renderer para que se cree nuevo
+        self.motor3d.renderer._canvas_image_id = None
+
+    def execute(self):
+        self.is_drawing = True
+        self.motor3d.scene.update()
+
+    def stop(self):
+        self.is_drawing = False
+        self.safety_blocked = False
+        self.warning_message = ""
+        if self._canvas is not None:
+            try:
+                self._canvas.delete("all")
+            except Exception:
+                pass
+        # Invalidar el ID de imagen del renderer para que el siguiente draw()
+        # cree un nuevo item en lugar de intentar itemconfig sobre uno inexistente.
+        self.motor3d.renderer._canvas_image_id = None
+        if self.hud:
+            self.hud.reboot()
+
+    def move(self, using_keys, move_WASD):
+        """
+        Tick principal (~16 ms). Lee los servos del robot, actualiza Motor3D y renderiza.
+        """
+        if not self.is_drawing and not self._canvas:
+            return
+
+        # Mover cámara con teclado
+        self.motor3d.keyboard_camera(move_WASD)
+
+        # Sincronizar valores de servo → ángulos DH
+        self.__sync_from_servos()
+
+        # Renderizar
+        if self._canvas:
+            self.motor3d.draw(self._canvas)
+
+        # Evaluar seguridad y actualizar HUD
+        safety = self.motor3d.evaluate_safety()
+        self.safety_blocked = safety['blocked']
+        self.warning_message = safety['message']
+        self._update_hud(safety)
+
+    def zoom_in(self):
+        cam = self.motor3d.camera
+        cam.zoom = min(cam.ZOOM_MAX, round(cam.zoom * 1.25, 4))
+        self.drawing.scale = cam.zoom   # sincroniza la etiqueta
+
+    def zoom_out(self):
+        cam = self.motor3d.camera
+        cam.zoom = max(cam.ZOOM_MIN, round(cam.zoom / 1.25, 4))
+        self.drawing.scale = cam.zoom   # sincroniza la etiqueta
+
+    def _zoom_config(self):
+        self._zoom_percentage()
+
+    def _zoom_redraw(self):
+        pass
+
+    # ------------------------------------------------------------------
+    # API expuesta al controlador
+    # ------------------------------------------------------------------
+
+    def set_joint_angle(self, joint_idx, angle):
+        """
+        Fija el ángulo articular (grados DH) y sincroniza el servo correspondiente.
+        """
+        self.motor3d.set_joint(joint_idx, angle)
+        servo_value = max(0, min(180, int(angle + 90.0)))
+        servos = [
+            self.robot.servo_base,
+            self.robot.servo_shoulder,
+            self.robot.servo_elbow,
+            self.robot.servo_wrist_vertical,
+            self.robot.servo_wrist,
+            self.robot.servo_gripper,
+        ]
+        if 0 <= joint_idx < len(servos):
+            servos[joint_idx].value = servo_value
+
+    def solve_ik(self, x, y, z):
+        """Lanza IK y retorna (converged, mensaje_estado)."""
+        return self.motor3d.solve_ik(x, y, z)
+
+    def drag_camera(self, dx, dy, pan=False):
+        self.motor3d.drag_camera(dx, dy, pan=pan)
+
+    def set_camera_yaw(self, yaw):
+        self.motor3d.set_camera(yaw=yaw)
+
+    def set_camera_pitch(self, pitch):
+        self.motor3d.set_camera(pitch=pitch)
+
+    def reset_camera(self):
+        self.motor3d.reset_camera()
+
+    def set_camera_view(self, view_name):
+        """Aplica un preset de cámara: 'front', 'side', 'iso', o None para libre."""
+        if view_name == 'front':
+            self.motor3d.set_camera(yaw=0.0, pitch=10.0)
+        elif view_name == 'side':
+            self.motor3d.set_camera(yaw=90.0, pitch=10.0)
+        elif view_name == 'iso':
+            self.motor3d.set_camera(yaw=45.0, pitch=30.0)
+        else:
+            self.motor3d.reset_camera()
+
+    def set_trail(self, enabled):
+        self.motor3d.set_show_trail(enabled)
+
+    def clear_trail(self):
+        self.motor3d.scene.clear_trail()
+
+    def get_model_config(self):
+        return self.motor3d.get_model_config()
+
+    # ------------------------------------------------------------------
+    # Helpers privados
+    # ------------------------------------------------------------------
+
+    def __sync_from_servos(self):
+        """Lee valores de servo del ArmHardwareRobot y los pasa al motor 3D."""
+        servo_values = self.robot.get_servo_values()
+        for i, sv in enumerate(servo_values):
+            dh_angle = float(sv) - 90.0
+            self.motor3d.model.set_joint(i, dh_angle)
+        self.motor3d.scene.update()
+
+    def _update_hud(self, safety):
+        ee = self.motor3d.scene.get_end_effector()
+        joints = list(self.motor3d.model.joints)
+        self.hud.update(
+            dof=self.motor3d.model.dof,
+            joints=joints,
+            end_effector=ee,
+            in_workspace=safety['in_workspace'],
+            singular=safety['singular'],
+            safety_blocked=safety['blocked'],
+            warning_message=safety['message'],
+        )
 
     def draw_component(self, x, y):
         if self.hud.drawing is not None:

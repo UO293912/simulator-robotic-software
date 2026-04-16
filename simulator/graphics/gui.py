@@ -28,13 +28,30 @@ class MainApplication(tk.Tk):
 
         self.vertical_pane = tk.PanedWindow(
             orient=tk.VERTICAL, sashpad=5, sashrelief="solid", bg=DARK_BLUE)
-        self.horizontal_pane = tk.PanedWindow(
-            self.vertical_pane, orient=tk.HORIZONTAL, sashpad=5, sashrelief="solid", bg=BLUE)
-        self.drawing_frame = DrawingFrame(
-            self.horizontal_pane, self, bg=BLUE)
-        self.editor_frame = EditorFrame(self.horizontal_pane, bg=BLUE)
-        self.console_frame = ConsoleFrame(
-            self.vertical_pane, self, bg=DARK_BLUE)
+
+        # Área de contenido: panel izquierdo de info + canvas central + notebook derecho
+        self.content_area = tk.Frame(self.vertical_pane, bg=DARK_BLUE)
+
+        # Panel izquierdo de información del brazo 3D (oculto por defecto)
+        self.left_info_panel = Arm3DInfoPanel(self.content_area, bg=DARK_BLUE)
+
+        # PanedWindow central+derecho
+        self.center_right_pane = tk.PanedWindow(
+            self.content_area, orient=tk.HORIZONTAL,
+            sashpad=5, sashrelief="solid", bg=BLUE)
+
+        self.drawing_frame = DrawingFrame(self.center_right_pane, self, bg=BLUE)
+
+        # Notebook derecho: pestaña CÓDIGO + pestaña CONTROL MANUAL
+        self.right_notebook = ttk.Notebook(self.center_right_pane)
+        self.editor_frame = EditorFrame(self.right_notebook, bg=BLUE)
+        self.arm3d_control_panel = Arm3DControlPanel(
+            self.right_notebook, self, bg=DARK_BLUE,
+            highlightthickness=1, highlightbackground="black")
+        self.right_notebook.add(self.editor_frame, text="  CÓDIGO  ")
+        self.right_notebook.add(self.arm3d_control_panel, text="  CONTROL MANUAL  ")
+
+        self.console_frame = ConsoleFrame(self.vertical_pane, self, bg=DARK_BLUE)
 
         self.identifier = None
         self.controller = controller.RobotsController(self)
@@ -60,13 +77,20 @@ class MainApplication(tk.Tk):
         self.tools_frame.pack(fill=tk.X)
         self.vertical_pane.pack(fill="both", expand=True)
 
-        self.horizontal_pane.add(
-            self.drawing_frame, stretch="first", width=1100, minsize=100)
-        self.horizontal_pane.add(self.editor_frame, minsize=100)
-        self.vertical_pane.add(self.horizontal_pane,
-                               stretch="first", minsize=100)
-        self.vertical_pane.add(
-            self.console_frame, stretch="never", height=200, minsize=100)
+        # Layout del área de contenido con grid (permite show/hide del panel izquierdo)
+        self.content_area.grid_columnconfigure(0, weight=0)
+        self.content_area.grid_columnconfigure(1, weight=1)
+        self.content_area.grid_rowconfigure(0, weight=1)
+        self.left_info_panel.grid(row=0, column=0, sticky="nsew")
+        self.left_info_panel.grid_remove()  # oculto inicialmente
+        self.center_right_pane.grid(row=0, column=1, sticky="nsew")
+
+        # Notebook: CÓDIGO a la izquierda, CONTROL MANUAL a la derecha
+        self.center_right_pane.add(self.drawing_frame, stretch="first", width=900, minsize=100)
+        self.center_right_pane.add(self.right_notebook, width=280, minsize=100)
+
+        self.vertical_pane.add(self.content_area, stretch="first", minsize=100)
+        self.vertical_pane.add(self.console_frame, stretch="never", height=200, minsize=100)
 
         self.bind("<KeyPress>", self.key_press)
         self.bind("<KeyRelease>", self.key_release)
@@ -89,6 +113,14 @@ class MainApplication(tk.Tk):
 
     def stop(self):
         self.controller.stop()
+
+    def toggle_pause(self):
+        """Alterna entre pausado y ejecutando (RF4.2.2)."""
+        self.controller.toggle_pause()
+
+    def step_once(self):
+        """Ejecuta una sentencia más y vuelve a pausar (RF4.2.3)."""
+        self.controller.step_once()
 
     def editor_undo(self):
         self.editor_frame.text.edit_undo()
@@ -120,7 +152,16 @@ class MainApplication(tk.Tk):
         Arduino board
         """
         robot = self.selector_bar.robot_selector.current()
-        PinConfigurationWindow(self, robot, self)
+        if robot == 5:
+            self.open_arm3d_configuration()
+        else:
+            PinConfigurationWindow(self, robot, self)
+
+    def open_arm3d_configuration(self):
+        """Abre la ventana modal de configuración del brazo 3D."""
+        import graphics.layers as _layers
+        if isinstance(self.controller.robot_layer, _layers.Arm3DLayer):
+            Arm3DConfigurationWindow(self, self.controller.robot_layer.motor3d, self)
 
     def zoom_in(self):
         self.controller.zoom_in()
@@ -248,6 +289,45 @@ class MainApplication(tk.Tk):
             self.drawing_frame.show_buttons_gamification()
         else:
             self.drawing_frame.hide_buttons_gamification()
+
+    def show_arm3d_panel(self, showing):
+        if showing:
+            # Mostrar panel izquierdo de información
+            self.left_info_panel.grid()
+            # Ocultar HUD clásico (la info va al panel izquierdo)
+            self.drawing_frame.hide_hud()
+            # Mostrar botones de vista de cámara
+            self.drawing_frame.show_arm3d_camera_buttons()
+            # Seleccionar pestaña CONTROL MANUAL en el notebook
+            self.right_notebook.select(1)
+            # Conectar el panel de info al HUD del brazo (con retardo para que la capa esté lista)
+            self.after(150, self._connect_arm3d_info_panel)
+        else:
+            # Ocultar panel izquierdo
+            self.left_info_panel.grid_remove()
+            # Restaurar HUD clásico
+            self.drawing_frame.show_hud()
+            # Ocultar botones de cámara
+            self.drawing_frame.hide_arm3d_camera_buttons()
+            # Seleccionar pestaña CÓDIGO
+            self.right_notebook.select(0)
+
+    def _connect_arm3d_info_panel(self):
+        """Conecta el panel de info izquierdo al HUD del brazo 3D cuando la capa está lista.
+        También actualiza los límites de los sliders y sincroniza el estado de los toggles
+        de trayectoria y rangos articulares con el scene 3D."""
+        try:
+            import graphics.layers as _layers
+            if isinstance(self.controller.robot_layer, _layers.Arm3DLayer):
+                self.controller.robot_layer.hud._info_panel = self.left_info_panel
+                self.arm3d_control_panel.update_joint_limits()
+                # Sincronizar toggles UI → escena (evita el desfase checkbox=True / show_trail=False)
+                self.controller.toggle_arm3d_trail(
+                    self.arm3d_control_panel._trail_var.get())
+                self.controller.toggle_arm3d_joint_ranges(
+                    self.arm3d_control_panel._joint_ranges_var.get())
+        except Exception:
+            pass
 
     def show_hud(self, showing):
         if showing:
@@ -644,6 +724,286 @@ class PinConfigurationWindow(tk.Toplevel):
         self.lb_arduinoBoardComponent.grid(row=1, column=0, sticky="w")
 
 
+class Arm3DConfigurationWindow(tk.Toplevel):
+    """
+    Ventana modal de configuración del brazo 3D.
+    Permite modificar DOF, tabla DH, tipos de articulación y límites.
+    Importar/exportar configuración en JSON.
+    """
+
+    def __init__(self, parent, motor3d_api, application: MainApplication = None, *args, **kwargs):
+        tk.Toplevel.__init__(self, parent, *args, **kwargs)
+        self.title("Configuración Brazo 3D")
+        self.focus_force()
+        self.resizable(True, True)
+        self.application = application
+        self.motor3d = motor3d_api
+
+        # ---- Frame superior: perfil y DOF ----
+        top_frame = tk.Frame(self, bg=DARK_BLUE)
+        top_frame.pack(fill=tk.X, padx=8, pady=6)
+
+        tk.Label(top_frame, text="Perfil:", bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 12)).pack(side=tk.LEFT)
+        self._presets = self.motor3d.repository.list_builtin_presets()
+        preset_names = ["Custom"] + sorted(self._presets.keys())
+        self._preset_var = tk.StringVar(value="Custom")
+        preset_combo = ttk.Combobox(top_frame, textvariable=self._preset_var,
+                                    values=preset_names, state="readonly", width=18)
+        preset_combo.pack(side=tk.LEFT, padx=(4, 16))
+        preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
+
+        tk.Label(top_frame, text="DOF:", bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 12)).pack(side=tk.LEFT)
+        self._dof_var = tk.IntVar(value=self.motor3d.model.dof)
+        dof_spin = tk.Spinbox(top_frame, from_=1, to=6, textvariable=self._dof_var,
+                              width=4, font=("Consolas", 12),
+                              command=self._on_dof_change)
+        dof_spin.pack(side=tk.LEFT, padx=(4, 20))
+
+        tk.Label(top_frame, text="Modo visual:", bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 12)).pack(side=tk.LEFT)
+        self._visual_var = tk.StringVar()
+        modes = ["auto_generic", "braccio_exact", "skeleton"]
+        current_mode = self.motor3d.model.visual.get('mode', 'auto_generic')
+        self._visual_var.set(current_mode)
+        vis_combo = ttk.Combobox(top_frame, textvariable=self._visual_var,
+                                 values=modes, state="readonly", width=15)
+        vis_combo.pack(side=tk.LEFT, padx=(4, 0))
+
+        # ---- Tabla DH ----
+        table_frame = tk.Frame(self)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        headers = ["J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)", "Tipo", "Lím min", "Lím max"]
+        for col, h in enumerate(headers):
+            tk.Label(table_frame, text=h, font=("Consolas", 11, "bold"),
+                     relief=tk.RIDGE, padx=4).grid(row=0, column=col, sticky="nsew")
+
+        self._rows = []
+        self._build_dh_rows(table_frame)
+
+        self._table_frame = table_frame
+
+        # ---- Botones inferiores ----
+        btn_frame = tk.Frame(self, bg=DARK_BLUE)
+        btn_frame.pack(fill=tk.X, padx=8, pady=6)
+
+        tk.Button(btn_frame, text="Import JSON", bg=BLUE, fg=DARK_BLUE,
+                  font=("Consolas", 11), command=self._import_json).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Export Config", bg=BLUE, fg=DARK_BLUE,
+                  font=("Consolas", 11), command=self._export_json).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Cancel", bg=DARK_BLUE, fg="white",
+                  font=("Consolas", 11), command=self.destroy).pack(side=tk.RIGHT, padx=4)
+        tk.Button(btn_frame, text="SAVE", bg="#00AA55", fg="white",
+                  font=("Consolas", 11, "bold"), command=self._save).pack(side=tk.RIGHT, padx=4)
+
+        # Centrar ventana
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_reqwidth()) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_reqheight()) // 2
+        self.geometry("+%d+%d" % (x, y))
+
+    def _build_dh_rows(self, table_frame):
+        """Construye las filas editables de la tabla DH."""
+        # Limpiar filas anteriores
+        for widgets in self._rows:
+            for w in widgets:
+                try:
+                    w.destroy()
+                except Exception:
+                    pass
+        self._rows = []
+
+        model = self.motor3d.model
+        n = self._dof_var.get()
+
+        for i in range(n):
+            row_entries = []
+            dh = model.dh_rows[i] if i < len(model.dh_rows) else {'theta': 0, 'd': 0, 'a': 100, 'alpha': 0}
+            lims = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
+            jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
+
+            tk.Label(table_frame, text=str(i + 1), font=("Consolas", 11),
+                     width=3).grid(row=i + 1, column=0, sticky="nsew", padx=1, pady=1)
+
+            for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
+                e = tk.Entry(table_frame, font=("Consolas", 11), width=9)
+                e.insert(0, str(round(float(dh.get(key, 0.0)), 2)))
+                e.grid(row=i + 1, column=col + 1, sticky="nsew", padx=1, pady=1)
+                row_entries.append(e)
+
+            # Tipo articulación
+            type_var = tk.StringVar(value=jtype)
+            type_combo = ttk.Combobox(table_frame, textvariable=type_var,
+                                      values=["R", "P"], state="readonly", width=4)
+            type_combo.grid(row=i + 1, column=5, sticky="nsew", padx=1, pady=1)
+            row_entries.append(type_combo)
+
+            # Límites
+            e_min = tk.Entry(table_frame, font=("Consolas", 11), width=8)
+            e_min.insert(0, str(round(float(lims[0]), 1)))
+            e_min.grid(row=i + 1, column=6, sticky="nsew", padx=1, pady=1)
+
+            e_max = tk.Entry(table_frame, font=("Consolas", 11), width=8)
+            e_max.insert(0, str(round(float(lims[1]), 1)))
+            e_max.grid(row=i + 1, column=7, sticky="nsew", padx=1, pady=1)
+
+            row_entries.extend([e_min, e_max])
+            self._rows.append(row_entries)
+
+    def _on_preset_selected(self, _event=None):
+        """Carga el preset seleccionado y repuebla DOF, modo visual y tabla DH."""
+        name = self._preset_var.get()
+        if name == "Custom":
+            return
+        path = self._presets.get(name)
+        if not path:
+            return
+        import json
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception:
+            tk.messagebox.showerror("Error", f"No se pudo leer el preset '{name}'.", parent=self)
+            return
+        dof = data.get('dof', self.motor3d.model.dof)
+        self._dof_var.set(dof)
+        # Actualizar temporalmente el modelo con los datos del preset para que
+        # _build_dh_rows pueda leerlos
+        self.motor3d.set_model_config(data)
+        visual_mode = data.get('visual', {}).get('mode', 'auto_generic')
+        self._visual_var.set(visual_mode)
+        self._build_dh_rows(self._table_frame)
+
+    def _on_dof_change(self):
+        self._build_dh_rows(self._table_frame)
+
+    def _collect_config(self):
+        """Lee los valores de la tabla y retorna (dict, None) o (None, mensaje_error).
+        Resalta en rojo las entradas inválidas para dar feedback visual al usuario."""
+        n = len(self._rows)
+        dh_rows = []
+        joint_types = []
+        joint_limits = []
+        errors = []
+
+        # Limpiar resaltados previos
+        for row in self._rows:
+            for widget in (row[0], row[1], row[2], row[3], row[5], row[6]):
+                try:
+                    widget.configure(highlightthickness=0)
+                except Exception:
+                    pass
+
+        def _mark_invalid(widget, msg):
+            try:
+                widget.configure(highlightthickness=2,
+                                 highlightbackground="#FF4444",
+                                 highlightcolor="#FF4444")
+            except Exception:
+                pass
+            errors.append(msg)
+
+        for i, row in enumerate(self._rows):
+            joint_n = i + 1
+            dh_ok = True
+            parsed = {}
+            for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
+                try:
+                    parsed[key] = float(row[col].get())
+                except ValueError:
+                    _mark_invalid(row[col], f"J{joint_n}: '{key}' no es un número válido.")
+                    dh_ok = False
+
+            if dh_ok:
+                # RF1.1.1.3: longitud de eslabón 'a' ∈ [0, 2000] mm
+                a = parsed['a']
+                if a < 0:
+                    _mark_invalid(row[2], f"J{joint_n}: 'a' debe ser ≥ 0 mm.")
+                    dh_ok = False
+                elif a > 2000:
+                    _mark_invalid(row[2], f"J{joint_n}: 'a' supera el límite físico (2000 mm).")
+                    dh_ok = False
+
+            if dh_ok:
+                dh_rows.append({'theta': parsed['theta'], 'd': parsed['d'],
+                                'a': parsed['a'], 'alpha': parsed['alpha']})
+            else:
+                dh_rows.append({'theta': 0, 'd': 0, 'a': 100, 'alpha': 0})  # placeholder
+
+            jtype = row[4].get() if hasattr(row[4], 'get') else 'R'
+            joint_types.append(jtype)
+
+            lim_ok = True
+            try:
+                lim_min = float(row[5].get())
+            except ValueError:
+                _mark_invalid(row[5], f"J{joint_n}: límite mínimo no es un número válido.")
+                lim_ok = False
+                lim_min = -90.0
+
+            try:
+                lim_max = float(row[6].get())
+            except ValueError:
+                _mark_invalid(row[6], f"J{joint_n}: límite máximo no es un número válido.")
+                lim_ok = False
+                lim_max = 90.0
+
+            if lim_ok and lim_min >= lim_max:
+                _mark_invalid(row[5], f"J{joint_n}: límite mínimo ≥ máximo.")
+                _mark_invalid(row[6], f"J{joint_n}: límite mínimo ≥ máximo.")
+
+            joint_limits.append((lim_min, lim_max))
+
+        if errors:
+            return None, "\n".join(errors)
+
+        current = self.motor3d.get_model_config()
+        current['dof'] = n
+        current['dh_rows'] = dh_rows
+        current['joint_types'] = joint_types
+        current['joint_limits'] = joint_limits
+        current['visual'] = dict(current.get('visual', {}))
+        current['visual']['mode'] = self._visual_var.get()
+
+        return current, None
+
+    def _save(self):
+        config, error = self._collect_config()
+        if error:
+            tk.messagebox.showerror("Error de configuración", error, parent=self)
+            return
+        self.motor3d.set_model_config(config)
+        self.motor3d.save_model_config()
+        self.destroy()
+
+    def _import_json(self):
+        from tkinter.filedialog import askopenfilename
+        path = askopenfilename(filetypes=[("JSON config", "*.json")], parent=self)
+        if path:
+            ok = self.motor3d.load_model_config(path=path)
+            if ok:
+                self._dof_var.set(self.motor3d.model.dof)
+                self._build_dh_rows(self._table_frame)
+            else:
+                tk.messagebox.showerror("Error", "No se pudo cargar el archivo JSON.", parent=self)
+
+    def _export_json(self):
+        from tkinter.filedialog import asksaveasfilename
+        path = asksaveasfilename(defaultextension=".json",
+                                 filetypes=[("JSON config", "*.json")], parent=self)
+        if path:
+            config, error = self._collect_config()
+            if error:
+                tk.messagebox.showerror("Error de configuración", error, parent=self)
+                return
+            self.motor3d.set_model_config(config)
+            ok = self.motor3d.save_model_config(path=path)
+            if not ok:
+                tk.messagebox.showerror("Error", "No se pudo guardar el archivo.", parent=self)
+
+
 class MenuBar(tk.Menu):
 
     def __init__(self, parent, application: MainApplication = None, *args, **kwargs):
@@ -682,6 +1042,11 @@ class MenuBar(tk.Menu):
             label="Detener", command=application.stop, accelerator="Ctrl+F5")
         exec_menu.add_separator()
         exec_menu.add_command(
+            label="Pausar / Reanudar", command=application.toggle_pause, accelerator="F8")
+        exec_menu.add_command(
+            label="Paso a paso", command=application.step_once, accelerator="F10")
+        exec_menu.add_separator()
+        exec_menu.add_command(
             label="Ampliar", command=lambda event: application.zoom_in(), accelerator="Ctrl++")
         exec_menu.add_command(
             label="Reducir", command=lambda event: application.zoom_out(), accelerator="Ctrl+-")
@@ -702,6 +1067,8 @@ class MenuBar(tk.Menu):
         self.bind_all("<Control-a>", self.show_about)
         self.bind_all("<F5>", application.execute)
         self.bind_all("<Control-F5>", application.stop)
+        self.bind_all("<F8>", lambda e: application.toggle_pause())
+        self.bind_all("<F10>", lambda e: application.step_once())
         self.bind_all("<Control-plus>", lambda event: application.zoom_in())
         self.bind_all("<Control-minus>", lambda event: application.zoom_out())
 
@@ -723,9 +1090,312 @@ class MenuBar(tk.Menu):
                                 'Aplicación realizada como trabajo de fin de grado.\n'
                                 + 'Autor inicial: Diego Fernández Suárez\n'
                                 + 'Autora extensión: María Suárez Hevia\n'
+                                + 'Autor extensión 3D (Braccio): Nicolás Guerbartchouk Pérez\n'
                                 + 'Tutor: Cristian González García\n'
-                                + 'Versión actual: b-0.5'
+                                + 'Versión actual: b-0.6'
                             ))
+
+
+class Arm3DControlPanel(tk.Frame):
+    """Panel de control manual del brazo robótico 3D — layout vertical para pestaña derecha.
+    Muestra sliders J1-J6 (cinemática directa) y campos IK (X/Y/Z).
+    Visible únicamente cuando el robot Braccio (opción 5) está seleccionado.
+    """
+
+    _JOINT_LABELS = ["J1 Base", "J2 Hombro", "J3 Codo", "J4 Muñeca V", "J5 Muñeca R", "J6 Pinza"]
+    _JOINT_LIMITS = [(-90, 90), (-75, 75), (-90, 90), (-90, 90), (-90, 90), (-80, -17)]
+
+    def __init__(self, parent, application: 'MainApplication' = None, *args, **kwargs):
+        tk.Frame.__init__(self, parent, *args, **kwargs)
+        self.application = application
+
+        # --- Cinemática Directa: sliders verticales ---
+        tk.Label(self, text="Cinemática Directa",
+                 bg=DARK_BLUE, fg="#00E5CC",
+                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(8, 2))
+
+        sliders_container = tk.Frame(self, bg=DARK_BLUE)
+        sliders_container.pack(fill=tk.X, padx=4)
+        sliders_container.columnconfigure(1, weight=1)
+
+        self._sliders = []
+        self._val_labels = []
+        for i in range(6):
+            lim_min, lim_max = self._JOINT_LIMITS[i]
+
+            tk.Label(sliders_container, text=self._JOINT_LABELS[i],
+                     bg=DARK_BLUE, fg="white", font=("Consolas", 9),
+                     width=12, anchor="e").grid(row=i, column=0, padx=(4, 2), pady=1, sticky="e")
+
+            slider = tk.Scale(
+                sliders_container,
+                from_=lim_min, to=lim_max,
+                orient=tk.HORIZONTAL,
+                bg=DARK_BLUE, fg="white",
+                sliderrelief=tk.FLAT, highlightthickness=0,
+                width=12, showvalue=False,
+                command=lambda val, idx=i: self._on_slider(idx, val)
+            )
+            slider.set(0)
+            slider.grid(row=i, column=1, padx=2, pady=1, sticky="ew")
+
+            val_lbl = tk.Label(sliders_container, text="  0°",
+                               bg=DARK_BLUE, fg="white",
+                               font=("Consolas", 9), width=5, anchor="w")
+            val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="w")
+
+            self._sliders.append(slider)
+            self._val_labels.append(val_lbl)
+
+        # --- Separador ---
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
+
+        # --- Cinemática Inversa ---
+        tk.Label(self, text="Cinemática Inversa",
+                 bg=DARK_BLUE, fg="#00E5CC",
+                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(0, 4))
+
+        ik_coords = tk.Frame(self, bg=DARK_BLUE)
+        ik_coords.pack(fill=tk.X, padx=8)
+
+        for col_i, axis in enumerate(["X", "Y", "Z"]):
+            tk.Label(ik_coords, text=f"{axis}:", bg=DARK_BLUE, fg="white",
+                     font=("Consolas", 10)).grid(row=0, column=col_i * 2, padx=(4, 1), sticky="e")
+        self._entry_x = tk.Entry(ik_coords, width=6, font=("Consolas", 10))
+        self._entry_y = tk.Entry(ik_coords, width=6, font=("Consolas", 10))
+        self._entry_z = tk.Entry(ik_coords, width=6, font=("Consolas", 10))
+        self._entry_x.insert(0, "0")
+        self._entry_y.insert(0, "0")
+        self._entry_z.insert(0, "400")
+        self._entry_x.grid(row=0, column=1, padx=(0, 4))
+        self._entry_y.grid(row=0, column=3, padx=(0, 4))
+        self._entry_z.grid(row=0, column=5, padx=(0, 4))
+
+        btn_frame = tk.Frame(self, bg=DARK_BLUE)
+        btn_frame.pack(fill=tk.X, padx=8, pady=4)
+
+        self._btn_ik = tk.Button(btn_frame, text="Confirmar Posición",
+                                 bg=BLUE, bd=0, fg=DARK_BLUE,
+                                 font=("Consolas", 10), command=self._on_ik)
+        self._btn_ik.pack(fill=tk.X, pady=(0, 3))
+
+        self._btn_reset_cam = tk.Button(btn_frame, text="Reset Cámara",
+                                        bg=BLUE, bd=0, fg=DARK_BLUE,
+                                        font=("Consolas", 10), command=self._on_reset_cam)
+        self._btn_reset_cam.pack(fill=tk.X)
+
+        self._lbl_ik_status = tk.Label(self, text="", bg=DARK_BLUE, fg="#aaffaa",
+                                       font=("Consolas", 9), wraplength=240, justify=tk.LEFT)
+        self._lbl_ik_status.pack(anchor="w", padx=8, pady=2)
+
+        # --- Separador ---
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=4)
+
+        # --- Toggles de visualización ---
+        toggles_frame = tk.Frame(self, bg=DARK_BLUE)
+        toggles_frame.pack(fill=tk.X, padx=8)
+
+        self._trail_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(toggles_frame, text="Trayectoria",
+                       variable=self._trail_var,
+                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
+                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       command=self._on_trail_toggle).pack(side=tk.LEFT, padx=(0, 8))
+
+        self._joint_ranges_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(toggles_frame, text="Rangos articulares",
+                       variable=self._joint_ranges_var,
+                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
+                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       command=self._on_joint_ranges_toggle).pack(side=tk.LEFT)
+
+    # ------------------------------------------------------------------ handlers
+
+    def _on_slider(self, joint_idx, val):
+        try:
+            float_val = float(val)
+            self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
+            self.application.controller.update_arm3d_joint(joint_idx, float_val)
+        except Exception:
+            pass
+
+    def _on_ik(self):
+        # Resetear borde de los entries
+        for entry in (self._entry_x, self._entry_y, self._entry_z):
+            entry.configure(highlightthickness=0)
+        invalid = False
+        parsed = []
+        for entry in (self._entry_x, self._entry_y, self._entry_z):
+            try:
+                parsed.append(float(entry.get()))
+            except ValueError:
+                entry.configure(highlightthickness=2, highlightbackground="#FF4444",
+                                highlightcolor="#FF4444")
+                invalid = True
+        if invalid:
+            self._lbl_ik_status.config(text="Valores X/Y/Z inválidos", fg="#ff8888")
+            return
+        x, y, z = parsed
+        converged, msg = self.application.controller.solve_arm3d_ik(x, y, z)
+        if converged:
+            self._lbl_ik_status.config(text=str(msg), fg="#aaffaa")
+            self._sync_sliders_from_model()
+        else:
+            self._lbl_ik_status.config(text=str(msg), fg="#ffcc88")
+
+    def _on_reset_cam(self):
+        self.application.controller.reset_arm3d_camera()
+
+    def _on_trail_toggle(self):
+        try:
+            self.application.controller.toggle_arm3d_trail(self._trail_var.get())
+        except Exception:
+            pass
+
+    def _on_joint_ranges_toggle(self):
+        try:
+            self.application.controller.toggle_arm3d_joint_ranges(self._joint_ranges_var.get())
+        except Exception:
+            pass
+
+    def _sync_sliders_from_model(self):
+        """Actualiza los sliders y etiquetas con los ángulos actuales del modelo."""
+        try:
+            import graphics.layers as _layers
+            layer = self.application.controller.robot_layer
+            if isinstance(layer, _layers.Arm3DLayer):
+                joints = layer.motor3d.model.joints
+                for i, slider in enumerate(self._sliders):
+                    if i < len(joints):
+                        val = int(joints[i])
+                        slider.set(val)
+                        if i < len(self._val_labels):
+                            self._val_labels[i].config(text=f"{val:>3}°")
+        except Exception:
+            pass
+
+    def update_joint_limits(self):
+        """Actualiza los rangos de los sliders con los límites del modelo cargado.
+        Llamado desde MainApplication._connect_arm3d_info_panel() tras cargar el Arm3DLayer."""
+        try:
+            import graphics.layers as _layers
+            layer = self.application.controller.robot_layer
+            if not isinstance(layer, _layers.Arm3DLayer):
+                return
+            limits = layer.motor3d.model.joint_limits  # lista de (min, max) en grados
+            for i, slider in enumerate(self._sliders):
+                if i < len(limits):
+                    lim_min, lim_max = limits[i]
+                    slider.configure(from_=lim_min, to=lim_max)
+                    # Re-clampear valor actual al nuevo rango
+                    current = slider.get()
+                    clamped = max(lim_min, min(lim_max, current))
+                    if current != clamped:
+                        slider.set(clamped)
+        except Exception:
+            pass
+
+
+class Arm3DInfoPanel(tk.Frame):
+    """Panel izquierdo de información en tiempo real del brazo robótico 3D.
+    Muestra coordenadas XYZ del efector final y ángulos articulares J1-J6.
+    Solo visible cuando el robot Braccio (opción 5) está activo.
+    """
+
+    def __init__(self, parent, *args, **kwargs):
+        kwargs.setdefault('bg', DARK_BLUE)
+        tk.Frame.__init__(self, parent, *args, **kwargs)
+        self.configure(width=170)
+        self.pack_propagate(False)
+
+        # Título
+        tk.Label(self, text="Brazo Robótico 3D",
+                 bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 10, "bold")).pack(pady=(10, 4), padx=6, fill=tk.X)
+
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4)
+
+        # --- Efector final ---
+        tk.Label(self, text="Efector Final",
+                 bg=DARK_BLUE, fg="#00E5CC",
+                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(8, 2))
+
+        ee_frame = tk.Frame(self, bg=DARK_BLUE)
+        ee_frame.pack(fill=tk.X, padx=8)
+
+        self._lbl_ee = {}
+        for axis in ["X", "Y", "Z"]:
+            row = tk.Frame(ee_frame, bg=DARK_BLUE)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, text=f"{axis}:", bg=DARK_BLUE, fg="white",
+                     font=("Consolas", 10), width=3, anchor="e").pack(side=tk.LEFT)
+            val = tk.Label(row, text="--- mm", bg=DARK_BLUE, fg="#00E5CC",
+                           font=("Consolas", 10), anchor="w")
+            val.pack(side=tk.LEFT, padx=4)
+            self._lbl_ee[axis] = val
+
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
+
+        # --- Articulaciones ---
+        tk.Label(self, text="Articulaciones",
+                 bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+
+        joints_frame = tk.Frame(self, bg=DARK_BLUE)
+        joints_frame.pack(fill=tk.X, padx=8)
+
+        self._lbl_joints = []
+        for i in range(6):
+            row = tk.Frame(joints_frame, bg=DARK_BLUE)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, text=f"J{i + 1}:", bg=DARK_BLUE, fg="white",
+                     font=("Consolas", 10), width=3, anchor="e").pack(side=tk.LEFT)
+            val = tk.Label(row, text="---°", bg=DARK_BLUE, fg="white",
+                           font=("Consolas", 10), anchor="w")
+            val.pack(side=tk.LEFT, padx=4)
+            self._lbl_joints.append(val)
+
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
+
+        # --- Estado ---
+        tk.Label(self, text="Estado",
+                 bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+
+        self._lbl_status = tk.Label(self, text="OK",
+                                    bg=DARK_BLUE, fg="#aaffaa",
+                                    font=("Consolas", 9), wraplength=155,
+                                    justify=tk.LEFT, anchor="w")
+        self._lbl_status.pack(anchor="w", padx=10, pady=2)
+
+    def update(self, dof, joints, end_effector, in_workspace, singular,
+               safety_blocked, warning_message):
+        """Actualiza los valores mostrados. Llamado desde Arm3DHUD.update()."""
+        # Efector
+        if end_effector and len(end_effector) >= 3:
+            for axis, val in zip(["X", "Y", "Z"], end_effector):
+                self._lbl_ee[axis].config(text=f"{val:.0f} mm")
+        else:
+            for axis in ["X", "Y", "Z"]:
+                self._lbl_ee[axis].config(text="--- mm")
+
+        # Articulaciones
+        for i, lbl in enumerate(self._lbl_joints):
+            if joints and i < len(joints):
+                lbl.config(text=f"{joints[i]:.0f}°")
+            else:
+                lbl.config(text="---°")
+
+        # Estado
+        if safety_blocked:
+            self._lbl_status.config(
+                text=f"⚠ {warning_message or 'BLOQUEADO'}", fg="#FF6666")
+        elif singular:
+            self._lbl_status.config(text="⚠ Singularidad", fg="#FFAA00")
+        elif not in_workspace:
+            self._lbl_status.config(text="⚠ Fuera de rango", fg="#FFAA00")
+        else:
+            self._lbl_status.config(text="OK", fg="#aaffaa")
 
 
 class DrawingFrame(tk.Frame):
@@ -746,6 +1416,18 @@ class DrawingFrame(tk.Frame):
                                             highlightbackground="black")
         self.buttons_gamification = ButtonsGamification(self.canvas_frame, application, bg=DARK_BLUE,
                                                         highlightthickness=1, highlightbackground="black")
+
+        # Botones de preset de cámara 3D [F] [L] [I] [Libre] — visibles solo para Braccio
+        self.cam_buttons_frame = tk.Frame(self.canvas_frame, bg=DARK_BLUE,
+                                          highlightthickness=1, highlightbackground=BLUE)
+        for _text, _view in [("F", "front"), ("L", "side"), ("I", "iso"), ("Libre", None)]:
+            tk.Button(
+                self.cam_buttons_frame,
+                text=_text, bg=DARK_BLUE, fg="white",
+                font=("Consolas", 9, "bold"), bd=0, padx=8, pady=3,
+                activebackground=BLUE, cursor="hand2",
+                command=lambda v=_view: self._on_cam_preset(v)
+            ).pack(side=tk.LEFT, padx=2, pady=2)
 
         self.bottom_frame = tk.Frame(self, bg=BLUE)
         self.key_movement = tk.Checkbutton(self.bottom_frame, text="Movimiento con el teclado", fg="white",
@@ -783,6 +1465,8 @@ class DrawingFrame(tk.Frame):
         self.canvas.bind("<ButtonPress-1>", self.press)
         self.canvas.bind("<ButtonRelease-1>", self.release)
         self.canvas.bind("<B1-Motion>", self.move)
+        self.canvas.bind("<ButtonPress-3>", self.press_right)
+        self.canvas.bind("<B3-Motion>", self.pan)
         self.canvas.bind("<MouseWheel>", self.zoom)
         application.bind("<Alt-m>", self.__toggle_check_manually)
         self.zoom_in_button.configure(command=self.application.zoom_in)
@@ -799,9 +1483,12 @@ class DrawingFrame(tk.Frame):
         self.key_drawing.pack(anchor="w", side=tk.LEFT)
         self.zoom_frame.pack(anchor="e", side=tk.RIGHT)
 
-        self.hud_canvas.pack(fill=tk.X, expand=False)
-        self.canvas_frame.pack(fill=tk.BOTH, expand=True)
-        self.bottom_frame.pack(fill=tk.X)
+        # Layout de DrawingFrame con grid (permite show/hide de hud_canvas sin cambiar el orden)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+        self.hud_canvas.grid(row=0, column=0, sticky="ew")
+        self.canvas_frame.grid(row=1, column=0, sticky="nsew")
+        self.bottom_frame.grid(row=2, column=0, sticky="ew")
 
         self.init_x = 0
         self.init_y = 0
@@ -811,27 +1498,64 @@ class DrawingFrame(tk.Frame):
         self.application.toggle_keys()
 
     def press(self, event):
-        if isinstance(self.application.controller.robot_layer.robot, robots.ArduinoBoard):
-            self.application.controller.robot_layer.draw_component(event.x, event.y)
+        import graphics.layers as _layers
+        layer = self.application.controller.robot_layer
+        if isinstance(layer, _layers.Arm3DLayer):
+            # El brazo 3D maneja el arrastre en move()
+            self.canvas.focus_force()
+            self.init_x = event.x
+            self.init_y = event.y
+            return
+        if isinstance(layer.robot, robots.ArduinoBoard):
+            layer.draw_component(event.x, event.y)
         self.canvas.focus_force()
         self.init_x = event.x
         self.init_y = event.y
         self.canvas.scan_mark(event.x, event.y)
 
     def release(self, event):
-        self.application.controller.robot_layer.drawing.dx += self.init_x - event.x
-        self.application.controller.robot_layer.drawing.dy += self.init_y - event.y
-        if self.application.controller.robot_layer.drawing.dx < 0:
-            self.application.controller.robot_layer.drawing.dx = 0
-        if self.application.controller.robot_layer.drawing.dx > 545:
-            self.application.controller.robot_layer.drawing.dx = 545
-        if self.application.controller.robot_layer.drawing.dy < 0:
-            self.application.controller.robot_layer.drawing.dy = 0
-        if self.application.controller.robot_layer.drawing.dy > 580:
-            self.application.controller.robot_layer.drawing.dy = 580
+        import graphics.layers as _layers
+        layer = self.application.controller.robot_layer
+        if isinstance(layer, _layers.Arm3DLayer):
+            return
+        layer.drawing.dx += self.init_x - event.x
+        layer.drawing.dy += self.init_y - event.y
+        if layer.drawing.dx < 0:
+            layer.drawing.dx = 0
+        if layer.drawing.dx > 545:
+            layer.drawing.dx = 545
+        if layer.drawing.dy < 0:
+            layer.drawing.dy = 0
+        if layer.drawing.dy > 580:
+            layer.drawing.dy = 580
 
     def move(self, event):
+        import graphics.layers as _layers
+        layer = self.application.controller.robot_layer
+        if isinstance(layer, _layers.Arm3DLayer):
+            dx = event.x - self.init_x
+            dy = event.y - self.init_y
+            self.init_x = event.x
+            self.init_y = event.y
+            self.application.controller.drag_arm3d_camera(dx, dy)
+            return
         self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def press_right(self, event):
+        import graphics.layers as _layers
+        if isinstance(self.application.controller.robot_layer, _layers.Arm3DLayer):
+            self.canvas.focus_force()
+            self.init_x = event.x
+            self.init_y = event.y
+
+    def pan(self, event):
+        import graphics.layers as _layers
+        if isinstance(self.application.controller.robot_layer, _layers.Arm3DLayer):
+            dx = event.x - self.init_x
+            dy = event.y - self.init_y
+            self.init_x = event.x
+            self.init_y = event.y
+            self.application.controller.drag_arm3d_camera(dx, dy, pan=True)
 
     def zoom(self, event):
         if event.delta == -120:
@@ -859,6 +1583,26 @@ class DrawingFrame(tk.Frame):
 
     def hide_buttons_gamification(self):
         self.buttons_gamification.pack_forget()
+
+    def show_hud(self):
+        """Muestra el HUD strip superior (canvas de estado 2D)."""
+        self.hud_canvas.grid()
+
+    def hide_hud(self):
+        """Oculta el HUD strip superior (usado cuando el panel de info lateral está activo)."""
+        self.hud_canvas.grid_remove()
+
+    def show_arm3d_camera_buttons(self):
+        """Muestra los botones de preset de cámara 3D en la esquina inferior derecha del canvas."""
+        self.cam_buttons_frame.place(relx=1.0, rely=1.0, anchor="se", x=-5, y=-5)
+
+    def hide_arm3d_camera_buttons(self):
+        """Oculta los botones de preset de cámara 3D."""
+        self.cam_buttons_frame.place_forget()
+
+    def _on_cam_preset(self, view_name):
+        """Callback de los botones de preset de cámara."""
+        self.application.controller.set_arm3d_camera_view(view_name)
 
     def __load_images(self):
         self.zoom_img = tk.PhotoImage(file="buttons/zoom.png")
@@ -1389,6 +2133,20 @@ class ButtonBar(tk.Frame):
             command=self.application.open_file
         )
 
+        # Botones Pause y Step (RF4.2.2, RF4.2.3) — usan tk.Button al no haber imagen dedicada
+        self.pause_button = tk.Button(
+            self.exec_frame,
+            text="⏸", bg=DARK_BLUE, fg="white",
+            font=("Consolas", 14), bd=0, padx=4, pady=2,
+            activebackground=BLUE, cursor="hand2",
+        )
+        self.step_button = tk.Button(
+            self.exec_frame,
+            text="⏭", bg=DARK_BLUE, fg="white",
+            font=("Consolas", 14), bd=0, padx=4, pady=2,
+            activebackground=BLUE, cursor="hand2",
+        )
+
         self.execute_button.set_tooltip_text(self.tooltip_hover, "Ejecutar")
         self.stop_button.set_tooltip_text(self.tooltip_hover, "Detener")
         self.undo_button.set_tooltip_text(self.tooltip_hover, "Deshacer")
@@ -1398,6 +2156,8 @@ class ButtonBar(tk.Frame):
 
         self.execute_button.configure(command=self.execute)
         self.stop_button.configure(command=self.stop)
+        self.pause_button.configure(command=self.pause)
+        self.step_button.configure(command=self.step)
 
         self.exec_frame.grid(row=0, column=0)
         self.hist_frame.grid(row=0, column=1)
@@ -1406,6 +2166,8 @@ class ButtonBar(tk.Frame):
 
         self.execute_button.grid(row=0, column=1, padx=5, pady=5)
         self.stop_button.grid(row=0, column=2, padx=5, pady=5)
+        self.pause_button.grid(row=0, column=3, padx=3, pady=5)
+        self.step_button.grid(row=0, column=4, padx=3, pady=5)
         self.undo_button.grid(row=0, column=1, padx=5, pady=5)
         self.redo_button.grid(row=0, column=2, padx=5, pady=5)
         self.save_button.grid(row=0, column=1, padx=5, pady=5)
@@ -1420,6 +2182,14 @@ class ButtonBar(tk.Frame):
         self.stop_button.on_click()
         self.application.stop()
         self.stop_button.on_click_finish()
+
+    def pause(self):
+        """Alterna Pause/Play durante la ejecución (RF4.2.2)."""
+        self.application.toggle_pause()
+
+    def step(self):
+        """Ejecuta una sentencia más y vuelve a pausar (RF4.2.3)."""
+        self.application.step_once()
 
     def __load_images(self):
         self.exec_img = tk.PhotoImage(file="buttons/exec.png")
@@ -1495,7 +2265,8 @@ class SelectorBar(tk.Frame):
                                          "Robot móvil (3 infrarrojos)",
                                          "Robot móvil (4 infrarrojos)",
                                          "Actuador lineal",
-                                         "Placa arduino"]
+                                         "Placa arduino",
+                                         "Brazo Robótico (Braccio)"]
         self.robot_selector.current(0)
         self.track_selector['values'] = [
             "Circuito", "Laberinto", "Recta",
