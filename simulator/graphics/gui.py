@@ -42,14 +42,13 @@ class MainApplication(tk.Tk):
 
         self.drawing_frame = DrawingFrame(self.center_right_pane, self, bg=BLUE)
 
-        # Notebook derecho: pestaña CÓDIGO + pestaña CONTROL MANUAL
+        # Notebook derecho: pestaña CÓDIGO y pestaña 3D opcional
         self.right_notebook = ttk.Notebook(self.center_right_pane)
         self.editor_frame = EditorFrame(self.right_notebook, bg=BLUE)
         self.arm3d_control_panel = Arm3DControlPanel(
             self.right_notebook, self, bg=DARK_BLUE,
             highlightthickness=1, highlightbackground="black")
         self.right_notebook.add(self.editor_frame, text="  CÓDIGO  ")
-        self.right_notebook.add(self.arm3d_control_panel, text="  CONTROL MANUAL  ")
 
         self.console_frame = ConsoleFrame(self.vertical_pane, self, bg=DARK_BLUE)
 
@@ -292,6 +291,7 @@ class MainApplication(tk.Tk):
 
     def show_arm3d_panel(self, showing):
         if showing:
+            self._set_arm3d_control_tab_visible(True)
             # Mostrar panel izquierdo de información
             self.left_info_panel.grid()
             # Ocultar HUD clásico (la info va al panel izquierdo)
@@ -299,10 +299,11 @@ class MainApplication(tk.Tk):
             # Mostrar botones de vista de cámara
             self.drawing_frame.show_arm3d_camera_buttons()
             # Seleccionar pestaña CONTROL MANUAL en el notebook
-            self.right_notebook.select(1)
+            self.right_notebook.select(self.arm3d_control_panel)
             # Conectar el panel de info al HUD del brazo (con retardo para que la capa esté lista)
             self.after(150, self._connect_arm3d_info_panel)
         else:
+            self._set_arm3d_control_tab_visible(False)
             # Ocultar panel izquierdo
             self.left_info_panel.grid_remove()
             # Restaurar HUD clásico
@@ -310,7 +311,19 @@ class MainApplication(tk.Tk):
             # Ocultar botones de cámara
             self.drawing_frame.hide_arm3d_camera_buttons()
             # Seleccionar pestaña CÓDIGO
-            self.right_notebook.select(0)
+            self.right_notebook.select(self.editor_frame)
+
+    def _set_arm3d_control_tab_visible(self, visible):
+        """Añade o elimina la pestaña CONTROL MANUAL según el robot activo."""
+        control_tab = str(self.arm3d_control_panel)
+        is_visible = control_tab in self.right_notebook.tabs()
+        if visible and not is_visible:
+            self.right_notebook.add(
+                self.arm3d_control_panel, text="  CONTROL MANUAL  ")
+        elif not visible and is_visible:
+            if self.right_notebook.select() == control_tab:
+                self.right_notebook.select(self.editor_frame)
+            self.right_notebook.forget(self.arm3d_control_panel)
 
     def _connect_arm3d_info_panel(self):
         """Conecta el panel de info izquierdo al HUD del brazo 3D cuando la capa está lista.
