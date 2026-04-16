@@ -439,60 +439,77 @@ class LinearActuator(Robot):
 
 class ArmHardwareRobot(Robot):
     """
-    Robot hardware simulado del TinkerKit Braccio.
+    Robot hardware simulado del sistema de brazo 3D.
     Contiene 6 servomotores pre-conectados a sus pines estándar.
     Los valores de los servos son leídos por Arm3DLayer en cada fotograma.
     """
 
     # Pines estándar del Braccio (coinciden con libraries/braccio.py)
-    PIN_BASE = 11
-    PIN_SHOULDER = 10
-    PIN_ELBOW = 9
-    PIN_WRIST_VER = 6
-    PIN_WRIST_ROT = 5
-    PIN_GRIPPER = 3
+    # Los joints se asignan secuencialmente segun el orden de attach().
 
     def __init__(self):
         super().__init__(boards.BQzumBT328())
+        self.board.arm_robot = self
 
-        self.servo_base = elements.Servo()
-        self.servo_shoulder = elements.Servo()
-        self.servo_elbow = elements.Servo()
-        self.servo_wrist_vertical = elements.Servo()
-        self.servo_wrist = elements.Servo()
-        self.servo_gripper = elements.Servo()
+        self._joint_servos = [elements.Servo() for _ in range(6)]
+        self.servo_base = self._joint_servos[0]
+        self.servo_shoulder = self._joint_servos[1]
+        self.servo_elbow = self._joint_servos[2]
+        self.servo_wrist_vertical = self._joint_servos[3]
+        self.servo_wrist = self._joint_servos[4]
+        self.servo_gripper = self._joint_servos[5]
+        self.robot_elements = list(self._joint_servos)
 
-        self._attach_all()
+    def attach_servo_to_pin(self, pin, joint_name=None):
+        """Asocia un servo virtual del brazo al primer joint libre."""
+        for servo in self._joint_servos:
+            if servo.pin == pin and self.board.get_pin_element(pin) is servo:
+                return servo
 
-    def _attach_all(self):
-        """Adjunta los servos a sus pines en la placa y pone el modo OUTPUT."""
-        servo_map = [
-            (self.PIN_BASE, self.servo_base),
-            (self.PIN_SHOULDER, self.servo_shoulder),
-            (self.PIN_ELBOW, self.servo_elbow),
-            (self.PIN_WRIST_VER, self.servo_wrist_vertical),
-            (self.PIN_WRIST_ROT, self.servo_wrist),
-            (self.PIN_GRIPPER, self.servo_gripper),
-        ]
-        for pin, servo in servo_map:
-            servo.pin = pin
-            self.board.attach_pin(pin, servo)
-            self.board.set_pin_mode(pin, boards.Board.OUTPUT)
-        self.robot_elements = [s for _, s in servo_map]
+        for joint_idx, servo in enumerate(self._joint_servos):
+            if servo.pin == -1:
+                attached = self._attach_joint_servo(joint_idx, pin)
+                if attached is not None:
+                    return attached
+        return None
+
+    def detach_servo(self, servo):
+        """Libera el pin asociado a un servo virtual del brazo."""
+        if servo is None or servo not in self._joint_servos:
+            return False
+        if servo.pin != -1:
+            self.board.detach_pin(servo.pin)
+            servo.pin = -1
+        return True
+
+    def _attach_joint_servo(self, joint_idx, pin):
+        if not (0 <= joint_idx < len(self._joint_servos)):
+            return None
+
+        servo = self._joint_servos[joint_idx]
+        if not self.board.check_type(pin, servo.get_pin_type()):
+            return None
+
+        existing = self.board.get_pin_element(pin)
+        if existing is not None and existing is not servo:
+            return None
+
+        if servo.pin != -1 and servo.pin != pin:
+            self.board.detach_pin(servo.pin)
+
+        if existing is None and not self.board.attach_pin(pin, servo):
+            return None
+
+        servo.pin = pin
+        self.board.set_pin_mode(pin, boards.Board.OUTPUT)
+        return servo
 
     def get_servo_values(self):
         """
         Devuelve los valores actuales de los 6 servos en orden:
         [base, shoulder, elbow, wrist_vertical, wrist_rot, gripper]
         """
-        return [
-            self.servo_base.value,
-            self.servo_shoulder.value,
-            self.servo_elbow.value,
-            self.servo_wrist_vertical.value,
-            self.servo_wrist.value,
-            self.servo_gripper.value,
-        ]
+        return [servo.value for servo in self._joint_servos]
 
 
 class ArduinoBoard(Robot):

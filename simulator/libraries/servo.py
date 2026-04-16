@@ -36,12 +36,13 @@ class Servo:
     ERROR = -1
     NOT_IMPL_WARNING = -2
 
-    def __init__(self, board=None):
+    def __init__(self, board=None, name=None):
         """
         Constructor for Servo class
         """
         self.board = board
         self.servo = None
+        self.instance_name = name
         self.min = 544
         self.max = 2400
         self.speed = 90
@@ -68,6 +69,10 @@ class Servo:
         servo = None
         if self.board is not None:
             servo = self.board.get_pin_element(pin)
+            if servo is None:
+                arm_robot = getattr(self.board, "arm_robot", None)
+                if arm_robot is not None:
+                    servo = arm_robot.attach_servo_to_pin(pin, self.instance_name)
         if servo is not None:
             self.servo = servo
             servo.min = min
@@ -86,7 +91,8 @@ class Servo:
             servo: the servo to write to
             angle: the value to write [0-180]
         """
-        self.servo.value = angle
+        if self.servo is not None:
+            self.servo.set_value(self.servo.pin, angle)
 
     def write_microseconds(self, us):
         """
@@ -133,6 +139,12 @@ class Servo:
             servo: the servo to detach
         """
         if self.servo is not None:
-            self.servo.pin = -1
+            arm_robot = getattr(self.board, "arm_robot", None) if self.board is not None else None
+            if arm_robot is not None:
+                arm_robot.detach_servo(self.servo)
+            elif self.board is not None and self.servo.pin != -1:
+                self.board.detach_pin(self.servo.pin)
+                self.servo.pin = -1
+            self.servo = None
             return self.OK
         return self.ERROR
