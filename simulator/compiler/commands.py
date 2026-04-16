@@ -11,6 +11,11 @@ import robot_components.robot_state as state
 module = None
 
 
+class ExecutionPaused(Exception):
+    """Lanzada por screen_updater.debug_line() al alcanzar un breakpoint o en modo paso a paso."""
+    pass
+
+
 def _import_module():
     global module
     spec = importlib.util.spec_from_file_location('temp.script_arduino', 'temp/script_arduino.py')
@@ -128,6 +133,9 @@ class Loop(Command):
         ):
             try:
                 module.loop()
+            except ExecutionPaused:
+                # Breakpoint alcanzado o modo paso a paso: drawing_loop pausará la ejecución.
+                pass
             except Exception:
                 self.controller.console.write_error(
                     console.Error("Error de ejecución", 0, 0, "El sketch no se ha podido ejecutar correctamente"))

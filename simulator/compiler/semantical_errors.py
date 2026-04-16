@@ -2,8 +2,6 @@ import libraries.libs as libraries
 import output.console as console
 import compiler.ast as ast
 import compiler.ast_visitor as ast_visitor
-from simulator.compiler.ast import StringTypeNode, VoidTypeNode
-
 
 class Semantic:
 
