@@ -121,6 +121,10 @@ class MainApplication(tk.Tk):
         """Ejecuta una sentencia más y vuelve a pausar (RF4.2.3)."""
         self.controller.step_once()
 
+    def step_back(self):
+        """Retrocede una sentencia en la ejecución pausada."""
+        self.controller.step_back()
+
     def editor_undo(self):
         self.editor_frame.text.edit_undo()
 
@@ -383,6 +387,7 @@ class MainApplication(tk.Tk):
     def abort_after(self):
         if self.identifier is not None:
             self.after_cancel(self.identifier)
+            self.identifier = None
 
     def console_filter(self):
         msg_filters = {}
@@ -2083,120 +2088,85 @@ class ButtonBar(tk.Frame):
         self.hist_frame = tk.Frame(self, bg=kwargs["bg"])
         self.utils_frame = tk.Frame(self, bg=kwargs["bg"])
         self.tooltip_hover = tk.Label(
-            self, bg=kwargs["bg"], font=("consolas", 12), fg="white")
+            self, bg=kwargs["bg"], font=("consolas", 12), fg="white",
+            width=18, anchor="w")
 
         self.__load_images()
 
-        self.execute_button = ImageButton(
-            self.exec_frame,
-            images={
-                "blue": self.exec_img,
-                "white": self.exec_whi_img,
-                "yellow": self.exec_yel_img
-            },
-            bg=kwargs["bg"],
-            activebackground=DARK_BLUE,
-            bd=0
-        )
-        self.stop_button = ImageButton(
-            self.exec_frame,
-            images={
-                "blue": self.stop_img,
-                "white": self.stop_whi_img,
-                "yellow": self.stop_yel_img
-            },
-            bg=kwargs["bg"],
-            activebackground=DARK_BLUE,
-            bd=0
-        )
-        self.undo_button = ImageButton(
-            self.hist_frame,
-            images={
-                "blue": self.undo_img,
-                "white": self.undo_whi_img,
-                "yellow": self.undo_yel_img
-            },
-            bg=kwargs["bg"],
-            activebackground=DARK_BLUE,
-            bd=0,
-            command=self.application.editor_undo
-        )
-        self.redo_button = ImageButton(
-            self.hist_frame,
-            images={
-                "blue": self.redo_img,
-                "white": self.redo_whi_img,
-                "yellow": self.redo_yel_img
-            },
-            bg=kwargs["bg"],
-            activebackground=DARK_BLUE,
-            bd=0,
-            command=self.application.editor_redo
-        )
-        self.save_button = ImageButton(
-            self.utils_frame,
-            images={
-                "blue": self.save_img,
-                "white": self.save_whi_img,
-                "yellow": self.save_yel_img
-            },
-            bg=kwargs["bg"],
-            activebackground=DARK_BLUE,
-            bd=0,
-            command=self.application.save_file
-        )
-        self.import_button = ImageButton(
-            self.utils_frame,
-            images={
-                "blue": self.import_img,
-                "white": self.import_whi_img,
-                "yellow": self.import_yel_img
-            },
-            bg=kwargs["bg"],
-            activebackground=DARK_BLUE,
-            bd=0,
-            command=self.application.open_file
-        )
+        _bg = kwargs["bg"]
 
-        # Botones Pause y Step (RF4.2.2, RF4.2.3) — usan tk.Button al no haber imagen dedicada
-        self.pause_button = tk.Button(
-            self.exec_frame,
-            text="⏸", bg=DARK_BLUE, fg="white",
-            font=("Consolas", 14), bd=0, padx=4, pady=2,
-            activebackground=BLUE, cursor="hand2",
-        )
-        self.step_button = tk.Button(
-            self.exec_frame,
-            text="⏭", bg=DARK_BLUE, fg="white",
-            font=("Consolas", 14), bd=0, padx=4, pady=2,
-            activebackground=BLUE, cursor="hand2",
-        )
+        def _imgbtn(parent, base, **kw):
+            return ImageButton(
+                parent,
+                images={
+                    "blue":   getattr(self, f"{base}_img"),
+                    "white":  getattr(self, f"{base}_whi_img"),
+                    "yellow": getattr(self, f"{base}_yel_img"),
+                },
+                bg=_bg, activebackground=DARK_BLUE, bd=0, **kw
+            )
 
+        # --- exec group (order matches mockup: Play Pause Stop StepBack StepFwd Reset) ---
+        self.execute_button    = _imgbtn(self.exec_frame, "exec")
+        self.pause_button      = _imgbtn(self.exec_frame, "pause")
+        self.stop_button       = _imgbtn(self.exec_frame, "stop")
+        self.step_back_button  = _imgbtn(self.exec_frame, "step_back")
+        self.step_forward_button = _imgbtn(self.exec_frame, "step_forward")
+        self.reset_button      = _imgbtn(self.exec_frame, "reset")
+
+        # --- hist group ---
+        self.undo_button = _imgbtn(self.hist_frame, "undo", command=self.application.editor_undo)
+        self.redo_button = _imgbtn(self.hist_frame, "redo", command=self.application.editor_redo)
+
+        # --- utils group ---
+        self.save_button   = _imgbtn(self.utils_frame, "save",   command=self.application.save_file)
+        self.import_button = _imgbtn(self.utils_frame, "import", command=self.application.open_file)
+
+        # tooltips
         self.execute_button.set_tooltip_text(self.tooltip_hover, "Ejecutar")
+        self.pause_button.set_tooltip_text(self.tooltip_hover, "Pausar / Reanudar")
         self.stop_button.set_tooltip_text(self.tooltip_hover, "Detener")
+        self.step_back_button.set_tooltip_text(self.tooltip_hover, "Paso atrás")
+        self.step_forward_button.set_tooltip_text(self.tooltip_hover, "Paso adelante")
+        self.reset_button.set_tooltip_text(self.tooltip_hover, "Reiniciar")
         self.undo_button.set_tooltip_text(self.tooltip_hover, "Deshacer")
         self.redo_button.set_tooltip_text(self.tooltip_hover, "Rehacer")
         self.save_button.set_tooltip_text(self.tooltip_hover, "Guardar")
         self.import_button.set_tooltip_text(self.tooltip_hover, "Importar")
 
         self.execute_button.configure(command=self.execute)
-        self.stop_button.configure(command=self.stop)
         self.pause_button.configure(command=self.pause)
-        self.step_button.configure(command=self.step)
+        self.stop_button.configure(command=self.stop)
+        self.step_back_button.configure(command=self.step_back)
+        self.step_forward_button.configure(command=self.step_forward)
+        self.reset_button.configure(command=self.reset)
+
+        self.status_badge = tk.Label(
+            self,
+            text="■  DETENIDO",
+            bg="#555555", fg="white",
+            font=("Consolas", 10, "bold"),
+            padx=8, pady=3, relief="flat",
+        )
 
         self.exec_frame.grid(row=0, column=0)
         self.hist_frame.grid(row=0, column=1)
         self.utils_frame.grid(row=0, column=2)
-        self.tooltip_hover.grid(row=0, column=3)
+        self.status_badge.grid(row=0, column=3, padx=(12, 4))
+        self.tooltip_hover.grid(row=0, column=4, padx=(4, 0))
 
-        self.execute_button.grid(row=0, column=1, padx=5, pady=5)
+        # exec group columns 0-5
+        self.execute_button.grid(row=0, column=0, padx=5, pady=5)
+        self.pause_button.grid(row=0, column=1, padx=5, pady=5)
         self.stop_button.grid(row=0, column=2, padx=5, pady=5)
-        self.pause_button.grid(row=0, column=3, padx=3, pady=5)
-        self.step_button.grid(row=0, column=4, padx=3, pady=5)
-        self.undo_button.grid(row=0, column=1, padx=5, pady=5)
-        self.redo_button.grid(row=0, column=2, padx=5, pady=5)
-        self.save_button.grid(row=0, column=1, padx=5, pady=5)
-        self.import_button.grid(row=0, column=2, padx=5, pady=5)
+        self.step_back_button.grid(row=0, column=3, padx=5, pady=5)
+        self.step_forward_button.grid(row=0, column=4, padx=5, pady=5)
+        self.reset_button.grid(row=0, column=5, padx=5, pady=5)
+
+        self.undo_button.grid(row=0, column=0, padx=5, pady=5)
+        self.redo_button.grid(row=0, column=1, padx=5, pady=5)
+        self.save_button.grid(row=0, column=0, padx=5, pady=5)
+        self.import_button.grid(row=0, column=1, padx=5, pady=5)
 
     def execute(self):
         self.execute_button.on_click()
@@ -2209,32 +2179,43 @@ class ButtonBar(tk.Frame):
         self.stop_button.on_click_finish()
 
     def pause(self):
-        """Alterna Pause/Play durante la ejecución (RF4.2.2)."""
         self.application.toggle_pause()
 
-    def step(self):
-        """Ejecuta una sentencia más y vuelve a pausar (RF4.2.3)."""
+    def step_forward(self):
         self.application.step_once()
 
+    def step_back(self):
+        self.application.step_back()
+
+    def reset(self):
+        self.reset_button.on_click()
+        self.application.stop()
+        # Defer execute() to the next event-loop tick so stop() finaliza primero
+        self.application.after(0, self.application.execute)
+        self.reset_button.on_click_finish()
+
+    # ------------------------------------------------------------------
+    # Estado visual del simulador
+    # ------------------------------------------------------------------
+    _STATE_CFG = {
+        "idle":    ("■  DETENIDO",   "#555555", "white"),
+        "running": ("▶  EJECUTANDO", "#007A3D", "white"),
+        "paused":  ("⏸  PAUSADO",   "#B8860B", "white"),
+    }
+
+    def update_state(self, state: str):
+        """Actualiza el badge de estado y el resaltado de botones."""
+        text, bg, fg = self._STATE_CFG.get(state, self._STATE_CFG["idle"])
+        self.status_badge.configure(text=text, bg=bg, fg=fg)
+        self.execute_button.set_active(state == "running")
+        self.pause_button.set_active(state == "paused")
+
     def __load_images(self):
-        self.exec_img = tk.PhotoImage(file="buttons/exec.png")
-        self.exec_whi_img = tk.PhotoImage(file="buttons/exec_w.png")
-        self.exec_yel_img = tk.PhotoImage(file="buttons/exec_y.png")
-        self.import_img = tk.PhotoImage(file="buttons/import.png")
-        self.import_whi_img = tk.PhotoImage(file="buttons/import_w.png")
-        self.import_yel_img = tk.PhotoImage(file="buttons/import_y.png")
-        self.redo_img = tk.PhotoImage(file="buttons/redo.png")
-        self.redo_whi_img = tk.PhotoImage(file="buttons/redo_w.png")
-        self.redo_yel_img = tk.PhotoImage(file="buttons/redo_y.png")
-        self.save_img = tk.PhotoImage(file="buttons/save.png")
-        self.save_whi_img = tk.PhotoImage(file="buttons/save_w.png")
-        self.save_yel_img = tk.PhotoImage(file="buttons/save_y.png")
-        self.stop_img = tk.PhotoImage(file="buttons/stop.png")
-        self.stop_whi_img = tk.PhotoImage(file="buttons/stop_w.png")
-        self.stop_yel_img = tk.PhotoImage(file="buttons/stop_y.png")
-        self.undo_img = tk.PhotoImage(file="buttons/undo.png")
-        self.undo_whi_img = tk.PhotoImage(file="buttons/undo_w.png")
-        self.undo_yel_img = tk.PhotoImage(file="buttons/undo_y.png")
+        for name in ("exec", "import", "redo", "save", "stop", "undo",
+                     "pause", "step_back", "step_forward", "reset"):
+            setattr(self, f"{name}_img",     tk.PhotoImage(file=f"buttons/{name}.png"))
+            setattr(self, f"{name}_whi_img", tk.PhotoImage(file=f"buttons/{name}_w.png"))
+            setattr(self, f"{name}_yel_img", tk.PhotoImage(file=f"buttons/{name}_y.png"))
 
 
 class ImageButton(tk.Button):
@@ -2265,6 +2246,21 @@ class ImageButton(tk.Button):
 
     def on_click_finish(self):
         self.configure(image=self.images["blue"])
+
+    def set_active(self, active: bool):
+        """Mantiene el botón resaltado en amarillo mientras active=True."""
+        self._active = active
+        if active:
+            self.configure(image=self.images["yellow"])
+        else:
+            self.configure(image=self.images["blue"])
+
+    def on_leave(self, event):
+        event.widget['image'] = self.images["yellow"] if getattr(self, '_active', False) else self.images["blue"]
+        try:
+            self.label.configure(text="")
+        except AttributeError:
+            pass
 
     def set_tooltip_text(self, label: tk.Label, tooltip):
         self.label = label
