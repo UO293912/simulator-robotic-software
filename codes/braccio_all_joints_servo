@@ -1,0 +1,99 @@
+#include <Servo.h>
+
+Servo base;
+Servo shoulder;
+Servo elbow;
+Servo wristVer;
+Servo wristRot;
+Servo gripper;
+
+void setup() {
+  base.attach(11);
+  shoulder.attach(10);
+  elbow.attach(9);
+  wristVer.attach(6);
+  wristRot.attach(5);
+  gripper.attach(3);
+}
+
+void loop() {
+  // Reposo
+  base.write(90);
+  shoulder.write(90);
+  elbow.write(90);
+  wristVer.write(90);
+  wristRot.write(90);
+  gripper.write(73);
+  delay(500);
+
+  // BASE: giro completo izquierda -> derecha
+  base.write(0);
+  delay(500);
+  base.write(180);
+  delay(500);
+  base.write(90);
+  delay(300);
+
+  // SHOULDER: subir -> bajar
+  shoulder.write(15);
+  delay(500);
+  shoulder.write(165);
+  delay(500);
+  shoulder.write(90);
+  delay(300);
+
+  // ELBOW: extendido -> plegado
+  elbow.write(0);
+  delay(500);
+  elbow.write(180);
+  delay(500);
+  elbow.write(90);
+  delay(300);
+
+  // WRIST VERTICAL: arriba -> abajo
+  wristVer.write(0);
+  delay(500);
+  wristVer.write(180);
+  delay(500);
+  wristVer.write(90);
+  delay(300);
+
+  // WRIST ROTATION: giro completo
+  wristRot.write(0);
+  delay(500);
+  wristRot.write(180);
+  delay(500);
+  wristRot.write(90);
+  delay(300);
+
+  // GRIPPER: abrir -> cerrar
+  gripper.write(10);
+  delay(500);
+  gripper.write(73);
+  delay(500);
+
+  // COMBINADA: extremos minimos -> extremos maximos
+  base.write(0);
+  shoulder.write(15);
+  elbow.write(0);
+  wristVer.write(0);
+  wristRot.write(0);
+  gripper.write(10);
+  delay(800);
+
+  base.write(180);
+  shoulder.write(165);
+  elbow.write(180);
+  wristVer.write(180);
+  wristRot.write(180);
+  gripper.write(73);
+  delay(800);
+
+  base.write(90);
+  shoulder.write(90);
+  elbow.write(90);
+  wristVer.write(90);
+  wristRot.write(90);
+  gripper.write(73);
+  delay(1000);
+}

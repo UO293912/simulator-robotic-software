@@ -1,0 +1,67 @@
+#include <Braccio.h>
+
+void setup() {
+  Braccio.begin();
+}
+
+void loop() {
+
+  // Reposo
+  Braccio.ServoMovement(20, 90, 90, 90, 90, 90, 73);
+  delay(500);
+
+  // BASE: giro completo izquierda -> derecha
+  Braccio.ServoMovement(20,   0, 90, 90, 90, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 180, 90, 90, 90, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20,  90, 90, 90, 90, 90, 73);
+  delay(300);
+
+  // SHOULDER: subir -> bajar
+  Braccio.ServoMovement(20, 90,  15, 90, 90, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 165, 90, 90, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90,  90, 90, 90, 90, 73);
+  delay(300);
+
+  // ELBOW: extendido -> plegado
+  Braccio.ServoMovement(20, 90, 90,   0, 90, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90, 180, 90, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90,  90, 90, 90, 73);
+  delay(300);
+
+  // WRIST VERTICAL: arriba -> abajo
+  Braccio.ServoMovement(20, 90, 90, 90,   0, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90, 90, 180, 90, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90, 90,  90, 90, 73);
+  delay(300);
+
+  // WRIST ROTATION: giro completo
+  Braccio.ServoMovement(20, 90, 90, 90, 90,   0, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90, 90, 90, 180, 73);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90, 90, 90,  90, 73);
+  delay(300);
+
+  // GRIPPER: abrir -> cerrar
+  Braccio.ServoMovement(20, 90, 90, 90, 90, 90, 10);
+  delay(500);
+  Braccio.ServoMovement(20, 90, 90, 90, 90, 90, 73);
+  delay(500);
+
+  // COMBINADA: extremos minimos -> extremos maximos
+  Braccio.ServoMovement(20,   0,  15,   0,   0,   0, 10);
+  delay(800);
+  Braccio.ServoMovement(20, 180, 165, 180, 180, 180, 73);
+  delay(800);
+  Braccio.ServoMovement(20,  90,  90,  90,  90,  90, 73);
+  delay(1000);
+
+}
