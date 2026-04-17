@@ -33,6 +33,7 @@ class Motor3DApi:
 
         self.autosave_path = _autosave
         self.default_preset_name = self.DEFAULT_PRESET
+        self.active_preset_name = self.DEFAULT_PRESET
 
         self.repository = ArmConfigRepository(
             default_path=_autosave,

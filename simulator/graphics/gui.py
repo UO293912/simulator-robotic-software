@@ -764,7 +764,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                  font=("Consolas", 12)).pack(side=tk.LEFT)
         self._presets = self.motor3d.repository.list_builtin_presets()
         preset_names = ["Custom"] + sorted(self._presets.keys())
-        self._preset_var = tk.StringVar(value="Custom")
+        current_preset = self.motor3d.active_preset_name
+        initial_preset = current_preset if current_preset in self._presets else "Custom"
+        self._preset_var = tk.StringVar(value=initial_preset)
         preset_combo = ttk.Combobox(top_frame, textvariable=self._preset_var,
                                     values=preset_names, state="readonly", width=18)
         preset_combo.pack(side=tk.LEFT, padx=(4, 16))
@@ -773,20 +775,18 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         tk.Label(top_frame, text="DOF:", bg=DARK_BLUE, fg="white",
                  font=("Consolas", 12)).pack(side=tk.LEFT)
         self._dof_var = tk.IntVar(value=self.motor3d.model.dof)
-        dof_spin = tk.Spinbox(top_frame, from_=1, to=6, textvariable=self._dof_var,
+        self._dof_spin = tk.Spinbox(top_frame, from_=1, to=6, textvariable=self._dof_var,
                               width=4, font=("Consolas", 12),
                               command=self._on_dof_change)
-        dof_spin.pack(side=tk.LEFT, padx=(4, 20))
+        self._dof_spin.pack(side=tk.LEFT, padx=(4, 20))
 
         tk.Label(top_frame, text="Modo visual:", bg=DARK_BLUE, fg="white",
                  font=("Consolas", 12)).pack(side=tk.LEFT)
         self._visual_var = tk.StringVar()
-        modes = ["auto_generic", "braccio_exact", "skeleton"]
-        current_mode = self.motor3d.model.visual.get('mode', 'auto_generic')
-        self._visual_var.set(current_mode)
-        vis_combo = ttk.Combobox(top_frame, textvariable=self._visual_var,
-                                 values=modes, state="readonly", width=15)
-        vis_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._MODES_SELECTABLE = ["auto_generic", "skeleton"]
+        self._vis_combo = ttk.Combobox(top_frame, textvariable=self._visual_var,
+                                 values=self._MODES_SELECTABLE, state="readonly", width=15)
+        self._vis_combo.pack(side=tk.LEFT, padx=(4, 0))
 
         # ---- Tabla DH ----
         table_frame = tk.Frame(self)
@@ -798,6 +798,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                      relief=tk.RIDGE, padx=4).grid(row=0, column=col, sticky="nsew")
 
         self._rows = []
+        self._locked = False
         self._build_dh_rows(table_frame)
 
         self._table_frame = table_frame
@@ -806,14 +807,19 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         btn_frame = tk.Frame(self, bg=DARK_BLUE)
         btn_frame.pack(fill=tk.X, padx=8, pady=6)
 
-        tk.Button(btn_frame, text="Import JSON", bg=BLUE, fg=DARK_BLUE,
-                  font=("Consolas", 11), command=self._import_json).pack(side=tk.LEFT, padx=4)
+        self._btn_import = tk.Button(btn_frame, text="Import JSON", bg=BLUE, fg=DARK_BLUE,
+                  font=("Consolas", 11), command=self._import_json)
+        self._btn_import.pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="Export Config", bg=BLUE, fg=DARK_BLUE,
                   font=("Consolas", 11), command=self._export_json).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="Cancel", bg=DARK_BLUE, fg="white",
                   font=("Consolas", 11), command=self.destroy).pack(side=tk.RIGHT, padx=4)
-        tk.Button(btn_frame, text="SAVE", bg="#00AA55", fg="white",
-                  font=("Consolas", 11, "bold"), command=self._save).pack(side=tk.RIGHT, padx=4)
+        self._btn_save = tk.Button(btn_frame, text="SAVE", bg="#00AA55", fg="white",
+                  font=("Consolas", 11, "bold"), command=self._save)
+        self._btn_save.pack(side=tk.RIGHT, padx=4)
+
+        # Aplicar estado inicial según el perfil activo (debe ir después de crear todos los widgets)
+        self._apply_preset_display(initial_preset)
 
         # Centrar ventana
         self.update_idletasks()
@@ -869,29 +875,78 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             row_entries.extend([e_min, e_max])
             self._rows.append(row_entries)
 
+        # Respetar el estado de bloqueo si ya estaba activo
+        if self._locked:
+            self._set_locked(True)
+
+    def _apply_preset_display(self, name):
+        """Actualiza el modo visual y el estado de bloqueo según el perfil indicado."""
+        is_tinkerkit = (name == "braccio_tinkerkit")
+        if is_tinkerkit:
+            # braccio_exact es el modo propio del tinkerkit; mostrarlo aunque no sea seleccionable
+            self._vis_combo.configure(values=["braccio_exact"] + self._MODES_SELECTABLE)
+            self._visual_var.set("braccio_exact")
+        else:
+            self._vis_combo.configure(values=self._MODES_SELECTABLE)
+            if name == "Custom":
+                self._visual_var.set("auto_generic")
+            else:
+                # Modo guardado en el preset
+                path = self._presets.get(name)
+                saved_mode = "auto_generic"
+                if path:
+                    import json
+                    try:
+                        with open(path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        m = data.get('visual', {}).get('mode', 'auto_generic')
+                        saved_mode = m if m in self._MODES_SELECTABLE else 'auto_generic'
+                    except Exception:
+                        pass
+                self._visual_var.set(saved_mode)
+        self._set_locked(is_tinkerkit)
+
+    def _set_locked(self, locked: bool):
+        """Deshabilita o habilita todos los controles editables (perfil de solo lectura)."""
+        self._locked = locked
+        state_spin   = "disabled" if locked else "normal"
+        state_combo  = "disabled" if locked else "readonly"
+        state_btn    = "disabled" if locked else "normal"
+        self._dof_spin.configure(state=state_spin)
+        self._vis_combo.configure(state=state_combo)
+        self._btn_import.configure(state=state_btn)
+        self._btn_save.configure(state=state_btn)
+        # Aplicar a las filas de la tabla DH
+        for row in self._rows:
+            for widget in row:
+                try:
+                    if isinstance(widget, ttk.Combobox):
+                        widget.configure(state=state_combo)
+                    else:
+                        widget.configure(state=state_spin)
+                except Exception:
+                    pass
+
     def _on_preset_selected(self, _event=None):
         """Carga el preset seleccionado y repuebla DOF, modo visual y tabla DH."""
         name = self._preset_var.get()
-        if name == "Custom":
-            return
-        path = self._presets.get(name)
-        if not path:
-            return
-        import json
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception:
-            tk.messagebox.showerror("Error", f"No se pudo leer el preset '{name}'.", parent=self)
-            return
-        dof = data.get('dof', self.motor3d.model.dof)
-        self._dof_var.set(dof)
-        # Actualizar temporalmente el modelo con los datos del preset para que
-        # _build_dh_rows pueda leerlos
-        self.motor3d.set_model_config(data)
-        visual_mode = data.get('visual', {}).get('mode', 'auto_generic')
-        self._visual_var.set(visual_mode)
-        self._build_dh_rows(self._table_frame)
+        if name != "Custom":
+            path = self._presets.get(name)
+            if not path:
+                return
+            import json
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception:
+                tk.messagebox.showerror("Error", f"No se pudo leer el preset '{name}'.", parent=self)
+                return
+            dof = data.get('dof', self.motor3d.model.dof)
+            self._dof_var.set(dof)
+            self.motor3d.set_model_config(data)
+            self._build_dh_rows(self._table_frame)
+        self._apply_preset_display(name)
+        self.motor3d.active_preset_name = name if name != "Custom" else None
 
     def _on_dof_change(self):
         self._build_dh_rows(self._table_frame)

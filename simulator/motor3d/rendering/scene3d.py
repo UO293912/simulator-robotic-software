@@ -108,7 +108,7 @@ class Scene3D:
         else:
             max_delta = 0.0
 
-        steps = max(1, min(24, math.ceil(max_delta / 5.0)))
+        steps = max(1, min(8, math.ceil(max_delta / 5.0)))
 
         # Interpolación en espacio articular: cada paso recalcula FK + TCP
         for s in range(1, steps + 1):

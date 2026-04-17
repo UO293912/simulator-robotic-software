@@ -543,24 +543,21 @@ class GenericDhVisualModel:
 
             # Color: naranja en límite, azul normal
             at_limit = model.is_at_limit(i)
-            if at_limit:
-                joint_color = (230, 80, 30)
-            else:
-                joint_color = (60, 120, 200)
+            joint_color = (230, 80, 30) if at_limit else (60, 120, 200)
             link_color = (180, 180, 190)
 
-            # Cilindro articulación
-            for tri in _make_cylinder(p0, T, radius, radius * 1.5, self.JOINT_STEPS):
-                yield tri, joint_color
+            cyl = _make_cylinder(p0, T, radius, radius * 1.5, self.JOINT_STEPS)
+            if cyl.size > 0:
+                yield cyl, joint_color
 
-            # Prisma eslabón
-            for tri in _make_link_prism(p0, p1, link_w):
-                yield tri, link_color
+            prism = _make_link_prism(p0, p1, link_w)
+            if prism.size > 0:
+                yield prism, link_color
 
-        # Indicador de herramienta (esfera pequeña en el efector)
         ee = chain.get('end_effector', positions[-1])
-        for tri in _make_sphere_approx(ee, radius * 0.8):
-            yield tri, (220, 180, 50)
+        sphere = _make_sphere_approx(ee, radius * 0.8)
+        if sphere.size > 0:
+            yield sphere, (220, 180, 50)
 
     def _resolve_dimensions(self, model):
         avg_len = sum(model.link_lengths) / max(1, len(model.link_lengths))
@@ -718,9 +715,6 @@ class Robot3DDrawing:
         visual_mode = model.visual.get('mode', 'auto_generic')
         if visual_mode == 'braccio_exact' and self.braccio_visual.supports_model(model):
             return self.braccio_visual
-        if visual_mode == 'auto_generic':
-            if self.braccio_visual.supports_model(model):
-                return self.braccio_visual
         return self.generic_visual
 
     def get_effective_end_effector(self, model, points3d, chain):
