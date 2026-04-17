@@ -154,10 +154,6 @@ class Loop(Command):
                     break
                 if standard.state and standard.state.exited:
                     break
-                # Respetar pausa (breakpoint / botón Pause)
-                if self.controller.paused:
-                    time.sleep(0.02)
-                    continue
                 # Respetar bloqueo de seguridad (fuera de workspace)
                 layer = self.controller.robot_layer
                 import graphics.layers as _layers
@@ -169,9 +165,7 @@ class Loop(Command):
                 try:
                     module.loop()
                 except ExecutionPaused:
-                    # Breakpoint alcanzado o modo paso a paso: esperar a que
-                    # el hilo principal reactive la ejecución.
-                    time.sleep(0.02)
+                    pass  # Simulación detenida mientras el hilo estaba bloqueado en debug_line
                 except Exception:
                     traceback.print_exc()
                     self.controller.executing = False

@@ -27,12 +27,51 @@ def update():
     refresh()
 
 
+def _block_until_resumed():
+    """Bloquea el hilo de fondo en su posición actual hasta que se reanude la ejecución."""
+    if threading.current_thread() is threading.main_thread():
+        return  # Nunca bloquear el hilo principal
+    while controller is not None and controller.paused and controller.executing:
+        time.sleep(0.02)
+
+
 def debug_line(line_no):
     """Llamado desde el código transpilado antes de cada sentencia.
-    Cuando se ejecuta en el hilo principal refresca la pantalla y gestiona
-    breakpoints. Desde un hilo de fondo se omiten las operaciones de Tkinter."""
+    Funciona tanto desde el hilo principal como desde el hilo de fondo (Loop).
+    Si hay que pausar:
+      - Hilo principal (setup): lanza ExecutionPaused para interrumpir la llamada.
+      - Hilo de fondo (loop): bloquea el hilo EN SU POSICIÓN ACTUAL para que
+        el paso-a-paso avance a la sentencia siguiente, no a la primera de loop()."""
     if threading.current_thread() is threading.main_thread():
         refresh()
-        if controller is not None and controller.debug_should_pause_at_line(line_no):
+    if controller is None:
+        return
+    if not controller.executing:
+        if threading.current_thread() is not threading.main_thread():
             from compiler.commands import ExecutionPaused
             raise ExecutionPaused(line_no)
+        return
+    if controller.debug_should_pause_at_line(line_no):
+        # Actualizar el highlight SINCRÓNICAMENTE: el usuario ve la nueva línea
+        # antes de que el hilo se bloquee (no hay race con after()).
+        if view is not None and hasattr(view, "editor_frame"):
+            if threading.current_thread() is threading.main_thread():
+                view.editor_frame.set_current_exec_line(line_no)
+            else:
+                done = threading.Event()
+                def _set(ln=line_no, ev=done):
+                    view.editor_frame.set_current_exec_line(ln)
+                    ev.set()
+                view.after(0, _set)
+                done.wait(timeout=0.5)
+        if threading.current_thread() is threading.main_thread():
+            # setup() corre en el hilo principal: usar excepción como antes
+            from compiler.commands import ExecutionPaused
+            raise ExecutionPaused(line_no)
+        else:
+            # loop() corre en hilo de fondo: bloquear aquí para preservar la pila
+            _block_until_resumed()
+            # Si se detuvo la simulación mientras estábamos bloqueados, salir
+            if controller is None or not controller.executing:
+                from compiler.commands import ExecutionPaused
+                raise ExecutionPaused(line_no)

@@ -59,7 +59,7 @@ class MainApplication(tk.Tk):
         self.file_manager = files.FileManager()
 
         self.config(menu=self.menu_bar)
-        self.button_bar.pack(fill=tk.X, side="left")
+        self.button_bar.pack(fill=tk.X, side="left", expand=True)
         self.selector_bar.pack(fill=tk.X, side="right")
         # These keys are the accepted ones for move the application. If you need more keys, added them here
         self.move_WASD = {
@@ -102,6 +102,8 @@ class MainApplication(tk.Tk):
                                         self.drawing_frame.hud_canvas)  # call second so the canvas are initialized
         # call third so the console is initialized
         self.controller.configure_console(self.console_frame.console)
+        # connect editor breakpoint handler now that controller exists
+        self.editor_frame.attach_controller(self)
         # call last so all the three elements that are configured before are initialized
         self.__update_track()
         # if not, the track raises exception
@@ -121,9 +123,6 @@ class MainApplication(tk.Tk):
         """Ejecuta una sentencia más y vuelve a pausar (RF4.2.3)."""
         self.controller.step_once()
 
-    def step_back(self):
-        """Retrocede una sentencia en la ejecución pausada."""
-        self.controller.step_back()
 
     def editor_undo(self):
         self.editor_frame.text.edit_undo()
@@ -1754,7 +1753,7 @@ class EditorFrame(tk.Frame):
         self.text = self.TextEditor(self, bd=1, relief=tk.SOLID, wrap="none", font=("consolas", 12), undo=True,
                                     autoseparators=True)
         self.line_bar = self.LineNumberBar(
-            self, width=30, bg=BLUE, bd=0, highlightthickness=0)
+            self, width=55, bg=BLUE, bd=0, highlightthickness=0)
         self.sb_x = tk.Scrollbar(self, orient=tk.HORIZONTAL,
                                  command=self.text.xview)
         self.sb_y = tk.Scrollbar(self, orient=tk.VERTICAL,
@@ -1791,6 +1790,22 @@ class EditorFrame(tk.Frame):
 
     def _on_change(self, event):
         self.line_bar.show_lines()
+
+    def attach_controller(self, app):
+        """Conecta el editor con la aplicación para el manejo de breakpoints."""
+        self.line_bar.attach_controller(app)
+
+    def set_current_exec_line(self, line_no: int):
+        """Resalta la línea que se está ejecutando (llamado desde debug_line)."""
+        self.line_bar.set_current_line(line_no)
+        self.text.tag_remove("current_exec", "1.0", tk.END)
+        self.text.tag_add("current_exec", f"{line_no}.0", f"{line_no}.end+1c")
+        self.text.see(f"{line_no}.0")
+
+    def clear_exec_line(self):
+        """Elimina el resaltado de la línea en ejecución."""
+        self.line_bar.clear_current_line()
+        self.text.tag_remove("current_exec", "1.0", tk.END)
 
     class TextEditor(tk.Text):
 
@@ -1950,6 +1965,9 @@ class EditorFrame(tk.Frame):
             self.tag_configure("green", foreground="#728E00")
             self.tag_configure("gray", foreground="#95A5A6")
             self.tag_configure("dark", foreground="#434F54")
+            # Línea de ejecución actual (paso a paso / breakpoint)
+            self.tag_configure("current_exec", background="#4A4A00", foreground="white")
+            self.tag_raise("current_exec")
 
         def __remove_tags(self, start, end):
             self.tag_remove("blue", start, end)
@@ -1977,28 +1995,96 @@ class EditorFrame(tk.Frame):
             return keywords
 
     class LineNumberBar(tk.Canvas):
+        # Layout constants (canvas width = 55px)
+        _DOT_CX   = 8    # x-center of breakpoint dot
+        _NUM_X    = 53   # right edge for line number text
 
         def __init__(self, *args, **kwargs):
             tk.Canvas.__init__(self, *args, **kwargs)
-            self.editor = None
+            self.editor   = None
+            self._app     = None
+            self._breakpoints   = set()   # set of int line numbers
+            self._current_line  = None    # int line being executed, or None
+            self.bind("<Button-1>", self._on_click)
 
         def attach(self, editor):
             self.editor = editor
 
+        def attach_controller(self, app):
+            self._app = app
+
+        # ------ public API ------
+
+        def toggle_breakpoint(self, line_no: int):
+            if line_no in self._breakpoints:
+                self._breakpoints.discard(line_no)
+            else:
+                self._breakpoints.add(line_no)
+            if self._app is not None:
+                self._app.controller.set_breakpoints(self._breakpoints)
+            self.show_lines()
+
+        def clear_breakpoints(self):
+            self._breakpoints.clear()
+            if self._app is not None:
+                self._app.controller.set_breakpoints(set())
+            self.show_lines()
+
+        def set_current_line(self, line_no: int):
+            self._current_line = line_no
+            self.show_lines()
+
+        def clear_current_line(self):
+            self._current_line = None
+            self.show_lines()
+
+        # ------ event handler ------
+
+        def _on_click(self, event):
+            if self.editor is None:
+                return
+            idx = self.editor.index(f"@0,{event.y}")
+            line_no = int(idx.split(".")[0])
+            self.toggle_breakpoint(line_no)
+
+        # ------ drawing ------
+
         def show_lines(self, *args):
             self.delete("all")
-
+            if self.editor is None:
+                return
             i = self.editor.index("@0,0")
             while True:
                 dline = self.editor.dlineinfo(i)
                 if dline is None:
                     break
-                line = str(i).split(".")[0]
-                x = 28 - 9 * len(line)
-                y = dline[1]
-                self.create_text(x, y, anchor="nw", text=line,
-                                 fill="white", font=('consolas', 12, 'bold'))
-                i = self.editor.index("%s+1line" % i)
+                line = int(str(i).split(".")[0])
+                y, h = dline[1], dline[3]
+
+                # Background highlight for currently executing line
+                if line == self._current_line:
+                    self.create_rectangle(
+                        0, y, self._NUM_X + 4, y + h,
+                        fill="#4A4A00", outline=""
+                    )
+
+                # Breakpoint red dot
+                if line in self._breakpoints:
+                    r  = max(4, h // 2 - 2)
+                    cy = y + h // 2
+                    self.create_oval(
+                        self._DOT_CX - r, cy - r,
+                        self._DOT_CX + r, cy + r,
+                        fill="#CC0000", outline="#FF5555"
+                    )
+
+                # Line number (right-aligned)
+                self.create_text(
+                    self._NUM_X, y, anchor="ne",
+                    text=str(line), fill="white",
+                    font=('consolas', 12, 'bold')
+                )
+                i = self.editor.index(f"{i}+1line")
 
 
 class ConsoleFrame(tk.Frame):
@@ -2090,6 +2176,9 @@ class ButtonBar(tk.Frame):
         self.tooltip_hover = tk.Label(
             self, bg=kwargs["bg"], font=("consolas", 12), fg="white",
             width=18, anchor="w")
+        self.tooltip_hover_right = tk.Label(
+            self, bg=kwargs["bg"], font=("consolas", 12), fg="white",
+            width=14, anchor="e")
 
         self.__load_images()
 
@@ -2109,8 +2198,7 @@ class ButtonBar(tk.Frame):
         # --- exec group (order matches mockup: Play Pause Stop StepBack StepFwd Reset) ---
         self.execute_button    = _imgbtn(self.exec_frame, "exec")
         self.pause_button      = _imgbtn(self.exec_frame, "pause")
-        self.stop_button       = _imgbtn(self.exec_frame, "stop")
-        self.step_back_button  = _imgbtn(self.exec_frame, "step_back")
+        self.stop_button         = _imgbtn(self.exec_frame, "stop")
         self.step_forward_button = _imgbtn(self.exec_frame, "step_forward")
         self.reset_button      = _imgbtn(self.exec_frame, "reset")
 
@@ -2126,18 +2214,16 @@ class ButtonBar(tk.Frame):
         self.execute_button.set_tooltip_text(self.tooltip_hover, "Ejecutar")
         self.pause_button.set_tooltip_text(self.tooltip_hover, "Pausar / Reanudar")
         self.stop_button.set_tooltip_text(self.tooltip_hover, "Detener")
-        self.step_back_button.set_tooltip_text(self.tooltip_hover, "Paso atrás")
         self.step_forward_button.set_tooltip_text(self.tooltip_hover, "Paso adelante")
         self.reset_button.set_tooltip_text(self.tooltip_hover, "Reiniciar")
-        self.undo_button.set_tooltip_text(self.tooltip_hover, "Deshacer")
-        self.redo_button.set_tooltip_text(self.tooltip_hover, "Rehacer")
-        self.save_button.set_tooltip_text(self.tooltip_hover, "Guardar")
-        self.import_button.set_tooltip_text(self.tooltip_hover, "Importar")
+        self.undo_button.set_tooltip_text(self.tooltip_hover_right, "Deshacer")
+        self.redo_button.set_tooltip_text(self.tooltip_hover_right, "Rehacer")
+        self.save_button.set_tooltip_text(self.tooltip_hover_right, "Guardar")
+        self.import_button.set_tooltip_text(self.tooltip_hover_right, "Importar")
 
         self.execute_button.configure(command=self.execute)
         self.pause_button.configure(command=self.pause)
         self.stop_button.configure(command=self.stop)
-        self.step_back_button.configure(command=self.step_back)
         self.step_forward_button.configure(command=self.step_forward)
         self.reset_button.configure(command=self.reset)
 
@@ -2149,19 +2235,24 @@ class ButtonBar(tk.Frame):
             padx=8, pady=3, relief="flat",
         )
 
-        self.exec_frame.grid(row=0, column=0)
-        self.hist_frame.grid(row=0, column=1)
-        self.utils_frame.grid(row=0, column=2)
-        self.status_badge.grid(row=0, column=3, padx=(12, 4))
-        self.tooltip_hover.grid(row=0, column=4, padx=(4, 0))
+        # Columna 3 es el separador elástico: empuja hist/utils a la derecha
+        self.columnconfigure(3, weight=1)
+
+        # Izquierda: controles de ejecución
+        self.exec_frame.grid(row=0, column=0, sticky="w")
+        self.status_badge.grid(row=0, column=1, padx=(12, 4), sticky="w")
+        self.tooltip_hover.grid(row=0, column=2, padx=(4, 0), sticky="w")
+        # Derecha: tooltip + controles del sketch
+        self.tooltip_hover_right.grid(row=0, column=4, padx=(0, 4), sticky="e")
+        self.hist_frame.grid(row=0, column=5, sticky="e")
+        self.utils_frame.grid(row=0, column=6, sticky="e", padx=(0, 4))
 
         # exec group columns 0-5
         self.execute_button.grid(row=0, column=0, padx=5, pady=5)
         self.pause_button.grid(row=0, column=1, padx=5, pady=5)
         self.stop_button.grid(row=0, column=2, padx=5, pady=5)
-        self.step_back_button.grid(row=0, column=3, padx=5, pady=5)
-        self.step_forward_button.grid(row=0, column=4, padx=5, pady=5)
-        self.reset_button.grid(row=0, column=5, padx=5, pady=5)
+        self.step_forward_button.grid(row=0, column=3, padx=5, pady=5)
+        self.reset_button.grid(row=0, column=4, padx=5, pady=5)
 
         self.undo_button.grid(row=0, column=0, padx=5, pady=5)
         self.redo_button.grid(row=0, column=1, padx=5, pady=5)
@@ -2184,8 +2275,6 @@ class ButtonBar(tk.Frame):
     def step_forward(self):
         self.application.step_once()
 
-    def step_back(self):
-        self.application.step_back()
 
     def reset(self):
         self.reset_button.on_click()
@@ -2212,7 +2301,7 @@ class ButtonBar(tk.Frame):
 
     def __load_images(self):
         for name in ("exec", "import", "redo", "save", "stop", "undo",
-                     "pause", "step_back", "step_forward", "reset"):
+                     "pause", "step_forward", "reset"):
             setattr(self, f"{name}_img",     tk.PhotoImage(file=f"buttons/{name}.png"))
             setattr(self, f"{name}_whi_img", tk.PhotoImage(file=f"buttons/{name}_w.png"))
             setattr(self, f"{name}_yel_img", tk.PhotoImage(file=f"buttons/{name}_y.png"))

@@ -95,6 +95,8 @@ class RobotsController:
         self.loop_command.reboot()
         self.robot_layer.stop()
         self.view.abort_after()
+        if hasattr(self.view, "editor_frame"):
+            self.view.editor_frame.clear_exec_line()
         self._notify_state("idle")
 
     # ------------------------------------------------------------------
@@ -107,18 +109,20 @@ class RobotsController:
             self.paused = not self.paused
             if not self.paused:
                 self.step_pending = False
+                if hasattr(self.view, "editor_frame"):
+                    self.view.editor_frame.clear_exec_line()
             self._notify_state("paused" if self.paused else "running")
 
     def step_once(self):
         """Ejecuta exactamente una sentencia más y vuelve a pausar (botón Step)."""
-        if self.executing:
+        if self.executing and self.paused:
+            # Limpiar el highlight inmediatamente: feedback visual de que el paso se registró
+            if hasattr(self.view, "editor_frame"):
+                self.view.editor_frame.clear_exec_line()
             self.step_pending = True
-            self.paused = False  # Permite un ciclo; debug_line() volverá a pausar
+            self.paused = False  # Desbloquea el hilo; debug_line() volverá a pausar
             self._notify_state("running")
 
-    def step_back(self):
-        """Retrocede una sentencia en la ejecución pausada (no implementado)."""
-        pass
 
     # ------------------------------------------------------------------
     # Notificaciones de estado
@@ -147,13 +151,23 @@ class RobotsController:
         """Establece el conjunto de líneas Arduino con breakpoint activo."""
         self._breakpoints = set(lines)
 
+    def toggle_breakpoint(self, line_no: int):
+        """Añade o quita un breakpoint en la línea dada."""
+        if line_no in self._breakpoints:
+            self._breakpoints.discard(line_no)
+        else:
+            self._breakpoints.add(line_no)
+
     def debug_should_pause_at_line(self, line_no):
         """Consultado por screen_updater.debug_line(). Devuelve True si hay que pausar."""
+        if self.paused:
+            return True
         if line_no in self._breakpoints or self.step_pending:
             self.step_pending = False
             self.paused = True
+            self._notify_state("paused")
             return True
-        return self.paused
+        return False
 
     def zoom_in(self):
         self.robot_layer.zoom_in()
