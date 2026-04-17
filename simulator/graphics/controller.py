@@ -1,3 +1,4 @@
+import threading
 import graphics.layers as layers
 import output.console as console
 import output.console_gamification as console_gamification
@@ -20,12 +21,16 @@ class RobotsController:
         self.paused = False        # True cuando la ejecución está pausada (breakpoint o Pause)
         self.step_pending = False  # True cuando se ha pedido avanzar una sentencia
         self._breakpoints = set()  # Líneas Arduino con breakpoint activo
+        self._loop_generation = 0  # Incrementa en cada execute(); invalida loops huérfanos
+        self._sim_state = "idle"   # Estado actual del simulador para evitar notificaciones duplicadas
         self.board = False
         self.arm3d = False
         self.new = True
         self._arm3d_loop_running = False  # evita múltiples instancias del render loop
 
     def execute(self, option_gamification):
+        if self.executing:
+            return  # ignorar si ya hay una ejecución en curso
         if not self.board:
             screen_updater.layer = self.robot_layer
             screen_updater.view = self.view
@@ -36,15 +41,19 @@ class RobotsController:
             if self.compile_command.execute():
                 if self.setup_command.execute():
                     self.executing = True
-                    self.drawing_loop()
+                    self._loop_generation += 1
+                    self._notify_state("running")
+                    self.drawing_loop(self._loop_generation)
         else:
             user_ast = self.compile_command.compile(self.get_code())
             if user_ast is not None:
                 self.probe_robot(option_gamification)
 
-    def drawing_loop(self):
+    def drawing_loop(self, generation):
+        if generation != self._loop_generation or not self.executing:
+            return  # iteración huérfana: otra ejecución tomó el control o se detuvo
         screen_updater.refresh()
-        if self.executing and not self.view.keys_used:
+        if not self.view.keys_used:
             # RF3.1.2/RF3.3.4: pausar la ejecución del sketch cuando la seguridad está bloqueada.
             safety_blocked = (
                 self.arm3d
@@ -54,7 +63,7 @@ class RobotsController:
             # RF4.2.2: no ejecutar loop() cuando la simulación está pausada (breakpoint o Pause).
             if not safety_blocked and not self.paused:
                 self.loop_command.execute()
-        self.view.identifier = self.view.after(10, self.drawing_loop)
+        self.view.identifier = self.view.after(10, lambda: self.drawing_loop(generation))
 
     def arm3d_render_loop(self):
         """Bucle de renderizado pasivo para el brazo 3D cuando no hay código ejecutándose."""
@@ -86,6 +95,7 @@ class RobotsController:
         self.loop_command.reboot()
         self.robot_layer.stop()
         self.view.abort_after()
+        self._notify_state("idle")
 
     # ------------------------------------------------------------------
     # Control de depuración (RF4.2.2 / RF4.2.3)
@@ -97,12 +107,41 @@ class RobotsController:
             self.paused = not self.paused
             if not self.paused:
                 self.step_pending = False
+            self._notify_state("paused" if self.paused else "running")
 
     def step_once(self):
         """Ejecuta exactamente una sentencia más y vuelve a pausar (botón Step)."""
         if self.executing:
             self.step_pending = True
             self.paused = False  # Permite un ciclo; debug_line() volverá a pausar
+            self._notify_state("running")
+
+    def step_back(self):
+        """Retrocede una sentencia en la ejecución pausada (no implementado)."""
+        pass
+
+    # ------------------------------------------------------------------
+    # Notificaciones de estado
+    # ------------------------------------------------------------------
+
+    _STATE_MESSAGES = {
+        "running": "▶ Ejecutando sketch...\n",
+        "paused":  "⏸ Simulación pausada.\n",
+        "idle":    "■ Simulación detenida.\n",
+    }
+
+    def _notify_state(self, state: str):
+        """Actualiza el badge visual y escribe en la consola del simulador."""
+        if threading.current_thread() is not threading.main_thread():
+            self.view.after(0, lambda: self._notify_state(state))
+            return
+        changed = state != self._sim_state
+        self._sim_state = state
+        if hasattr(self.view, "button_bar"):
+            self.view.button_bar.update_state(state)
+        # Solo escribir mensaje en consola cuando hay transición real de estado
+        if changed and self.console and state in self._STATE_MESSAGES:
+            self.console.write_output(self._STATE_MESSAGES[state])
 
     def set_breakpoints(self, lines):
         """Establece el conjunto de líneas Arduino con breakpoint activo."""

@@ -5,11 +5,16 @@ at: https://www.arduino.cc/reference/en/
 
 import string
 import time
+import threading
 import random as ran
 from math import cos, sin, sqrt, tan
 import robot_components.boards as boards
 import robot_components.robot_state as robot_state
 import graphics.screen_updater as screen_updater
+
+# Evento global que interrumpe delay()/delayMicroseconds() cuando se detiene la ejecución.
+# Loop.reboot() lo activa; Loop.execute() lo limpia antes de arrancar el hilo nuevo.
+_stop_event = threading.Event()
 
 HIGH = 1
 LOW = 0
@@ -314,7 +319,9 @@ def delay(ms):
         ms: the number of milliseconds to pause
     """
     state.exec_time_ms = int(time.time_ns() / 1000000) + ms
-    time.sleep(ms / 1000.0)
+    # _stop_event.wait() duerme el tiempo pedido pero despierta inmediatamente
+    # si se activa el evento (stop/reset), haciendo el delay() interrumpible.
+    _stop_event.wait(ms / 1000.0)
 
 
 def delay_microseconds(us):

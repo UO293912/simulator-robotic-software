@@ -130,6 +130,7 @@ class Loop(Command):
     def __init__(self, controller):
         super().__init__(controller)
         self._thread = None
+        self._old_thread = None
         self._stop_flag = False
 
     def execute(self):
@@ -141,6 +142,7 @@ class Loop(Command):
         # Arrancar el hilo solo si no hay ya uno vivo
         if self._thread is None or not self._thread.is_alive():
             self._stop_flag = False
+            standard._stop_event.clear()  # asegura que delay() funcione con normalidad
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
 
@@ -174,15 +176,21 @@ class Loop(Command):
                     traceback.print_exc()
                     self.controller.executing = False
                     self._stop_flag = True
+                    self.controller._notify_state("idle")
                     break
         except Exception:
             traceback.print_exc()
             self.controller.executing = False
             self._stop_flag = True
+            self.controller._notify_state("idle")
 
     def reboot(self):
+        standard._stop_event.set()   # despierta cualquier delay() bloqueado
         self._stop_flag = True
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=0.5)  # delay() ya no bloquea → 500 ms es más que suficiente
+        # Guardar referencia si el hilo sigue vivo (código sin delay en bucle infinito)
+        if self._thread is not None and self._thread.is_alive():
+            self._old_thread = self._thread  # se abandona como daemon; morirá con el proceso
         self._thread = None
         super().reboot()
