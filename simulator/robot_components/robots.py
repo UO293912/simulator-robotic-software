@@ -451,7 +451,7 @@ class ArmHardwareRobot(Robot):
         super().__init__(boards.BQzumBT328())
         self.board.arm_robot = self
 
-        self._joint_servos = [elements.Servo() for _ in range(6)]
+        self._joint_servos = [elements.ArmJointServo() for _ in range(6)]
         self.servo_base = self._joint_servos[0]
         self.servo_shoulder = self._joint_servos[1]
         self.servo_elbow = self._joint_servos[2]

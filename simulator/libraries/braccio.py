@@ -18,7 +18,7 @@ Uso en sketch Arduino (simulador):
     }
 
     void loop(){
-      Braccio.ServoMovement(20, 90, 90, 90, 90, 90, 73);
+      Braccio.ServoMovement(20, 0, 0, 0, 0, 0, -17);
     }
 """
 
@@ -38,23 +38,23 @@ BRACCIO_PINS = {
 _SERVO_ORDER = ['base', 'shoulder', 'elbow', 'wrist_ver', 'wrist_rot', 'gripper']
 
 _DEFAULT_STEP_POSITIONS = {
-    'base': 90,
-    'shoulder': 90,
-    'elbow': 90,
-    'wrist_ver': 90,
-    'wrist_rot': 90,
-    'gripper': 73,
+    'base': 0,
+    'shoulder': 0,
+    'elbow': 0,
+    'wrist_ver': 0,
+    'wrist_rot': 0,
+    'gripper': -17,
 }
 
 # Límites hardware en grados de servo (0–180).
 # Derivados de los límites DH del preset braccio_tinkerkit: servo = dh_angle + 90.
-_SERVO_LIMITS = {
-    'base':      (0,   180),
-    'shoulder':  (15,  165),
-    'elbow':     (0,   180),
-    'wrist_ver': (0,   180),
-    'wrist_rot': (0,   180),
-    'gripper':   (10,  73),
+_JOINT_LIMITS = {
+    'base':      (-90,  90),
+    'shoulder':  (-75,  75),
+    'elbow':     (-90,  90),
+    'wrist_ver': (-90,  90),
+    'wrist_rot': (-90,  90),
+    'gripper':   (-80, -17),
 }
 
 
@@ -169,7 +169,7 @@ class Braccio:
         """
         self._resolve_servos()
         # Posición de reposo estándar
-        self.servo_movement(20, 90, 90, 90, 90, 90, 73)
+        self.servo_movement(20, 0, 0, 0, 0, 0, -17)
         return self.OK
 
     def servo_movement(self, step_delay, v_base, v_shoulder, v_elbow,
@@ -194,7 +194,7 @@ class Braccio:
 
         values = [v_base, v_shoulder, v_elbow, v_wrist_ver, v_wrist_rot, v_gripper]
 
-        # Validar rangos hardware y avisar en consola
+        # Validar rangos articulares y avisar en consola
         self._validate_values(values)
         step_delay = max(10, min(30, int(step_delay)))
         targets = self._clamp_values(values)
@@ -239,7 +239,7 @@ class Braccio:
         """Ajusta los objetivos a los rangos seguros de la libreria oficial."""
         clamped = []
         for name, value in zip(_SERVO_ORDER, values):
-            lo, hi = _SERVO_LIMITS[name]
+            lo, hi = _JOINT_LIMITS[name]
             clamped.append(max(lo, min(hi, int(value))))
         return clamped
 
@@ -260,7 +260,7 @@ class Braccio:
             if _serial.cons is None:
                 return
             for name, value in zip(_SERVO_ORDER, values):
-                lo, hi = _SERVO_LIMITS[name]
+                lo, hi = _JOINT_LIMITS[name]
                 if not (lo <= value <= hi):
                     _serial.cons.write_warning(_console.Warning(
                         "Braccio", 0, 0,

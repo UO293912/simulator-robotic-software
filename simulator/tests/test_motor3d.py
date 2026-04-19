@@ -150,6 +150,28 @@ class TestForwardKinematics:
             f"J2=45° debe aumentar radio XY >100 mm: {r_tilted:.1f} vs {r_rest:.1f}")
 
 
+    def test_fk_base_orientation_can_turn_joint_1_into_pendulum(self):
+        """La base configurable debe reorientar el eje de la primera articulaciÃ³n."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            link_lengths=[200.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=['R'],
+            joints=[25.0],
+            dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 200.0, 'alpha': 0.0}],
+            base={'theta': 90.0, 'd': 0.0, 'a': 0.0, 'alpha': 90.0},
+        )
+
+        chain = forward_kinematics_chain(model)
+        axis_world = chain['matrices'][0][:3, 2]
+        np.testing.assert_allclose(axis_world, [1.0, 0.0, 0.0], atol=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # P-CU02-02 : Convergencia IK
 # ---------------------------------------------------------------------------
@@ -291,6 +313,19 @@ class TestRendering:
         assert len(motor3d_api.scene.trail_points) > initial_len, (
             "trail_points debe aumentar al mover las articulaciones")
 
+    def test_draw_with_joint_axes_enabled_no_crash(self, motor3d_api):
+        """Activar los ejes locales XYZ no debe romper el render ni el flag visual."""
+        motor3d_api.set_show_joint_axes(True)
+        assert motor3d_api.model.visual.get('show_joint_axes') is True
+
+        motor3d_api.scene.update()
+        with mock.patch('motor3d.rendering.robot3d_drawing.ImageTk') as mock_itk:
+            mock_itk.PhotoImage.return_value = mock.MagicMock()
+            motor3d_api.draw(_MockCanvas())
+
+        motor3d_api.set_show_joint_axes(False)
+        assert 'show_joint_axes' not in motor3d_api.model.visual
+
     def test_scene_last_points_length(self, motor3d_api):
         """last_points debe tener dof+1 elementos tras update()."""
         motor3d_api.scene.update()
@@ -363,11 +398,11 @@ class TestRendering:
         monkeypatch.setattr(layers_mod.time, "monotonic", lambda: next(times))
 
         # Estado inicial: servo base en 90° -> joint DH = 0°
-        layer.robot.servo_base.value = 90
+        layer.robot.servo_base.value = 0
         layer._Arm3DLayer__sync_from_servos()
 
         # Nuevo objetivo: servo base en 0° -> joint DH = -90°
-        layer.robot.servo_base.value = 0
+        layer.robot.servo_base.value = -90
         for _ in range(6):
             layer._Arm3DLayer__sync_from_servos()
 
@@ -378,6 +413,40 @@ class TestRendering:
 # ---------------------------------------------------------------------------
 # P-CU04-01 : Navegación 3D sin crash
 # ---------------------------------------------------------------------------
+
+def test_arm3d_custom_mode_keeps_signed_joint_values():
+    """En modo custom no debe reinterpretar los joints como servos 0..180."""
+    import graphics.layers as layers_mod
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[100.0],
+        joint_limits=[(-180.0, 180.0)],
+        joint_types=['R'],
+        joints=[0.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+    )
+
+    layer.set_joint_angle(0, -120.0)
+    layer._Arm3DLayer__sync_from_servos()
+    assert abs(layer.motor3d.model.joints[0] + 120.0) < 1e-6
+
+    layer.set_joint_angle(0, 135.0)
+    layer._Arm3DLayer__sync_from_servos()
+    assert abs(layer.motor3d.model.joints[0] - 135.0) < 1e-6
+
+
+def test_braccio_layer_stores_signed_joint_values_in_virtual_servos():
+    """El Braccio predefinido debe seguir usando la numeraciÃ³n servo tradicional."""
+    from graphics.layers import Arm3DLayer
+
+    layer = Arm3DLayer()
+    layer.set_joint_angle(0, -45.0)
+    assert layer.motor3d.model.joints[0] == -45.0
+    assert layer.robot.servo_base.value == -45.0
+
 
 class TestCameraNavigation:
     """P-CU04-01 — Operaciones de cámara no deben lanzar excepciones."""
@@ -494,7 +563,7 @@ class TestBraccioCompiler:
 
         # Board mock con elementos servo mock
         class MockElem:
-            def __init__(self, value=90):
+            def __init__(self, value=0):
                 self.value = value
                 self.last_pin = None
                 self.last_val = None
@@ -509,7 +578,7 @@ class TestBraccioCompiler:
         class MockBoard:
             def __init__(self):
                 self.elements = {pin: MockElem() for pin in BRACCIO_PINS.values()}
-                self.elements[BRACCIO_PINS['gripper']].value = 73
+                self.elements[BRACCIO_PINS['gripper']].value = -17
 
             def get_pin_element(self, pin):
                 return self.elements.get(pin)
@@ -520,12 +589,12 @@ class TestBraccioCompiler:
         board = MockBoard()
         b = Braccio(board)
         b._resolve_servos()
-        b.servo_movement(20, 90, 45, 90, 90, 90, 73)
+        b.servo_movement(20, 0, -45, 0, 0, 0, -17)
 
         shoulder_pin = BRACCIO_PINS['shoulder']
-        assert board.elements[shoulder_pin].last_val == 45, (
+        assert board.elements[shoulder_pin].last_val == -45, (
             f"El servo del hombro debe tener valor 45, obtuvo {board.elements[shoulder_pin].last_val}")
-        assert board.elements[shoulder_pin].writes[0] == 89
+        assert board.elements[shoulder_pin].writes[0] == -1
         assert len(board.elements[shoulder_pin].writes) == 45
         assert len(delays) == 45
         assert set(delays) == {20}
@@ -535,7 +604,7 @@ class TestBraccioCompiler:
         import libraries.braccio as braccio_mod
 
         class MockElem:
-            def __init__(self, value=90):
+            def __init__(self, value=0):
                 self.value = value
                 self.last_val = value
 
@@ -546,7 +615,7 @@ class TestBraccioCompiler:
         class MockBoard:
             def __init__(self):
                 self.elements = {
-                    pin: MockElem(73 if pin == braccio_mod.BRACCIO_PINS['gripper'] else 90)
+                    pin: MockElem(-17 if pin == braccio_mod.BRACCIO_PINS['gripper'] else 0)
                     for pin in braccio_mod.BRACCIO_PINS.values()
                 }
 
@@ -559,14 +628,14 @@ class TestBraccioCompiler:
         board = MockBoard()
         b = braccio_mod.Braccio(board)
         b._resolve_servos()
-        b.servo_movement(5, 200, 0, 181, -1, 999, 0)
+        b.servo_movement(5, 200, -90, 181, -91, 999, -999)
 
-        assert board.elements[braccio_mod.BRACCIO_PINS['base']].last_val == 180
-        assert board.elements[braccio_mod.BRACCIO_PINS['shoulder']].last_val == 15
-        assert board.elements[braccio_mod.BRACCIO_PINS['elbow']].last_val == 180
-        assert board.elements[braccio_mod.BRACCIO_PINS['wrist_ver']].last_val == 0
-        assert board.elements[braccio_mod.BRACCIO_PINS['wrist_rot']].last_val == 180
-        assert board.elements[braccio_mod.BRACCIO_PINS['gripper']].last_val == 10
+        assert board.elements[braccio_mod.BRACCIO_PINS['base']].last_val == 90
+        assert board.elements[braccio_mod.BRACCIO_PINS['shoulder']].last_val == -75
+        assert board.elements[braccio_mod.BRACCIO_PINS['elbow']].last_val == 90
+        assert board.elements[braccio_mod.BRACCIO_PINS['wrist_ver']].last_val == -90
+        assert board.elements[braccio_mod.BRACCIO_PINS['wrist_rot']].last_val == 90
+        assert board.elements[braccio_mod.BRACCIO_PINS['gripper']].last_val == -80
         assert delays, "ServoMovement debe esperar entre pasos"
         assert set(delays) == {10}
 
@@ -576,7 +645,7 @@ class TestBraccioCompiler:
         import libraries.braccio as braccio
 
         class MockElem:
-            def __init__(self, value=90):
+            def __init__(self, value=0):
                 self.value = value
                 self.last_pin = None
                 self.last_val = None
@@ -589,7 +658,7 @@ class TestBraccioCompiler:
         class MockBoard:
             def __init__(self):
                 self.elements = {
-                    pin: MockElem(73 if pin == braccio.BRACCIO_PINS['gripper'] else 90)
+                    pin: MockElem(-17 if pin == braccio.BRACCIO_PINS['gripper'] else 0)
                     for pin in braccio.BRACCIO_PINS.values()
                 }
 
@@ -611,10 +680,10 @@ class TestBraccioCompiler:
             standard.board = board
             braccio._singleton = None
             braccio.begin()
-            braccio.servo_movement(20, 90, 45, 90, 90, 90, 73)
+            braccio.servo_movement(20, 0, -45, 0, 0, 0, -17)
 
             shoulder_pin = braccio.BRACCIO_PINS['shoulder']
-            assert board.elements[shoulder_pin].last_val == 45
+            assert board.elements[shoulder_pin].last_val == -45
         finally:
             standard.board = original_board
             braccio._singleton = original_singleton
@@ -656,8 +725,8 @@ class TestBraccioCompiler:
         assert first.attach(10) == Servo.OK
         assert second.attach(11) == Servo.OK
 
-        first.write(30)
-        second.write(120)
+        first.write(-60)
+        second.write(30)
         layer._Arm3DLayer__sync_from_servos()
 
         assert layer.motor3d.model.joints[0] == -60.0

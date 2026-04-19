@@ -631,7 +631,6 @@ class Arm3DLayer(Layer):
         Fija el ángulo articular (grados DH) y sincroniza el servo correspondiente.
         """
         self.motor3d.set_joint(joint_idx, angle)
-        servo_value = max(0, min(180, int(angle + 90.0)))
         servos = [
             self.robot.servo_base,
             self.robot.servo_shoulder,
@@ -641,7 +640,9 @@ class Arm3DLayer(Layer):
             self.robot.servo_gripper,
         ]
         if 0 <= joint_idx < len(servos):
-            servos[joint_idx].value = servo_value
+            servos[joint_idx].value = float(self.motor3d.model.joints[joint_idx])
+        if self._current_joints is not None and 0 <= joint_idx < len(self._current_joints):
+            self._current_joints[joint_idx] = float(self.motor3d.model.joints[joint_idx])
 
     def solve_ik(self, x, y, z):
         """Lanza IK y retorna (converged, mensaje_estado)."""
@@ -691,7 +692,15 @@ class Arm3DLayer(Layer):
     def __sync_from_servos(self):
         """Lee los valores objetivo de los servos e interpola suavemente hacia ellos."""
         servo_values = self.robot.get_servo_values()
-        targets = [float(sv) - 90.0 for sv in servo_values]
+        targets = []
+        for i, sv in enumerate(servo_values):
+            target = float(sv)
+            if i < len(self.motor3d.model.joint_limits):
+                mn, mx = self.motor3d.model.joint_limits[i]
+                target = max(mn, min(mx, target))
+                if i < len(self.robot._joint_servos):
+                    self.robot._joint_servos[i].value = target
+            targets.append(target)
         now = time.monotonic()
 
         # Inicializar posición actual en el primer frame
@@ -722,13 +731,27 @@ class Arm3DLayer(Layer):
 
     def _update_hud(self, safety):
         ee = self.motor3d.scene.get_end_effector()
-        joints_servo = [j + 90.0 for j in self.motor3d.model.joints]
-        limits_servo = [(mn + 90.0, mx + 90.0) for mn, mx in self.motor3d.model.joint_limits]
+        model = self.motor3d.model
+        jtypes = model.joint_types
+
+        def _jval(i, j):
+            if i < len(jtypes) and jtypes[i] == 'P':
+                return j
+            return j
+
+        def _jlim(i, mn, mx):
+            if i < len(jtypes) and jtypes[i] == 'P':
+                return mn, mx
+            return mn, mx
+
+        joints_display = [_jval(i, j) for i, j in enumerate(model.joints)]
+        limits_display = [_jlim(i, mn, mx) for i, (mn, mx) in enumerate(model.joint_limits)]
         self.hud.update(
-            dof=self.motor3d.model.dof,
-            joints=joints_servo,
+            dof=model.dof,
+            joints=joints_display,
             end_effector=ee,
-            joint_limits=limits_servo,
+            joint_limits=limits_display,
+            joint_types=list(jtypes),
             in_workspace=safety['in_workspace'],
             singular=safety['singular'],
             safety_blocked=safety['blocked'],
