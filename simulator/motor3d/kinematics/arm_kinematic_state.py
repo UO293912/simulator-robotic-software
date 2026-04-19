@@ -2,6 +2,7 @@
 ArmKinematicState — Estado cinemático completo del brazo robótico.
 Parametrización Denavit-Hartenberg, configurable para 1-6 DOF.
 """
+import math
 
 
 class ArmKinematicState:
@@ -17,13 +18,15 @@ class ArmKinematicState:
         self.joint_limits = []
         self.joint_types = []
         self.dh_rows = []
+        self.base_row = {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}
+        self.preset_name = None
         self.tool_parent_joint = -1
         self.tool_offset = [0.0, 0.0, 0.0]
         self.visual = {"mode": "auto_generic", "theme": "default", "sizes": {}}
 
     def configure(self, dof, link_lengths=None, joint_limits=None,
                   joint_types=None, joints=None, dh_rows=None,
-                  tool=None, visual=None):
+                  tool=None, visual=None, base=None):
         self.dof = max(self.MIN_DOF, min(self.MAX_DOF, int(dof)))
         n = self.dof
 
@@ -39,8 +42,8 @@ class ArmKinematicState:
         while len(self.joint_limits) < n:
             self.joint_limits.append((-90.0, 90.0))
 
-        self.joint_types = list(joint_types) if joint_types else ['R'] * n
-        self.joint_types = self.joint_types[:n]
+        raw_types = list(joint_types) if joint_types else []
+        self.joint_types = [(t if t in ('R', 'P') else 'R') for t in raw_types][:n]
         while len(self.joint_types) < n:
             self.joint_types.append('R')
 
@@ -62,6 +65,8 @@ class ArmKinematicState:
             i = len(self.dh_rows)
             ll = self.link_lengths[i] if i < len(self.link_lengths) else 100.0
             self.dh_rows.append({'theta': 0.0, 'd': 0.0, 'a': float(ll), 'alpha': 0.0})
+
+        self.base_row = self._normalize_base_row(base)
 
         if tool:
             self.tool_parent_joint = tool.get('parent_joint', -1)
@@ -115,6 +120,8 @@ class ArmKinematicState:
             'joint_limits': [list(lim) for lim in self.joint_limits],
             'joint_types': list(self.joint_types),
             'dh_rows': [dict(row) for row in self.dh_rows],
+            'base': dict(self.base_row),
+            'preset_name': self.preset_name,
             'tool': {
                 'parent_joint': self.tool_parent_joint,
                 'offset': list(self.tool_offset),
@@ -123,6 +130,8 @@ class ArmKinematicState:
         }
 
     def load_dict(self, data):
+        preset_name = data.get('preset_name')
+        self.preset_name = preset_name if isinstance(preset_name, str) and preset_name else None
         self.configure(
             dof=data.get('dof', 1),
             link_lengths=data.get('link_lengths'),
@@ -130,6 +139,7 @@ class ArmKinematicState:
             joint_types=data.get('joint_types'),
             joints=data.get('joints'),
             dh_rows=data.get('dh_rows'),
+            base=data.get('base'),
             tool=data.get('tool'),
             visual=data.get('visual'),
         )
@@ -143,3 +153,45 @@ class ArmKinematicState:
         for i in range(self.dof):
             mn, mx = self.joint_limits[i]
             self.joints[i] = max(mn, min(mx, self.joints[i]))
+
+    @staticmethod
+    def _normalize_base_row(base):
+        default = {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}
+        if not isinstance(base, dict):
+            return dict(default)
+
+        if any(k in base for k in ('theta', 'd', 'a', 'alpha')):
+            row = {}
+            for key in ('theta', 'd', 'a', 'alpha'):
+                try:
+                    row[key] = float(base.get(key, 0.0))
+                except (TypeError, ValueError):
+                    row[key] = 0.0
+            return row
+
+        raw_rpy = list(base.get('rpy', [])) if 'rpy' in base else []
+        if raw_rpy:
+            roll = math.radians(float(raw_rpy[0]) if len(raw_rpy) > 0 else 0.0)
+            pitch = math.radians(float(raw_rpy[1]) if len(raw_rpy) > 1 else 0.0)
+            yaw = math.radians(float(raw_rpy[2]) if len(raw_rpy) > 2 else 0.0)
+
+            cr, sr = math.cos(roll), math.sin(roll)
+            cp, sp = math.cos(pitch), math.sin(pitch)
+            cy, sy = math.cos(yaw), math.sin(yaw)
+
+            zx = cy * sp * cr + sy * sr
+            zy = sy * sp * cr - cy * sr
+            zz = cp * cr
+
+            alpha = math.degrees(math.atan2(math.sqrt(zx * zx + zy * zy), zz))
+            if abs(zx) > 1e-9 or abs(zy) > 1e-9:
+                theta = math.degrees(math.atan2(zx, -zy))
+            else:
+                theta = math.degrees(yaw)
+
+            row = dict(default)
+            row['theta'] = theta
+            row['alpha'] = alpha
+            return row
+
+        return dict(default)

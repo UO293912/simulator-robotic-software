@@ -10,6 +10,7 @@ import math
 import os
 import struct
 import numpy as np
+from motor3d.kinematics.kinematics_fk import get_base_transform
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -276,8 +277,9 @@ class BraccioVisualModel:
 
             _T = self._build_offset_matrix
             _R = self._Raxis
+            base_T = get_base_transform(model)
 
-            T_base    = _R([0, 0, 1], q[0])
+            T_base    = base_T @ _R([0, 0, 1], q[0])
             T_shoulder = T_base @ _T([0.0, -2.0, 72.0], [-math.pi / 2, 0.0, 0.0]) \
                          @ _R([1, 0, 0], q[1])
             T_elbow   = T_shoulder @ _T([0.0, 0.0, 125.0], [-math.pi / 2, 0.0, 0.0]) \
@@ -316,17 +318,19 @@ class BraccioVisualModel:
 
         _T = self._build_offset_matrix
         _R = self._Raxis
+        base_T = get_base_transform(model)
 
         frames = []
 
         # Joint 0 — base, rotación alrededor de Z del mundo
-        T_base = _R([0, 0, 1], q[0])
+        T_base = base_T @ _R([0, 0, 1], q[0])
         frames.append({
-            'pos': [0.0, 0.0, 0.0],
-            'axis': np.array([0.0, 0.0, 1.0]),
+            'pos': base_T[:3, 3].tolist(),
+            'axis': base_T[:3, 2].copy(),
             'xref': np.array([1.0, 0.0, 0.0]),   # X world = dirección a q0=0
             'r_arc': 80.0,
         })
+        frames[0]['xref'] = base_T[:3, 0].copy()
 
         # Joint 1 — hombro, rotación alrededor de X
         T_pre_shoulder = T_base @ _T([0.0, -2.0, 72.0], [-math.pi / 2, 0.0, 0.0])
@@ -413,10 +417,11 @@ class BraccioVisualModel:
         # ------------------------------------------------------------------
         _T = self._build_offset_matrix   # alias corto
         _R = self._Raxis
+        base_T = get_base_transform(model)
 
         # Pieza 0: braccio_base_link
         #   base_joint: parent=base_link(world), origin=(0,0,0), axis=+Z
-        T_base = _R([0, 0, 1], q[0])
+        T_base = base_T @ _R([0, 0, 1], q[0])
 
         # Pieza 1: shoulder_link
         #   shoulder_joint: origin xyz=(0,-2,72)mm rpy=(-π/2,0,0), axis=+X
@@ -475,19 +480,44 @@ class BraccioVisualModel:
 
 
 # ---------------------------------------------------------------------------
+# Utilidades de geometría
+# ---------------------------------------------------------------------------
+
+def _axis_aligned_transform(direction):
+    """Matriz 4×4 identidad con columna Z = normalize(direction).
+    Se usa para orientar cilindros a lo largo de un vector arbitrario."""
+    z = np.array(direction, dtype=float)
+    n = np.linalg.norm(z)
+    if n < 1e-9:
+        return np.eye(4)
+    z = z / n
+    ref = np.array([0.0, 1.0, 0.0]) if abs(z[1]) < 0.9 else np.array([1.0, 0.0, 0.0])
+    x = np.cross(ref, z)
+    x = x / np.linalg.norm(x)
+    y = np.cross(z, x)
+    T = np.eye(4, dtype=float)
+    T[:3, 0] = x
+    T[:3, 1] = y
+    T[:3, 2] = z
+    return T
+
+
+# ---------------------------------------------------------------------------
 # GenericDhVisualModel
 # ---------------------------------------------------------------------------
 class GenericDhVisualModel:
     """
     Modelo visual genérico para cualquier cadena DH (1-6 DOF).
-    Geometría procedural: cilindros para articulaciones, prismas para eslabones.
+    Cada articulación se representa como una carcasa discoidea + núcleo cilíndrico
+    (similar a un cuerpo de servo), y cada eslabón como una sección rectangular.
     """
 
-    MIN_RADIUS = 8.0
-    MAX_RADIUS = 30.0
-    MIN_LINK_W = 10.0
-    MAX_LINK_W = 25.0
-    JOINT_STEPS = 10
+    # Dimensiones mínimas en mm — aseguran visibilidad a zoom normal
+    MIN_RADIUS = 25.0
+    MAX_RADIUS = 55.0
+    MIN_LINK_W = 18.0
+    MAX_LINK_W = 44.0
+    JOINT_STEPS = 12
 
     def supports_model(self, model):
         return model.dof >= 1
@@ -500,15 +530,12 @@ class GenericDhVisualModel:
         return [0.0, 0.0, 0.0]
 
     def get_joint_frames(self, model, chain=None):
-        """
-        Retorna marcos articulares basados en la cadena DH.
-        Cada elemento: {'pos', 'axis', 'xref', 'r_arc'}
-        """
         frames = []
         matrices = chain.get('matrices', []) if chain else []
         positions = chain.get('positions', []) if chain else []
+        base_T = get_base_transform(model)
         for i in range(model.dof):
-            T = matrices[i - 1] if i > 0 else np.eye(4)
+            T = matrices[i - 1] if i > 0 else base_T
             pos = positions[i] if i < len(positions) else [0.0, 0.0, 0.0]
             r_arc = model.link_lengths[i] * 0.4 if i < len(model.link_lengths) else 40.0
             frames.append({
@@ -521,7 +548,12 @@ class GenericDhVisualModel:
 
     def iter_triangles(self, model, points, chain):
         """
-        Genera triángulos de cilindros (articulaciones) y prismas (eslabones).
+        Genera triángulos de la geometría procedural del brazo.
+
+        Cada articulación:
+          - R: disco exterior (eje de rotación = col-Z del frame anterior) + hub cilíndrico.
+          - P: housing fijo en p0 + vástago delgado que se extiende hasta p1 (long. variable).
+          - Último joint + eslabón muy corto → pinza de dos dedos que abre/cierra.
         Yields: (np.array shape (N,3,3), (R,G,B))
         """
         if not chain or 'matrices' not in chain:
@@ -533,37 +565,120 @@ class GenericDhVisualModel:
             return
 
         dims = self._resolve_dimensions(model)
-        radius = dims['radius']
-        link_w = dims['link_w']
+        r  = dims['radius']
+        lw = dims['link_w']
+        base_T = get_base_transform(model)
 
         for i in range(model.dof):
-            p0 = positions[i]
-            p1 = positions[i + 1]
-            T = matrices[i]
+            p0 = np.array(positions[i],     dtype=float)
+            p1 = np.array(positions[i + 1], dtype=float)
 
-            # Color: naranja en límite, azul normal
+            # Frame anterior: define el eje de rotación REAL del joint i (col Z)
+            T_prev = matrices[i - 1] if i > 0 else base_T
+            # Transform alineado con la dirección del eslabón (p0→p1)
+            T_link = _axis_aligned_transform(p1 - p0)
+
+            jtype    = model.joint_types[i] if i < len(model.joint_types) else 'R'
             at_limit = model.is_at_limit(i)
-            joint_color = (230, 80, 30) if at_limit else (60, 120, 200)
-            link_color = (180, 180, 190)
+            seg_len  = float(np.linalg.norm(p1 - p0))
 
-            cyl = _make_cylinder(p0, T, radius, radius * 1.5, self.JOINT_STEPS)
-            if cyl.size > 0:
-                yield cyl, joint_color
+            if at_limit:
+                actuator_color = (230, 80, 30)
+            elif jtype == 'P':
+                actuator_color = (55, 185, 90)
+            else:
+                actuator_color = (55, 115, 205)
 
-            prism = _make_link_prism(p0, p1, link_w)
-            if prism.size > 0:
-                yield prism, link_color
+            housing_color = (58, 62, 75)
+            link_color    = (140, 145, 162)
 
-        ee = chain.get('end_effector', positions[-1])
-        sphere = _make_sphere_approx(ee, radius * 0.8)
+            # ---- Pinza: último joint con eslabón muy corto ----
+            is_gripper = (i == model.dof - 1 and jtype != 'P' and seg_len < r * 2.8)
+
+            if is_gripper:
+                # Frame real del EE (acumulado hasta el último joint).
+                # Cuando seg_len≈0 (a=0), T_link es identidad — inútil.
+                # matrices[i] = frame acumulado TRAS aplicar el joint i.
+                T_ee = matrices[i] if i < len(matrices) else T_prev
+
+                # Palma (carcasa del último joint) — perpendicular al eje de rotación
+                palm = _make_cylinder(p0, T_prev, r * 0.65, r * 0.50, self.JOINT_STEPS)
+                if palm.size > 0:
+                    yield palm, housing_color
+
+                jval = model.joints[i] if i < len(model.joints) else 0.0
+                mn, mx = model.joint_limits[i] if i < len(model.joint_limits) else (0.0, 90.0)
+                t = (jval - mn) / (mx - mn) if mx > mn else 0.5
+                t = max(0.0, min(1.0, t))
+
+                # Usar el frame EE real para orientar los dedos:
+                #   col-Z = dirección de avance (hacia el objeto)
+                #   col-X = dirección de apertura lateral
+                forward    = T_ee[:3, 2]
+                side       = T_ee[:3, 0]
+                finger_len = r * 2.4
+                finger_w   = r * 0.42
+                # min → abierto (t=0 → gap grande), max → cerrado (t=1 → gap pequeño)
+                half_gap   = r * (0.72 - 0.56 * t)
+
+                for sign in (+1.0, -1.0):
+                    f_root = p0 + side * sign * half_gap
+                    f_tip  = f_root + forward * finger_len
+                    prism  = _make_link_prism(f_root, f_tip, finger_w)
+                    if prism.size > 0:
+                        yield prism, actuator_color
+
+            elif jtype == 'P':
+                # Brida de conexión (flange) en p0
+                flange = _make_cylinder(p0, T_prev, r, r * 0.30, self.JOINT_STEPS)
+                if flange.size > 0:
+                    yield flange, (90, 110, 130)
+                # Housing cilíndrico fijo centrado en p0
+                housing_h = r * 1.6
+                housing = _make_cylinder(p0, T_link, r * 0.58, housing_h, self.JOINT_STEPS)
+                if housing.size > 0:
+                    yield housing, housing_color
+                # Vástago delgado que se extiende de p0 a p1 (longitud = extensión actual)
+                if seg_len > r * 0.4:
+                    rod_center = (p0 + p1) * 0.5
+                    rod = _make_cylinder(rod_center, T_link, r * 0.20, seg_len, self.JOINT_STEPS)
+                    if rod.size > 0:
+                        yield rod, actuator_color
+                # No se dibuja link_prism — el vástago ya representa la conexión
+
+            else:
+                # R: carcasa discoidea + hub actuador
+                disc = _make_cylinder(p0, T_prev, r,        r * 0.40, self.JOINT_STEPS)
+                if disc.size > 0:
+                    yield disc, housing_color
+                hub_h = min(r * 1.6, max(r * 0.8, seg_len * 0.25))
+                hub = _make_cylinder(p0, T_link, r * 0.38, hub_h, self.JOINT_STEPS)
+                if hub.size > 0:
+                    yield hub, actuator_color
+                # Sección de eslabón
+                prism = _make_link_prism(p0, p1, lw)
+                if prism.size > 0:
+                    yield prism, link_color
+
+        # Indicador del efector final
+        ee = np.array(chain.get('end_effector', positions[-1]), dtype=float)
+        sphere = _make_sphere_approx(ee, r * 0.58)
         if sphere.size > 0:
             yield sphere, (220, 180, 50)
 
     def _resolve_dimensions(self, model):
-        avg_len = sum(model.link_lengths) / max(1, len(model.link_lengths))
-        radius = max(self.MIN_RADIUS, min(self.MAX_RADIUS, avg_len * 0.06))
-        link_w = max(self.MIN_LINK_W, min(self.MAX_LINK_W, avg_len * 0.05))
-        return {'radius': radius, 'link_w': link_w}
+        """Calcula radio y ancho de eslabón usando |a| + |d| de cada fila DH."""
+        seg_lengths = []
+        for row in model.dh_rows:
+            a = abs(float(row.get('a', 0)))
+            d = abs(float(row.get('d', 0)))
+            seg = math.sqrt(a * a + d * d)
+            if seg > 1.0:
+                seg_lengths.append(seg)
+        avg_len = sum(seg_lengths) / len(seg_lengths) if seg_lengths else 100.0
+        r  = max(self.MIN_RADIUS, min(self.MAX_RADIUS, avg_len * 0.12))
+        lw = max(self.MIN_LINK_W, min(self.MAX_LINK_W, avg_len * 0.09))
+        return {'radius': r, 'link_w': lw}
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +891,10 @@ class Robot3DDrawing:
         # Esqueleto de puntos
         if model.visual.get('mode') == 'skeleton':
             self._render_skeleton(draw, camera, points3d, model, w, h)
+
+        # Ejes locales XYZ de cada articulaciÃ³n
+        if points3d and chain and model.visual.get('show_joint_axes', False):
+            self._draw_joint_axes(draw, model, chain, camera, w, h)
 
         # Blit a canvas
         self._blit(canvas, img)
@@ -1005,6 +1124,62 @@ class Robot3DDrawing:
             except Exception:
                 pass
 
+    def _resolve_joint_basis(self, frame):
+        """Construye una base ortonormal local (X, Y, Z) a partir del frame articular."""
+        center = np.asarray(frame['pos'], dtype=float)
+        axis = np.asarray(frame['axis'], dtype=float)
+        u_raw = np.asarray(frame['xref'], dtype=float)
+
+        axis_n = np.linalg.norm(axis)
+        if axis_n < 1e-9:
+            return None
+        axis = axis / axis_n
+
+        u_raw = u_raw - np.dot(u_raw, axis) * axis
+        u_n = np.linalg.norm(u_raw)
+        if u_n < 1e-9:
+            return None
+        u = u_raw / u_n
+
+        v_raw = np.cross(axis, u)
+        v_n = np.linalg.norm(v_raw)
+        if v_n < 1e-9:
+            return None
+        v = v_raw / v_n
+        u = np.cross(v, axis)
+
+        return center, axis, u, v
+
+    def _draw_joint_axes(self, draw, model, chain, camera, w, h):
+        """Dibuja los ejes XYZ locales de cada articulaciÃ³n usando sus frames renderizados."""
+        vm = self.resolve_visual_model(model)
+        frames = vm.get_joint_frames(model, chain)
+
+        for frame in frames[:model.dof]:
+            basis = self._resolve_joint_basis(frame)
+            if basis is None:
+                continue
+
+            center, axis_z, axis_x, axis_y = basis
+            p0 = camera.project(center.tolist(), w, h)
+            if p0 is None:
+                continue
+
+            axis_len = float(np.clip(frame.get('r_arc', 40.0) * 0.65, 24.0, 72.0))
+            axes = (
+                (axis_x, self.AXIS_COLORS['x']),
+                (axis_y, self.AXIS_COLORS['y']),
+                (axis_z, self.AXIS_COLORS['z']),
+            )
+            for axis_dir, color in axes:
+                p1 = camera.project((center + axis_len * axis_dir).tolist(), w, h)
+                if p1 is None:
+                    continue
+                try:
+                    draw.line([p0, p1], fill=color, width=2)
+                except Exception:
+                    pass
+
     def _collect_joint_arcs(self, model, points3d, chain, camera, w, h):
         """Retorna lista de segmentos 2D que representan los arcos de rango articular.
 
@@ -1031,9 +1206,11 @@ class Robot3DDrawing:
                 continue
 
             frame = frames[i]
-            center = frame['pos']
-            axis = np.asarray(frame['axis'], dtype=float)
-            u_raw = np.asarray(frame['xref'], dtype=float)
+            basis = self._resolve_joint_basis(frame)
+            if basis is None:
+                continue
+            center, axis, u, v = basis
+            u_raw = u
 
             # Normalizar eje
             axis_n = np.linalg.norm(axis)

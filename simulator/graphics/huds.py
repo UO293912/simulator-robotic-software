@@ -559,7 +559,7 @@ class Arm3DHUD(HUD):
                                 anchor="w", fill="white", tags="arm3d_static_hud")
 
     def update(self, dof, joints, end_effector, in_workspace, singular,
-               safety_blocked, warning_message, joint_limits=None):
+               safety_blocked, warning_message, joint_limits=None, joint_types=None):
         """
         Actualiza los valores mostrados en el HUD.
 
@@ -586,9 +586,13 @@ class Arm3DHUD(HUD):
         self.canvas.create_text(110, 45, text=ee_text, font=("Consolas", 12),
                                 anchor="w", fill="#00E5CC", tags="arm3d_dynamic_hud")
 
-        # Ángulos articulares con límites
+        # Ángulos/desplazamientos articulares con unidades según tipo
         if joints:
-            joint_text = "  ".join("J{}={:.0f}°".format(i + 1, v) for i, v in enumerate(joints))
+            parts = []
+            for i, v in enumerate(joints):
+                unit = "mm" if (joint_types and i < len(joint_types) and joint_types[i] == 'P') else "°"
+                parts.append("J{}={:.0f}{}".format(i + 1, v, unit))
+            joint_text = "  ".join(parts)
         else:
             joint_text = ""
         self.canvas.create_text(110, 65, text=joint_text, font=("Consolas", 11),
@@ -619,4 +623,4 @@ class Arm3DHUD(HUD):
         if self._info_panel is not None:
             self._info_panel.update(dof, joints, end_effector, in_workspace, singular,
                                     safety_blocked, warning_message,
-                                    joint_limits=joint_limits)
+                                    joint_limits=joint_limits, joint_types=joint_types)

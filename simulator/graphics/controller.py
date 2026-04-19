@@ -304,6 +304,11 @@ class RobotsController:
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.motor3d.set_show_joint_ranges(show)
 
+    def toggle_arm3d_joint_axes(self, show):
+        """Activa o desactiva los ejes XYZ locales de cada articulaciÃ³n del brazo 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.motor3d.set_show_joint_axes(show)
+
     def set_arm3d_camera_view(self, view_name):
         """Aplica un preset de cámara 3D: 'front', 'side', 'iso', o None (libre)."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):

@@ -50,6 +50,7 @@ class Motor3DApi:
         loaded = self.repository.load_model(self.model, silent=True)
         if not loaded:
             self.repository.load_builtin_preset(self.model, self.DEFAULT_PRESET, silent=True)
+        self._sync_active_preset_name()
         if self.model.dof == 0:
             self._load_fallback_config()
 
@@ -99,6 +100,12 @@ class Motor3DApi:
         else:
             self.model.visual.pop('show_joint_ranges', None)
 
+    def set_show_joint_axes(self, show):
+        if show:
+            self.model.visual['show_joint_axes'] = True
+        else:
+            self.model.visual.pop('show_joint_axes', None)
+
     # ------------------------------------------------------------------
     # Cinemática Inversa
     # ------------------------------------------------------------------
@@ -124,23 +131,34 @@ class Motor3DApi:
     # ------------------------------------------------------------------
 
     def get_model_config(self):
+        self.model.preset_name = self.active_preset_name
         return self.model.to_dict()
 
     def set_model_config(self, config):
         self.model.load_dict(config)
+        self._sync_active_preset_name()
         self.renderer._canvas_image_id = None
         self.scene.clear_trail()
         self.scene.update()
 
     def save_model_config(self, path=None):
+        self.model.preset_name = self.active_preset_name
         return self.repository.save_model(self.model, path=path or self.autosave_path)
 
     def load_model_config(self, path=None):
         ok = self.repository.load_model(self.model, path=path or self.autosave_path)
         if ok:
+            self._sync_active_preset_name()
             self.scene.clear_trail()
             self.scene.update()
         return ok
+
+    def uses_legacy_servo_degrees(self):
+        """True solo para el Braccio predefinido con numeraciÃ³n servo 0..180."""
+        return (
+            self.model.visual.get('mode') == 'braccio_exact'
+            and self.active_preset_name == self.DEFAULT_PRESET
+        )
 
     # ------------------------------------------------------------------
     # Renderizado
@@ -180,3 +198,19 @@ class Motor3DApi:
             ],
             visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         )
+        self.active_preset_name = None
+        self.model.preset_name = None
+
+    def _sync_active_preset_name(self):
+        preset_name = getattr(self.model, 'preset_name', None)
+        if preset_name == self.DEFAULT_PRESET and self.model.visual.get('mode') == 'braccio_exact':
+            self.active_preset_name = preset_name
+            self.model.preset_name = preset_name
+            return
+        if self.model.visual.get('mode') == 'braccio_exact':
+            # Compatibilidad con presets/autosaves antiguos sin preset_name persistido.
+            self.active_preset_name = self.DEFAULT_PRESET
+            self.model.preset_name = self.DEFAULT_PRESET
+            return
+        self.active_preset_name = None
+        self.model.preset_name = None

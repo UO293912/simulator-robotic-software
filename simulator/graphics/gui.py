@@ -33,7 +33,7 @@ class MainApplication(tk.Tk):
         self.content_area = tk.Frame(self.vertical_pane, bg=DARK_BLUE)
 
         # Panel izquierdo de información del brazo 3D (oculto por defecto)
-        self.left_info_panel = Arm3DInfoPanel(self.content_area, bg=DARK_BLUE)
+        self.left_info_panel = Arm3DInfoPanel(self.content_area, self, bg=DARK_BLUE)
 
         # PanedWindow central+derecho
         self.center_right_pane = tk.PanedWindow(
@@ -338,10 +338,7 @@ class MainApplication(tk.Tk):
                 self.controller.robot_layer.hud._info_panel = self.left_info_panel
                 self.arm3d_control_panel.update_joint_limits()
                 # Sincronizar toggles UI → escena (evita el desfase checkbox=True / show_trail=False)
-                self.controller.toggle_arm3d_trail(
-                    self.arm3d_control_panel._trail_var.get())
-                self.controller.toggle_arm3d_joint_ranges(
-                    self.arm3d_control_panel._joint_ranges_var.get())
+                self.left_info_panel.apply_visual_toggles()
         except Exception:
             pass
 
@@ -788,6 +785,55 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                                  values=self._MODES_SELECTABLE, state="readonly", width=15)
         self._vis_combo.pack(side=tk.LEFT, padx=(4, 0))
 
+        self._base_row_widgets = []
+        self._base_row_controls = []
+        self._base_row_entries = {}
+
+        help_frame = tk.Frame(self, bg=DARK_BLUE)
+        help_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+        self._help_visible = False
+        self._help_btn = tk.Button(
+            help_frame,
+            text="Mostrar ayuda de configuracion",
+            bg=BLUE,
+            fg=DARK_BLUE,
+            font=("Consolas", 10, "bold"),
+            command=self._toggle_config_help,
+        )
+        self._help_btn.pack(side=tk.LEFT)
+        self._help_body = tk.Frame(self, bg="#1f2a3a", bd=1, relief=tk.GROOVE)
+        help_text = (
+            "Regla general DH: una joint R siempre gira sobre su eje local.\n"
+            "Lo que hace que visualmente parezca rotacion sobre si misma o balanceo\n"
+            "es donde queda el siguiente tramo respecto a ese eje.\n"
+            "\n"
+            "Rotacion sobre si misma:\n"
+            "  si la joint no saca el siguiente tramo fuera del eje, el giro se ve axial.\n"
+            "  Ejemplo: tipo=R, theta=0, d=0, a=0, alpha=0\n"
+            "\n"
+            "Movimiento pendular o de balanceo:\n"
+            "  si la joint deja el siguiente tramo separado del eje, el giro se ve como pendulo.\n"
+            "  Lo mas habitual es usar a > 0.\n"
+            "  Ejemplo: tipo=R, theta=0, d=0, a=200, alpha=0\n"
+            "\n"
+            "J0 fija no cuenta como DOF y solo sirve para reorientar o desplazar la base.\n"
+            "En la primera articulacion puede usarse para cambiar el plano del movimiento.\n"
+            "Ejemplo: J0 theta=90, d=0, a=0, alpha=90 + J1 con a=200 -> pendulo sobre X.\n"
+            "Si la orientacion queda invertida, prueba sumar o restar 180 a theta."
+        )
+        tk.Label(
+            self._help_body,
+            text=help_text,
+            bg="#1f2a3a",
+            fg="white",
+            justify="left",
+            anchor="w",
+            wraplength=920,
+            padx=10,
+            pady=8,
+            font=("Consolas", 10),
+        ).pack(fill=tk.X)
+
         # ---- Tabla DH ----
         table_frame = tk.Frame(self)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
@@ -829,50 +875,148 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
     def _build_dh_rows(self, table_frame):
         """Construye las filas editables de la tabla DH."""
-        # Limpiar filas anteriores
         for widgets in self._rows:
             for w in widgets:
                 try:
                     w.destroy()
                 except Exception:
                     pass
+        for w in self._base_row_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
         self._rows = []
+        self._base_row_widgets = []
+        self._base_row_controls = []
+        self._base_row_entries = {}
 
         model = self.motor3d.model
         n = self._dof_var.get()
+        base = getattr(model, 'base_row', {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0})
+
+        base_lbl = tk.Label(table_frame, text="0", font=("Consolas", 11),
+                            width=3, fg="#d8e7ff")
+        base_lbl.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
+        self._base_row_widgets.append(base_lbl)
+
+        for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
+            entry = tk.Entry(table_frame, font=("Consolas", 11), width=9, bg="#425063", fg="white")
+            entry.insert(0, str(round(float(base.get(key, 0.0)), 2)))
+            entry.grid(row=1, column=col + 1, sticky="nsew", padx=1, pady=1)
+            self._base_row_entries[key] = entry
+            self._base_row_widgets.append(entry)
+            self._base_row_controls.append(entry)
+
+        type_entry = tk.Entry(table_frame, font=("Consolas", 11), width=4,
+                              bg="#555560", fg="white", justify="center")
+        type_entry.insert(0, "F")
+        type_entry.configure(state="disabled")
+        type_entry.grid(row=1, column=5, sticky="nsew", padx=1, pady=1)
+        self._base_row_widgets.append(type_entry)
+
+        for col in (6, 7):
+            lim_entry = tk.Entry(table_frame, font=("Consolas", 11), width=7,
+                                 bg="#555560", fg="white", justify="center")
+            lim_entry.insert(0, "--")
+            lim_entry.configure(state="disabled")
+            lim_entry.grid(row=1, column=col, sticky="nsew", padx=1, pady=1)
+            self._base_row_widgets.append(lim_entry)
+
+        note = tk.Label(table_frame, text="fija", font=("Consolas", 9), fg="#9fb6cf")
+        note.grid(row=1, column=8, padx=1, pady=1)
+        self._base_row_widgets.append(note)
 
         for i in range(n):
+            grid_row = i + 2
             row_entries = []
             dh = model.dh_rows[i] if i < len(model.dh_rows) else {'theta': 0, 'd': 0, 'a': 100, 'alpha': 0}
             lims = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
             jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
 
-            tk.Label(table_frame, text=str(i + 1), font=("Consolas", 11),
-                     width=3).grid(row=i + 1, column=0, sticky="nsew", padx=1, pady=1)
+            joint_lbl = tk.Label(table_frame, text=str(i + 1), font=("Consolas", 11), width=3)
+            joint_lbl.grid(row=grid_row, column=0, sticky="nsew", padx=1, pady=1)
 
+            dh_entries = []
             for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
-                e = tk.Entry(table_frame, font=("Consolas", 11), width=9)
+                if jtype == 'P' and key == 'theta':
+                    bg = '#555560'
+                    disabled = True
+                elif jtype == 'P' and key == 'd':
+                    bg = '#3a5f8a'
+                    disabled = False
+                else:
+                    bg = None
+                    disabled = False
+                e = tk.Entry(table_frame, font=("Consolas", 11), width=9,
+                             **({"bg": bg, "fg": "white"} if bg else {}))
                 e.insert(0, str(round(float(dh.get(key, 0.0)), 2)))
-                e.grid(row=i + 1, column=col + 1, sticky="nsew", padx=1, pady=1)
-                row_entries.append(e)
+                if disabled:
+                    e.configure(state="disabled")
+                e.grid(row=grid_row, column=col + 1, sticky="nsew", padx=1, pady=1)
+                dh_entries.append(e)
+            row_entries.extend(dh_entries)
 
-            # Tipo articulación
-            type_var = tk.StringVar(value=jtype)
-            type_combo = ttk.Combobox(table_frame, textvariable=type_var,
-                                      values=["R", "P"], state="readonly", width=4)
-            type_combo.grid(row=i + 1, column=5, sticky="nsew", padx=1, pady=1)
+            def _make_type_cb(combo, theta_e, d_e, a_e):
+                def _cb(_evt=None):
+                    new_jt = combo.get()
+                    if new_jt == 'P':
+                        theta_e.configure(state='disabled', bg='#555560', fg='white')
+                        d_e.configure(bg='#3a5f8a', fg='white')
+                        try:
+                            a_val = float(a_e.get())
+                            d_val = float(d_e.get())
+                            if a_val != 0.0 and d_val == 0.0:
+                                d_e.configure(state='normal')
+                                d_e.delete(0, tk.END)
+                                d_e.insert(0, str(a_val))
+                                a_e.delete(0, tk.END)
+                                a_e.insert(0, '0.0')
+                                d_e.configure(bg='#3a5f8a', fg='white')
+                        except (ValueError, tk.TclError):
+                            pass
+                    else:
+                        theta_e.configure(state='normal')
+                        try:
+                            theta_e.configure(bg='', fg='')
+                        except tk.TclError:
+                            pass
+                        try:
+                            d_e.configure(bg='', fg='')
+                        except tk.TclError:
+                            pass
+                        try:
+                            d_val = float(d_e.get())
+                            a_val = float(a_e.get())
+                            if d_val != 0.0 and a_val == 0.0:
+                                d_e.delete(0, tk.END)
+                                d_e.insert(0, '0.0')
+                                a_e.delete(0, tk.END)
+                                a_e.insert(0, str(d_val))
+                        except (ValueError, tk.TclError):
+                            pass
+                return _cb
+
+            type_combo = ttk.Combobox(table_frame, values=["R", "P"], state="readonly", width=4)
+            type_combo.set(jtype)
+            type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=1, pady=1)
+            type_combo.bind("<<ComboboxSelected>>",
+                            _make_type_cb(type_combo, dh_entries[0], dh_entries[1], dh_entries[2]))
             row_entries.append(type_combo)
 
-            # Límites
-            e_min = tk.Entry(table_frame, font=("Consolas", 11), width=8)
+            lim_unit = "mm" if jtype == 'P' else "deg"
+            e_min = tk.Entry(table_frame, font=("Consolas", 11), width=7)
             e_min.insert(0, str(round(float(lims[0]), 1)))
-            e_min.grid(row=i + 1, column=6, sticky="nsew", padx=1, pady=1)
+            e_min.grid(row=grid_row, column=6, sticky="nsew", padx=1, pady=1)
 
-            e_max = tk.Entry(table_frame, font=("Consolas", 11), width=8)
+            e_max = tk.Entry(table_frame, font=("Consolas", 11), width=7)
             e_max.insert(0, str(round(float(lims[1]), 1)))
-            e_max.grid(row=i + 1, column=7, sticky="nsew", padx=1, pady=1)
+            e_max.grid(row=grid_row, column=7, sticky="nsew", padx=1, pady=1)
 
-            row_entries.extend([e_min, e_max])
+            unit_lbl = tk.Label(table_frame, text=lim_unit, font=("Consolas", 9), fg="#aaaaaa")
+            unit_lbl.grid(row=grid_row, column=8, padx=1, pady=1)
+
+            row_entries.extend([e_min, e_max, unit_lbl, joint_lbl])
             self._rows.append(row_entries)
 
         # Respetar el estado de bloqueo si ya estaba activo
@@ -926,6 +1070,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                         widget.configure(state=state_spin)
                 except Exception:
                     pass
+        for widget in self._base_row_controls:
+            try:
+                widget.configure(state=state_spin)
+            except Exception:
+                pass
 
     def _on_preset_selected(self, _event=None):
         """Carga el preset seleccionado y repuebla DOF, modo visual y tabla DH."""
@@ -945,11 +1094,38 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self._dof_var.set(dof)
             self.motor3d.set_model_config(data)
             self._build_dh_rows(self._table_frame)
+            self._refresh_base_row_entries()
         self._apply_preset_display(name)
         self.motor3d.active_preset_name = name if name != "Custom" else None
+        self.motor3d.model.preset_name = self.motor3d.active_preset_name
 
     def _on_dof_change(self):
         self._build_dh_rows(self._table_frame)
+
+    def _refresh_base_row_entries(self):
+        base_row = dict(getattr(
+            self.motor3d.model,
+            'base_row',
+            {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+        ))
+        for key, entry in self._base_row_entries.items():
+            prev_state = str(entry.cget('state'))
+            if prev_state == "disabled":
+                entry.configure(state="normal")
+            entry.delete(0, tk.END)
+            entry.insert(0, str(round(float(base_row.get(key, 0.0)), 2)))
+            if prev_state == "disabled":
+                entry.configure(state="disabled")
+
+    def _toggle_config_help(self):
+        if self._help_visible:
+            self._help_body.pack_forget()
+            self._help_btn.configure(text="Mostrar ayuda de configuracion")
+            self._help_visible = False
+        else:
+            self._help_body.pack(fill=tk.X, padx=8, pady=(0, 4))
+            self._help_btn.configure(text="Ocultar ayuda de configuracion")
+            self._help_visible = True
 
     def _collect_config(self):
         """Lee los valores de la tabla y retorna (dict, None) o (None, mensaje_error).
@@ -958,6 +1134,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         dh_rows = []
         joint_types = []
         joint_limits = []
+        base_row = {}
         errors = []
 
         # Limpiar resaltados previos
@@ -967,6 +1144,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                     widget.configure(highlightthickness=0)
                 except Exception:
                     pass
+        for widget in self._base_row_entries.values():
+            try:
+                widget.configure(highlightthickness=0)
+            except Exception:
+                pass
 
         def _mark_invalid(widget, msg):
             try:
@@ -1028,6 +1210,53 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
             joint_limits.append((lim_min, lim_max))
 
+        for key, entry in self._base_row_entries.items():
+            try:
+                base_row[key] = float(entry.get())
+            except ValueError:
+                _mark_invalid(entry, f"J0 fija: '{key}' no es un numero valido.")
+                base_row[key] = 0.0
+
+        # ---- Validación semántica por tipo de articulación ----
+        for i, (jtype, dh, (lim_min, lim_max)) in enumerate(
+                zip(joint_types, dh_rows, joint_limits)):
+            joint_n = i + 1
+            row = self._rows[i]
+
+            if jtype == 'P':
+                # Para articulaciones prismáticas la extensión va en 'd'; 'a' debe ser ~0.
+                a_val = dh.get('a', 0.0)
+                d_val = dh.get('d', 0.0)
+                if abs(a_val) > 1.0:
+                    _mark_invalid(row[2],
+                        f"J{joint_n} (P): 'a' = {a_val:.1f} mm debe ser 0. "
+                        f"La extensión prismática se configura en 'd', no en 'a'.")
+                # Los límites de una P joint son recorridos en mm: rango mínimo razonable.
+                if lim_max - lim_min < 1.0:
+                    _mark_invalid(row[5],
+                        f"J{joint_n} (P): recorrido ({lim_max - lim_min:.1f} mm) "
+                        f"demasiado pequeño para una articulación prismática.")
+                # Límites en mm no deberían ser valores de grados (señal de error de unidades).
+                if abs(lim_min) <= 360.0 and abs(lim_max) <= 360.0 \
+                        and lim_max - lim_min <= 360.0 and d_val == 0.0 and a_val == 0.0:
+                    _mark_invalid(row[5],
+                        f"J{joint_n} (P): límites ({lim_min:.0f}..{lim_max:.0f} mm) y "
+                        f"'d' = 0 — el brazo no se moverá. Configura 'd' o amplía los límites.")
+
+            else:  # R
+                # Los límites de una R joint son ángulos en grados.
+                if abs(lim_min) > 360.0 or abs(lim_max) > 360.0:
+                    _mark_invalid(row[5],
+                        f"J{joint_n} (R): límites ({lim_min:.0f}°..{lim_max:.0f}°) "
+                        f"superan ±360° — ¿se introdujeron valores en mm por error?")
+                # Longitud de eslabón 'a' nula en R joints no produce movimiento visible.
+                a_val = dh.get('a', 0.0)
+                d_val = dh.get('d', 0.0)
+                if abs(a_val) < 1.0 and abs(d_val) < 1.0:
+                    _mark_invalid(row[2],
+                        f"J{joint_n} (R): 'a' = 0 y 'd' = 0 — el eslabón no tiene "
+                        f"longitud y la articulación no generará movimiento visible.")
+
         if errors:
             return None, "\n".join(errors)
 
@@ -1036,6 +1265,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['dh_rows'] = dh_rows
         current['joint_types'] = joint_types
         current['joint_limits'] = joint_limits
+        current['base'] = dict(base_row)
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
 
@@ -1047,7 +1277,14 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             tk.messagebox.showerror("Error de configuración", error, parent=self)
             return
         self.motor3d.set_model_config(config)
+        # Actualizar active_preset_name para que la próxima apertura de config muestre el perfil correcto
+        selected = self._preset_var.get()
+        all_presets = self.motor3d.repository.list_builtin_presets()
+        self.motor3d.active_preset_name = selected if selected in all_presets else None
+        self.motor3d.model.preset_name = self.motor3d.active_preset_name
         self.motor3d.save_model_config()
+        if self.application and hasattr(self.application, 'arm3d_control_panel'):
+            self.application.arm3d_control_panel.refresh_from_model()
         self.destroy()
 
     def _import_json(self):
@@ -1058,6 +1295,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             if ok:
                 self._dof_var.set(self.motor3d.model.dof)
                 self._build_dh_rows(self._table_frame)
+                self._refresh_base_row_entries()
             else:
                 tk.messagebox.showerror("Error", "No se pudo cargar el archivo JSON.", parent=self)
 
@@ -1174,8 +1412,7 @@ class Arm3DControlPanel(tk.Frame):
     Visible únicamente cuando el robot Braccio (opción 5) está seleccionado.
     """
 
-    _JOINT_LABELS = ["J1 Base", "J2 Hombro", "J3 Codo", "J4 Muñeca V", "J5 Muñeca R", "J6 Pinza"]
-    _JOINT_LIMITS = [(0, 180), (15, 165), (0, 180), (0, 180), (0, 180), (10, 73)]
+    _MAX_DOF = 6
 
     def __init__(self, parent, application: 'MainApplication' = None, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
@@ -1189,19 +1426,20 @@ class Arm3DControlPanel(tk.Frame):
         sliders_container = tk.Frame(self, bg=DARK_BLUE)
         sliders_container.pack(fill=tk.X, padx=4)
         sliders_container.columnconfigure(1, weight=1)
+        self._sliders_container = sliders_container
 
         self._sliders = []
         self._val_labels = []
-        for i in range(6):
-            lim_min, lim_max = self._JOINT_LIMITS[i]
-
-            tk.Label(sliders_container, text=self._JOINT_LABELS[i],
-                     bg=DARK_BLUE, fg="white", font=("Consolas", 9),
-                     width=12, anchor="e").grid(row=i, column=0, padx=(4, 2), pady=1, sticky="e")
+        self._jlabels = []
+        for i in range(self._MAX_DOF):
+            jlbl = tk.Label(sliders_container, text=f"J{i + 1}",
+                            bg=DARK_BLUE, fg="white", font=("Consolas", 9),
+                            width=5, anchor="e")
+            jlbl.grid(row=i, column=0, padx=(4, 2), pady=1, sticky="e")
 
             slider = tk.Scale(
                 sliders_container,
-                from_=lim_min, to=lim_max,
+                from_=0, to=180,
                 orient=tk.HORIZONTAL,
                 bg=DARK_BLUE, fg="white",
                 sliderrelief=tk.FLAT, highlightthickness=0,
@@ -1213,11 +1451,12 @@ class Arm3DControlPanel(tk.Frame):
 
             val_lbl = tk.Label(sliders_container, text=" 90°",
                                bg=DARK_BLUE, fg="white",
-                               font=("Consolas", 9), width=5, anchor="w")
+                               font=("Consolas", 9), width=6, anchor="w")
             val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="w")
 
             self._sliders.append(slider)
             self._val_labels.append(val_lbl)
+            self._jlabels.append(jlbl)
 
         # --- Separador ---
         tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
@@ -1264,30 +1503,50 @@ class Arm3DControlPanel(tk.Frame):
         tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=4)
 
         # --- Toggles de visualización ---
-        toggles_frame = tk.Frame(self, bg=DARK_BLUE)
-        toggles_frame.pack(fill=tk.X, padx=8)
+    # ------------------------------------------------------------------ helpers
 
-        self._trail_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(toggles_frame, text="Trayectoria",
-                       variable=self._trail_var,
-                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
-                       font=("Consolas", 9), activebackground=DARK_BLUE,
-                       command=self._on_trail_toggle).pack(side=tk.LEFT, padx=(0, 8))
+    def _get_model(self):
+        try:
+            import graphics.layers as _layers
+            layer = self.application.controller.robot_layer
+            if isinstance(layer, _layers.Arm3DLayer):
+                return layer.motor3d.model
+        except Exception:
+            pass
+        return None
 
-        self._joint_ranges_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(toggles_frame, text="Rangos articulares",
-                       variable=self._joint_ranges_var,
-                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
-                       font=("Consolas", 9), activebackground=DARK_BLUE,
-                       command=self._on_joint_ranges_toggle).pack(side=tk.LEFT)
+    def _get_motor3d(self):
+        try:
+            import graphics.layers as _layers
+            layer = self.application.controller.robot_layer
+            if isinstance(layer, _layers.Arm3DLayer):
+                return layer.motor3d
+        except Exception:
+            pass
+        return None
 
     # ------------------------------------------------------------------ handlers
+
+    def _is_servo_mode(self):
+        return False
 
     def _on_slider(self, joint_idx, val):
         try:
             float_val = float(val)
-            self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
-            self.application.controller.update_arm3d_joint(joint_idx, float_val - 90.0)
+            model = self._get_model()
+            jtype = model.joint_types[joint_idx] if (
+                model and joint_idx < len(model.joint_types)) else 'R'
+            servo = self._is_servo_mode()
+            if jtype == 'P':
+                dh_val = float_val
+                self._val_labels[joint_idx].config(text=f"{int(float_val):>4}mm")
+            elif servo:
+                dh_val = float_val - 90.0
+                self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
+            else:
+                dh_val = float_val
+                self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
+            self.application.controller.update_arm3d_joint(joint_idx, dh_val)
         except Exception:
             pass
 
@@ -1318,53 +1577,51 @@ class Arm3DControlPanel(tk.Frame):
     def _on_reset_cam(self):
         self.application.controller.reset_arm3d_camera()
 
-    def _on_trail_toggle(self):
-        try:
-            self.application.controller.toggle_arm3d_trail(self._trail_var.get())
-        except Exception:
-            pass
-
-    def _on_joint_ranges_toggle(self):
-        try:
-            self.application.controller.toggle_arm3d_joint_ranges(self._joint_ranges_var.get())
-        except Exception:
-            pass
-
     def _sync_sliders_from_model(self):
-        """Actualiza los sliders y etiquetas con los ángulos actuales del modelo."""
-        try:
-            import graphics.layers as _layers
-            layer = self.application.controller.robot_layer
-            if isinstance(layer, _layers.Arm3DLayer):
-                joints = layer.motor3d.model.joints
-                for i, slider in enumerate(self._sliders):
-                    if i < len(joints):
-                        val = int(joints[i] + 90.0)
-                        slider.set(val)
-                        if i < len(self._val_labels):
-                            self._val_labels[i].config(text=f"{val:>3}°")
-        except Exception:
-            pass
+        self.refresh_from_model()
 
     def update_joint_limits(self):
-        """Actualiza los rangos de los sliders con los límites del modelo cargado.
-        Llamado desde MainApplication._connect_arm3d_info_panel() tras cargar el Arm3DLayer."""
+        self.refresh_from_model()
+
+    def refresh_from_model(self):
+        """Sincroniza todo el panel con el modelo actual: DOF, tipos, rangos y valores."""
         try:
-            import graphics.layers as _layers
-            layer = self.application.controller.robot_layer
-            if not isinstance(layer, _layers.Arm3DLayer):
+            model = self._get_model()
+            if model is None:
                 return
-            limits = layer.motor3d.model.joint_limits  # lista de (min, max) en grados DH
-            for i, slider in enumerate(self._sliders):
-                if i < len(limits):
-                    lim_min = int(limits[i][0] + 90.0)
-                    lim_max = int(limits[i][1] + 90.0)
+            dof = model.dof
+            servo = self._is_servo_mode()
+            for i, (slider, val_lbl, jlbl) in enumerate(
+                    zip(self._sliders, self._val_labels, self._jlabels)):
+                if i < dof:
+                    jlbl.grid()
+                    slider.grid()
+                    val_lbl.grid()
+
+                    jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
+                    mn, mx = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
+                    raw_dh = model.joints[i] if i < len(model.joints) else 0.0
+
+                    if jtype == 'P':
+                        lim_min, lim_max = mn, mx
+                        disp_val = raw_dh
+                        unit = "mm"
+                    elif servo:
+                        lim_min, lim_max = mn + 90.0, mx + 90.0
+                        disp_val = raw_dh + 90.0
+                        unit = "°"
+                    else:
+                        lim_min, lim_max = mn, mx
+                        disp_val = raw_dh
+                        unit = "°"
+
                     slider.configure(from_=lim_min, to=lim_max)
-                    # Re-clampear valor actual al nuevo rango
-                    current = slider.get()
-                    clamped = max(lim_min, min(lim_max, current))
-                    if current != clamped:
-                        slider.set(clamped)
+                    slider.set(disp_val)
+                    val_lbl.config(text=f"{int(disp_val):>4}{unit}")
+                else:
+                    jlbl.grid_remove()
+                    slider.grid_remove()
+                    val_lbl.grid_remove()
         except Exception:
             pass
 
@@ -1376,9 +1633,10 @@ class Arm3DInfoPanel(tk.Frame):
     Solo visible cuando el robot Braccio (opción 5) está activo.
     """
 
-    def __init__(self, parent, *args, **kwargs):
+    def __init__(self, parent, application=None, *args, **kwargs):
         kwargs.setdefault('bg', DARK_BLUE)
         tk.Frame.__init__(self, parent, *args, **kwargs)
+        self.application = application
         self.configure(width=210)
         self.pack_propagate(False)
 
@@ -1447,8 +1705,61 @@ class Arm3DInfoPanel(tk.Frame):
                                     justify=tk.LEFT, anchor="w")
         self._lbl_status.pack(anchor="w", padx=10, pady=2)
 
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
+
+        tk.Label(self, text="VisualizaciÃ³n",
+                 bg=DARK_BLUE, fg="white",
+                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+
+        toggles_frame = tk.Frame(self, bg=DARK_BLUE)
+        toggles_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+
+        self._trail_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(toggles_frame, text="Trayectoria",
+                       variable=self._trail_var,
+                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
+                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       command=self._on_trail_toggle).pack(anchor="w")
+
+        self._joint_ranges_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(toggles_frame, text="Rangos articulares",
+                       variable=self._joint_ranges_var,
+                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
+                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       command=self._on_joint_ranges_toggle).pack(anchor="w")
+
+        self._joint_axes_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(toggles_frame, text="Ejes XYZ",
+                       variable=self._joint_axes_var,
+                       bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
+                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       command=self._on_joint_axes_toggle).pack(anchor="w")
+
+    def apply_visual_toggles(self):
+        self._on_trail_toggle()
+        self._on_joint_ranges_toggle()
+        self._on_joint_axes_toggle()
+
+    def _on_trail_toggle(self):
+        try:
+            self.application.controller.toggle_arm3d_trail(self._trail_var.get())
+        except Exception:
+            pass
+
+    def _on_joint_ranges_toggle(self):
+        try:
+            self.application.controller.toggle_arm3d_joint_ranges(self._joint_ranges_var.get())
+        except Exception:
+            pass
+
+    def _on_joint_axes_toggle(self):
+        try:
+            self.application.controller.toggle_arm3d_joint_axes(self._joint_axes_var.get())
+        except Exception:
+            pass
+
     def update(self, dof, joints, end_effector, in_workspace, singular,
-               safety_blocked, warning_message, joint_limits=None):
+               safety_blocked, warning_message, joint_limits=None, joint_types=None):
         """Actualiza los valores mostrados. Llamado desde Arm3DHUD.update()."""
         # Efector actual
         if end_effector and len(end_effector) >= 3:
@@ -1458,15 +1769,16 @@ class Arm3DInfoPanel(tk.Frame):
             for axis in ["X", "Y", "Z"]:
                 self._lbl_ee[axis].config(text="--- mm")
 
-        # Articulaciones con límites
+        # Articulaciones con límites y unidades según tipo
         for i, (val_lbl, lim_lbl) in enumerate(zip(self._lbl_joints, self._lbl_joint_limits)):
+            unit = "mm" if (joint_types and i < len(joint_types) and joint_types[i] == 'P') else "°"
             if joints and i < len(joints):
-                val_lbl.config(text=f"{joints[i]:.0f}°")
+                val_lbl.config(text=f"{joints[i]:.0f}{unit}")
             else:
                 val_lbl.config(text="---°")
             if joint_limits and i < len(joint_limits):
                 mn, mx = joint_limits[i]
-                lim_lbl.config(text=f"[{mn:.0f}°,{mx:.0f}°]")
+                lim_lbl.config(text=f"[{mn:.0f}{unit},{mx:.0f}{unit}]")
             else:
                 lim_lbl.config(text="[---,---]")
 
