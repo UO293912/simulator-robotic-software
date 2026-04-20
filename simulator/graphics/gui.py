@@ -1528,7 +1528,7 @@ class Arm3DControlPanel(tk.Frame):
     # ------------------------------------------------------------------ handlers
 
     def _is_servo_mode(self):
-        return False
+        return True
 
     def _on_slider(self, joint_idx, val):
         try:
@@ -1541,7 +1541,7 @@ class Arm3DControlPanel(tk.Frame):
                 dh_val = float_val
                 self._val_labels[joint_idx].config(text=f"{int(float_val):>4}mm")
             elif servo:
-                dh_val = float_val - 90.0
+                dh_val = float_val
                 self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
             else:
                 dh_val = float_val

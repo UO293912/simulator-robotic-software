@@ -18,7 +18,7 @@ Uso en sketch Arduino (simulador):
     }
 
     void loop(){
-      Braccio.ServoMovement(20, 0, 0, 0, 0, 0, -17);
+      Braccio.ServoMovement(20, 90, 45, 180, 180, 90, 10);
     }
 """
 
@@ -38,23 +38,22 @@ BRACCIO_PINS = {
 _SERVO_ORDER = ['base', 'shoulder', 'elbow', 'wrist_ver', 'wrist_rot', 'gripper']
 
 _DEFAULT_STEP_POSITIONS = {
-    'base': 0,
-    'shoulder': 0,
-    'elbow': 0,
-    'wrist_ver': 0,
-    'wrist_rot': 0,
-    'gripper': -17,
+    'base': 90,
+    'shoulder': 45,
+    'elbow': 180,
+    'wrist_ver': 180,
+    'wrist_rot': 90,
+    'gripper': 10,
 }
 
-# Límites hardware en grados de servo (0–180).
-# Derivados de los límites DH del preset braccio_tinkerkit: servo = dh_angle + 90.
+# Límites hardware oficiales en grados de servo.
 _JOINT_LIMITS = {
-    'base':      (-90,  90),
-    'shoulder':  (-75,  75),
-    'elbow':     (-90,  90),
-    'wrist_ver': (-90,  90),
-    'wrist_rot': (-90,  90),
-    'gripper':   (-80, -17),
+    'base':      (0, 180),
+    'shoulder':  (15, 165),
+    'elbow':     (0, 180),
+    'wrist_ver': (0, 180),
+    'wrist_rot': (0, 180),
+    'gripper':   (10, 73),
 }
 
 
@@ -169,7 +168,7 @@ class Braccio:
         """
         self._resolve_servos()
         # Posición de reposo estándar
-        self.servo_movement(20, 0, 0, 0, 0, 0, -17)
+        self.servo_movement(20, 90, 45, 180, 180, 90, 10)
         return self.OK
 
     def servo_movement(self, step_delay, v_base, v_shoulder, v_elbow,

@@ -92,7 +92,11 @@ class Servo:
             angle: the value to write [0-180]
         """
         if self.servo is not None:
-            self.servo.set_value(self.servo.pin, angle)
+            try:
+                clamped = max(0, min(180, int(float(angle))))
+            except (TypeError, ValueError):
+                return
+            self.servo.set_value(self.servo.pin, clamped)
 
     def write_microseconds(self, us):
         """

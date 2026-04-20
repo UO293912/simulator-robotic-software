@@ -554,6 +554,7 @@ class Arm3DLayer(Layer):
         self._last_sync_time = None
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
+        self._sync_servos_from_model(reset_animation=True)
 
     def set_canvas(self, canvas, hud_canvas):
         self._canvas = canvas
@@ -628,9 +629,11 @@ class Arm3DLayer(Layer):
 
     def set_joint_angle(self, joint_idx, angle):
         """
-        Fija el ángulo articular (grados DH) y sincroniza el servo correspondiente.
+        Fija la articulación desde el valor visible en la UI.
+        Para juntas R, la UI trabaja en grados tipo servo (0..180).
         """
-        self.motor3d.set_joint(joint_idx, angle)
+        model_value = self._to_model_value(joint_idx, angle)
+        self.motor3d.set_joint(joint_idx, model_value)
         servos = [
             self.robot.servo_base,
             self.robot.servo_shoulder,
@@ -640,13 +643,17 @@ class Arm3DLayer(Layer):
             self.robot.servo_gripper,
         ]
         if 0 <= joint_idx < len(servos):
-            servos[joint_idx].value = float(self.motor3d.model.joints[joint_idx])
+            servos[joint_idx].value = self._to_control_value(
+                joint_idx, self.motor3d.model.joints[joint_idx]
+            )
         if self._current_joints is not None and 0 <= joint_idx < len(self._current_joints):
             self._current_joints[joint_idx] = float(self.motor3d.model.joints[joint_idx])
 
     def solve_ik(self, x, y, z):
         """Lanza IK y retorna (converged, mensaje_estado)."""
-        return self.motor3d.solve_ik(x, y, z)
+        result = self.motor3d.solve_ik(x, y, z)
+        self._sync_servos_from_model(reset_animation=True)
+        return result
 
     def drag_camera(self, dx, dy, pan=False):
         self.motor3d.drag_camera(dx, dy, pan=pan)
@@ -689,22 +696,44 @@ class Arm3DLayer(Layer):
     # no dependa de los FPS del render 3D.
     _ANIM_SPEED_DPS = 95.0
 
+    def _to_control_value(self, joint_idx, value):
+        model = self.motor3d.model
+        if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
+            return float(value)
+        return float(value) + 90.0
+
+    def _to_model_value(self, joint_idx, value):
+        model = self.motor3d.model
+        if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
+            return float(value)
+        return float(value) - 90.0
+
+    def _sync_servos_from_model(self, reset_animation=False):
+        """Sincroniza los servos virtuales con el estado actual del modelo."""
+        model = self.motor3d.model
+        for i, servo in enumerate(self.robot._joint_servos[:model.dof]):
+            servo.value = self._to_control_value(i, model.joints[i])
+        if reset_animation:
+            self._current_joints = list(model.joints[:model.dof])
+            self._last_sync_time = time.monotonic()
+
     def __sync_from_servos(self):
         """Lee los valores objetivo de los servos e interpola suavemente hacia ellos."""
         servo_values = self.robot.get_servo_values()
+        model = self.motor3d.model
         targets = []
-        for i, sv in enumerate(servo_values):
-            target = float(sv)
-            if i < len(self.motor3d.model.joint_limits):
-                mn, mx = self.motor3d.model.joint_limits[i]
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
                 target = max(mn, min(mx, target))
                 if i < len(self.robot._joint_servos):
-                    self.robot._joint_servos[i].value = target
+                    self.robot._joint_servos[i].value = self._to_control_value(i, target)
             targets.append(target)
         now = time.monotonic()
 
         # Inicializar posición actual en el primer frame
-        if self._current_joints is None:
+        if self._current_joints is None or len(self._current_joints) != len(targets):
             self._current_joints = list(targets)
             self._last_sync_time = now
 
@@ -737,12 +766,12 @@ class Arm3DLayer(Layer):
         def _jval(i, j):
             if i < len(jtypes) and jtypes[i] == 'P':
                 return j
-            return j
+            return self._to_control_value(i, j)
 
         def _jlim(i, mn, mx):
             if i < len(jtypes) and jtypes[i] == 'P':
                 return mn, mx
-            return mn, mx
+            return self._to_control_value(i, mn), self._to_control_value(i, mx)
 
         joints_display = [_jval(i, j) for i, j in enumerate(model.joints)]
         limits_display = [_jlim(i, mn, mx) for i, (mn, mx) in enumerate(model.joint_limits)]
