@@ -529,6 +529,16 @@ class GenericDhVisualModel:
             return points[-1]
         return [0.0, 0.0, 0.0]
 
+    def _joint_neutral_xref(self, model, index, parent_transform):
+        """Dirección de referencia para q=0 respetando el theta fijo DH."""
+        row = model.dh_rows[index] if index < len(model.dh_rows) else {}
+        theta_deg = float(row.get('theta', 0.0))
+        theta_rad = math.radians(theta_deg)
+
+        x_parent = np.asarray(parent_transform[:3, 0], dtype=float)
+        y_parent = np.asarray(parent_transform[:3, 1], dtype=float)
+        return math.cos(theta_rad) * x_parent + math.sin(theta_rad) * y_parent
+
     def get_joint_frames(self, model, chain=None):
         frames = []
         matrices = chain.get('matrices', []) if chain else []
@@ -541,7 +551,7 @@ class GenericDhVisualModel:
             frames.append({
                 'pos': pos,
                 'axis': T[:3, 2].copy(),
-                'xref': T[:3, 0].copy(),
+                'xref': self._joint_neutral_xref(model, i, T),
                 'r_arc': r_arc,
             })
         return frames

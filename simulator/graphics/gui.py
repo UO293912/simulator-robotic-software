@@ -10,6 +10,28 @@ import robot_components.robots as robots
 
 DARK_BLUE = "#006468"
 BLUE = "#17a1a5"
+WINDOW_BG = DARK_BLUE
+SURFACE_BG = "#F7FAFA"
+SURFACE_ALT_BG = "#E6F0F0"
+SURFACE_HEADER_BG = BLUE
+PANEL_BORDER = DARK_BLUE
+TEXT_PRIMARY = "#173D3F"
+TEXT_MUTED = "#6B7D7F"
+INPUT_BG = "#FFFFFF"
+INPUT_DISABLED_BG = "#DCE3E4"
+INPUT_FIXED_BG = "#DDE9EA"
+INPUT_ACCENT_BG = "#D4EDE8"
+PANEL_ACTION_BG = BLUE
+PANEL_ACTION_FG = "white"
+PANEL_ACTION_ACTIVE_BG = DARK_BLUE
+PANEL_ACTION_DISABLED_BG = "#91979C"
+PANEL_ACTION_DISABLED_FG = "#E7EAEC"
+PANEL_ACTION_BORDER = "#083C3E"
+PANEL_ACTION_DISABLED_BORDER = "#747A7F"
+PANEL_CONFIRM_BG = "#18B36A"
+PANEL_CONFIRM_ACTIVE_BG = "#129158"
+PANEL_CONFIRM_DISABLED_BG = "#91979C"
+PANEL_CONFIRM_BORDER = "#0A6A3F"
 
 
 class MainApplication(tk.Tk):
@@ -750,58 +772,118 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self.title("Configuración Brazo 3D")
         self.focus_force()
         self.resizable(True, True)
+        self.configure(bg=WINDOW_BG)
         self.application = application
         self.motor3d = motor3d_api
+        self._combo_style_name = "Arm3DConfig.TCombobox"
+        self._configure_window_styles()
 
         # ---- Frame superior: perfil y DOF ----
-        top_frame = tk.Frame(self, bg=DARK_BLUE)
-        top_frame.pack(fill=tk.X, padx=8, pady=6)
+        top_frame = tk.Frame(
+            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            highlightthickness=1, highlightbackground=PANEL_BORDER
+        )
+        top_frame.pack(fill=tk.X, padx=18, pady=(18, 10))
+        top_inner = tk.Frame(top_frame, bg=SURFACE_BG)
+        top_inner.pack(fill=tk.X, padx=14, pady=12)
 
-        tk.Label(top_frame, text="Perfil:", bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 12)).pack(side=tk.LEFT)
+        top_inner.grid_columnconfigure(0, weight=3)
+        top_inner.grid_columnconfigure(1, weight=1)
+        top_inner.grid_columnconfigure(2, weight=2)
+
+        profile_block = tk.Frame(top_inner, bg=SURFACE_BG)
+        profile_block.grid(row=0, column=0, sticky="ew", padx=(0, 14))
+        tk.Label(profile_block, text="Perfil", bg=SURFACE_BG, fg=DARK_BLUE,
+                 font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 4))
         self._presets = self.motor3d.repository.list_builtin_presets()
         preset_names = ["Custom"] + sorted(self._presets.keys())
         current_preset = self.motor3d.active_preset_name
         initial_preset = current_preset if current_preset in self._presets else "Custom"
         self._preset_var = tk.StringVar(value=initial_preset)
-        preset_combo = ttk.Combobox(top_frame, textvariable=self._preset_var,
-                                    values=preset_names, state="readonly", width=18)
-        preset_combo.pack(side=tk.LEFT, padx=(4, 16))
+        preset_combo = ttk.Combobox(
+            profile_block,
+            textvariable=self._preset_var,
+            values=preset_names,
+            state="readonly",
+            width=18,
+            style=self._combo_style_name,
+        )
+        preset_combo.pack(fill=tk.X)
         preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
 
-        tk.Label(top_frame, text="DOF:", bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 12)).pack(side=tk.LEFT)
+        dof_block = tk.Frame(top_inner, bg=SURFACE_BG)
+        dof_block.grid(row=0, column=1, sticky="ew", padx=(0, 14))
+        tk.Label(dof_block, text="DOF", bg=SURFACE_BG, fg=DARK_BLUE,
+                 font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 4))
         self._dof_var = tk.IntVar(value=self.motor3d.model.dof)
-        self._dof_spin = tk.Spinbox(top_frame, from_=1, to=6, textvariable=self._dof_var,
-                              width=4, font=("Consolas", 12),
-                              command=self._on_dof_change)
-        self._dof_spin.pack(side=tk.LEFT, padx=(4, 20))
+        self._dof_spin = tk.Spinbox(
+            dof_block,
+            from_=1,
+            to=6,
+            textvariable=self._dof_var,
+            width=4,
+            font=("Consolas", 12),
+            command=self._on_dof_change,
+            bg=INPUT_BG,
+            fg=TEXT_PRIMARY,
+            buttonbackground=SURFACE_ALT_BG,
+            relief=tk.SOLID,
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=PANEL_BORDER,
+            highlightcolor=DARK_BLUE,
+            readonlybackground=INPUT_BG,
+            disabledbackground=INPUT_DISABLED_BG,
+            disabledforeground=TEXT_MUTED,
+            insertbackground=TEXT_PRIMARY,
+        )
+        self._dof_spin.pack(fill=tk.X)
 
-        tk.Label(top_frame, text="Modo visual:", bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 12)).pack(side=tk.LEFT)
+        visual_block = tk.Frame(top_inner, bg=SURFACE_BG)
+        visual_block.grid(row=0, column=2, sticky="ew")
+        tk.Label(visual_block, text="Modo visual", bg=SURFACE_BG, fg=DARK_BLUE,
+                 font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 4))
         self._visual_var = tk.StringVar()
         self._MODES_SELECTABLE = ["auto_generic", "skeleton"]
-        self._vis_combo = ttk.Combobox(top_frame, textvariable=self._visual_var,
-                                 values=self._MODES_SELECTABLE, state="readonly", width=15)
-        self._vis_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._vis_combo = ttk.Combobox(
+            visual_block,
+            textvariable=self._visual_var,
+            values=self._MODES_SELECTABLE,
+            state="readonly",
+            width=15,
+            style=self._combo_style_name,
+        )
+        self._vis_combo.pack(fill=tk.X)
 
         self._base_row_widgets = []
         self._base_row_controls = []
         self._base_row_entries = {}
 
-        help_frame = tk.Frame(self, bg=DARK_BLUE)
-        help_frame.pack(fill=tk.X, padx=8, pady=(0, 4))
+        help_section = tk.Frame(
+            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            highlightthickness=1, highlightbackground=PANEL_BORDER
+        )
+        help_section.pack(fill=tk.X, padx=18, pady=(0, 10))
+        help_frame = tk.Frame(help_section, bg=SURFACE_BG)
+        help_frame.pack(fill=tk.X, padx=14, pady=(12, 12))
+        self._help_frame = help_frame
         self._help_visible = False
         self._help_btn = tk.Button(
             help_frame,
             text="Mostrar ayuda de configuracion",
-            bg=BLUE,
-            fg=DARK_BLUE,
-            font=("Consolas", 10, "bold"),
             command=self._toggle_config_help,
+            **self._action_button_options(),
         )
-        self._help_btn.pack(side=tk.LEFT)
-        self._help_body = tk.Frame(self, bg="#1f2a3a", bd=1, relief=tk.GROOVE)
+        self._help_btn.configure(anchor="w", justify="left", padx=16)
+        self._help_btn.pack(fill=tk.X, pady=2)
+        self._help_body = tk.Frame(
+            help_section,
+            bg=SURFACE_ALT_BG,
+            bd=1,
+            relief=tk.SOLID,
+            highlightthickness=1,
+            highlightbackground=PANEL_BORDER,
+        )
         help_text = (
             "Regla general DH: una joint R siempre gira sobre su eje local.\n"
             "Lo que hace que visualmente parezca rotacion sobre si misma o balanceo\n"
@@ -824,24 +906,32 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         tk.Label(
             self._help_body,
             text=help_text,
-            bg="#1f2a3a",
-            fg="white",
+            bg=SURFACE_ALT_BG,
+            fg=TEXT_PRIMARY,
             justify="left",
             anchor="w",
             wraplength=920,
-            padx=10,
-            pady=8,
+            padx=12,
+            pady=10,
             font=("Consolas", 10),
         ).pack(fill=tk.X)
 
         # ---- Tabla DH ----
-        table_frame = tk.Frame(self)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        table_shell = tk.Frame(
+            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            highlightthickness=1, highlightbackground=PANEL_BORDER
+        )
+        table_shell.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 10))
+        table_frame = tk.Frame(table_shell, bg=SURFACE_BG)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
         headers = ["J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)", "Tipo", "Lím min", "Lím max"]
         for col, h in enumerate(headers):
-            tk.Label(table_frame, text=h, font=("Consolas", 11, "bold"),
-                     relief=tk.RIDGE, padx=4).grid(row=0, column=col, sticky="nsew")
+            tk.Label(table_frame, text=h, font=("Consolas", 11, "bold"), bg=SURFACE_HEADER_BG,
+                     fg="white", relief=tk.SOLID, bd=1, padx=8,
+                     pady=7).grid(row=0, column=col, sticky="nsew", padx=2, pady=(0, 4))
+        for col in range(len(headers)):
+            table_frame.grid_columnconfigure(col, weight=1 if col in (1, 2, 3, 4, 6, 7) else 0)
 
         self._rows = []
         self._locked = False
@@ -850,19 +940,47 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._table_frame = table_frame
 
         # ---- Botones inferiores ----
-        btn_frame = tk.Frame(self, bg=DARK_BLUE)
-        btn_frame.pack(fill=tk.X, padx=8, pady=6)
+        btn_frame = tk.Frame(
+            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            highlightthickness=1, highlightbackground=PANEL_BORDER
+        )
+        btn_frame.pack(fill=tk.X, padx=18, pady=(0, 18))
+        btn_inner = tk.Frame(btn_frame, bg=SURFACE_BG)
+        btn_inner.pack(fill=tk.X, padx=14, pady=12)
 
-        self._btn_import = tk.Button(btn_frame, text="Import JSON", bg=BLUE, fg=DARK_BLUE,
-                  font=("Consolas", 11), command=self._import_json)
-        self._btn_import.pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="Export Config", bg=BLUE, fg=DARK_BLUE,
-                  font=("Consolas", 11), command=self._export_json).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="Cancel", bg=DARK_BLUE, fg="white",
-                  font=("Consolas", 11), command=self.destroy).pack(side=tk.RIGHT, padx=4)
-        self._btn_save = tk.Button(btn_frame, text="SAVE", bg="#00AA55", fg="white",
-                  font=("Consolas", 11, "bold"), command=self._save)
-        self._btn_save.pack(side=tk.RIGHT, padx=4)
+        left_btn_frame = tk.Frame(btn_inner, bg=SURFACE_BG)
+        left_btn_frame.pack(side=tk.LEFT, pady=2)
+        right_btn_frame = tk.Frame(btn_inner, bg=SURFACE_BG)
+        right_btn_frame.pack(side=tk.RIGHT, pady=2)
+
+        self._btn_import = tk.Button(
+            left_btn_frame,
+            text="Importar JSON",
+            command=self._import_json,
+            **self._action_button_options(),
+        )
+        self._btn_import.pack(side=tk.LEFT, padx=(0, 12))
+        self._btn_export = tk.Button(
+            left_btn_frame,
+            text="Exportar config",
+            command=self._export_json,
+            **self._action_button_options(),
+        )
+        self._btn_export.pack(side=tk.LEFT, padx=(0, 4))
+        self._btn_cancel = tk.Button(
+            right_btn_frame,
+            text="Cancelar",
+            command=self.destroy,
+            **self._action_button_options(),
+        )
+        self._btn_cancel.pack(side=tk.RIGHT, padx=(12, 0))
+        self._btn_save = tk.Button(
+            right_btn_frame,
+            text="Confirmar",
+            command=self._save,
+            **self._action_button_options("confirm"),
+        )
+        self._btn_save.pack(side=tk.RIGHT, padx=(0, 4))
 
         # Aplicar estado inicial según el perfil activo (debe ir después de crear todos los widgets)
         self._apply_preset_display(initial_preset)
@@ -872,6 +990,110 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         x = parent.winfo_x() + (parent.winfo_width() - self.winfo_reqwidth()) // 2
         y = parent.winfo_y() + (parent.winfo_height() - self.winfo_reqheight()) // 2
         self.geometry("+%d+%d" % (x, y))
+
+    def _configure_window_styles(self):
+        style = ttk.Style(self)
+        style.configure(
+            self._combo_style_name,
+            padding=(8, 4, 8, 4),
+            font=("Consolas", 11),
+            foreground=TEXT_PRIMARY,
+            fieldbackground=INPUT_BG,
+            background=SURFACE_ALT_BG,
+            arrowcolor=TEXT_PRIMARY,
+            bordercolor=PANEL_BORDER,
+            lightcolor=PANEL_BORDER,
+            darkcolor=PANEL_BORDER,
+        )
+        style.map(
+            self._combo_style_name,
+            fieldbackground=[("readonly", INPUT_BG), ("disabled", INPUT_DISABLED_BG)],
+            foreground=[("readonly", TEXT_PRIMARY), ("disabled", TEXT_MUTED)],
+            selectforeground=[("readonly", TEXT_PRIMARY)],
+            selectbackground=[("readonly", INPUT_BG)],
+            background=[("readonly", SURFACE_ALT_BG), ("disabled", INPUT_DISABLED_BG)],
+            arrowcolor=[("disabled", TEXT_MUTED), ("readonly", TEXT_PRIMARY)],
+        )
+
+    def _entry_options(self, variant="standard"):
+        bg = INPUT_BG
+        fg = TEXT_PRIMARY
+        if variant == "fixed":
+            bg = INPUT_FIXED_BG
+            fg = TEXT_MUTED
+        elif variant == "disabled":
+            bg = INPUT_DISABLED_BG
+            fg = TEXT_MUTED
+        elif variant == "accent":
+            bg = INPUT_ACCENT_BG
+        return {
+            "bg": bg,
+            "fg": fg,
+            "bd": 1,
+            "relief": tk.SOLID,
+            "highlightthickness": 1,
+            "highlightbackground": PANEL_BORDER,
+            "highlightcolor": DARK_BLUE,
+            "disabledbackground": INPUT_DISABLED_BG,
+            "disabledforeground": TEXT_MUTED,
+            "readonlybackground": bg,
+            "insertbackground": TEXT_PRIMARY,
+        }
+
+    def _action_button_options(self, variant="secondary"):
+        options = {
+            "font": ("Consolas", 11, "bold"),
+            "bd": 2,
+            "relief": tk.SOLID,
+            "highlightthickness": 1,
+            "padx": 14,
+            "pady": 6,
+            "overrelief": tk.GROOVE,
+        }
+        if variant == "confirm":
+            options.update({
+                "bg": PANEL_CONFIRM_BG,
+                "fg": "white",
+                "activebackground": PANEL_CONFIRM_ACTIVE_BG,
+                "activeforeground": "white",
+                "disabledforeground": PANEL_ACTION_DISABLED_FG,
+                "highlightbackground": PANEL_CONFIRM_BORDER,
+                "highlightcolor": PANEL_CONFIRM_BORDER,
+            })
+        else:
+            options.update({
+                "bg": PANEL_ACTION_BG,
+                "fg": PANEL_ACTION_FG,
+                "activebackground": PANEL_ACTION_ACTIVE_BG,
+                "activeforeground": PANEL_ACTION_FG,
+                "disabledforeground": PANEL_ACTION_DISABLED_FG,
+                "highlightbackground": PANEL_ACTION_BORDER,
+                "highlightcolor": PANEL_ACTION_BORDER,
+            })
+        return options
+
+    def _set_action_button_enabled(self, button, enabled=True, variant="secondary"):
+        options = self._action_button_options(variant)
+        if enabled:
+            options.update({
+                "state": "normal",
+                "cursor": "hand2",
+                "relief": tk.SOLID,
+            })
+        else:
+            options.update({
+                "state": "disabled",
+                "cursor": "arrow",
+                "relief": tk.GROOVE,
+                "bg": PANEL_CONFIRM_DISABLED_BG if variant == "confirm" else PANEL_ACTION_DISABLED_BG,
+                "highlightbackground": (
+                    PANEL_CONFIRM_BORDER if variant == "confirm" else PANEL_ACTION_DISABLED_BORDER
+                ),
+                "highlightcolor": (
+                    PANEL_CONFIRM_BORDER if variant == "confirm" else PANEL_ACTION_DISABLED_BORDER
+                ),
+            })
+        button.configure(**options)
 
     def _build_dh_rows(self, table_frame):
         """Construye las filas editables de la tabla DH."""
@@ -895,36 +1117,46 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         n = self._dof_var.get()
         base = getattr(model, 'base_row', {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0})
 
-        base_lbl = tk.Label(table_frame, text="0", font=("Consolas", 11),
-                            width=3, fg="#d8e7ff")
-        base_lbl.grid(row=1, column=0, sticky="nsew", padx=1, pady=1)
+        base_lbl = tk.Label(
+            table_frame, text="0", font=("Consolas", 11, "bold"),
+            width=3, bg=SURFACE_BG, fg=TEXT_MUTED
+        )
+        base_lbl.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
         self._base_row_widgets.append(base_lbl)
 
         for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
-            entry = tk.Entry(table_frame, font=("Consolas", 11), width=9, bg="#425063", fg="white")
+            entry = tk.Entry(
+                table_frame, font=("Consolas", 11), width=9,
+                **self._entry_options("fixed")
+            )
             entry.insert(0, str(round(float(base.get(key, 0.0)), 2)))
-            entry.grid(row=1, column=col + 1, sticky="nsew", padx=1, pady=1)
+            entry.grid(row=1, column=col + 1, sticky="nsew", padx=2, pady=2)
             self._base_row_entries[key] = entry
             self._base_row_widgets.append(entry)
             self._base_row_controls.append(entry)
 
-        type_entry = tk.Entry(table_frame, font=("Consolas", 11), width=4,
-                              bg="#555560", fg="white", justify="center")
+        type_entry = tk.Entry(
+            table_frame, font=("Consolas", 11), width=4, justify="center",
+            **self._entry_options("fixed")
+        )
         type_entry.insert(0, "F")
         type_entry.configure(state="disabled")
-        type_entry.grid(row=1, column=5, sticky="nsew", padx=1, pady=1)
+        type_entry.grid(row=1, column=5, sticky="nsew", padx=2, pady=2)
         self._base_row_widgets.append(type_entry)
 
         for col in (6, 7):
-            lim_entry = tk.Entry(table_frame, font=("Consolas", 11), width=7,
-                                 bg="#555560", fg="white", justify="center")
+            lim_entry = tk.Entry(
+                table_frame, font=("Consolas", 11), width=7, justify="center",
+                **self._entry_options("fixed")
+            )
             lim_entry.insert(0, "--")
             lim_entry.configure(state="disabled")
-            lim_entry.grid(row=1, column=col, sticky="nsew", padx=1, pady=1)
+            lim_entry.grid(row=1, column=col, sticky="nsew", padx=2, pady=2)
             self._base_row_widgets.append(lim_entry)
 
-        note = tk.Label(table_frame, text="fija", font=("Consolas", 9), fg="#9fb6cf")
-        note.grid(row=1, column=8, padx=1, pady=1)
+        note = tk.Label(table_frame, text="fija", font=("Consolas", 9),
+                        bg=SURFACE_BG, fg=TEXT_MUTED)
+        note.grid(row=1, column=8, padx=2, pady=2)
         self._base_row_widgets.append(note)
 
         for i in range(n):
@@ -934,26 +1166,31 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             lims = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
             jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
 
-            joint_lbl = tk.Label(table_frame, text=str(i + 1), font=("Consolas", 11), width=3)
-            joint_lbl.grid(row=grid_row, column=0, sticky="nsew", padx=1, pady=1)
+            joint_lbl = tk.Label(
+                table_frame, text=str(i + 1), font=("Consolas", 11, "bold"),
+                width=3, bg=SURFACE_BG, fg=TEXT_MUTED
+            )
+            joint_lbl.grid(row=grid_row, column=0, sticky="nsew", padx=2, pady=2)
 
             dh_entries = []
             for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
                 if jtype == 'P' and key == 'theta':
-                    bg = '#555560'
+                    variant = "disabled"
                     disabled = True
                 elif jtype == 'P' and key == 'd':
-                    bg = '#3a5f8a'
+                    variant = "accent"
                     disabled = False
                 else:
-                    bg = None
+                    variant = "standard"
                     disabled = False
-                e = tk.Entry(table_frame, font=("Consolas", 11), width=9,
-                             **({"bg": bg, "fg": "white"} if bg else {}))
+                e = tk.Entry(
+                    table_frame, font=("Consolas", 11), width=9,
+                    **self._entry_options(variant)
+                )
                 e.insert(0, str(round(float(dh.get(key, 0.0)), 2)))
                 if disabled:
                     e.configure(state="disabled")
-                e.grid(row=grid_row, column=col + 1, sticky="nsew", padx=1, pady=1)
+                e.grid(row=grid_row, column=col + 1, sticky="nsew", padx=2, pady=2)
                 dh_entries.append(e)
             row_entries.extend(dh_entries)
 
@@ -961,8 +1198,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 def _cb(_evt=None):
                     new_jt = combo.get()
                     if new_jt == 'P':
-                        theta_e.configure(state='disabled', bg='#555560', fg='white')
-                        d_e.configure(bg='#3a5f8a', fg='white')
+                        theta_e.configure(state='normal', **self._entry_options("disabled"))
+                        theta_e.configure(state='disabled')
+                        d_e.configure(state='normal', **self._entry_options("accent"))
                         try:
                             a_val = float(a_e.get())
                             d_val = float(d_e.get())
@@ -972,19 +1210,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                                 d_e.insert(0, str(a_val))
                                 a_e.delete(0, tk.END)
                                 a_e.insert(0, '0.0')
-                                d_e.configure(bg='#3a5f8a', fg='white')
+                                d_e.configure(**self._entry_options("accent"))
                         except (ValueError, tk.TclError):
                             pass
                     else:
-                        theta_e.configure(state='normal')
-                        try:
-                            theta_e.configure(bg='', fg='')
-                        except tk.TclError:
-                            pass
-                        try:
-                            d_e.configure(bg='', fg='')
-                        except tk.TclError:
-                            pass
+                        theta_e.configure(state='normal', **self._entry_options("standard"))
+                        d_e.configure(state='normal', **self._entry_options("standard"))
                         try:
                             d_val = float(d_e.get())
                             a_val = float(a_e.get())
@@ -997,24 +1228,36 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                             pass
                 return _cb
 
-            type_combo = ttk.Combobox(table_frame, values=["R", "P"], state="readonly", width=4)
+            type_combo = ttk.Combobox(
+                table_frame, values=["R", "P"], state="readonly", width=4,
+                style=self._combo_style_name
+            )
             type_combo.set(jtype)
-            type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=1, pady=1)
+            type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=2, pady=2)
             type_combo.bind("<<ComboboxSelected>>",
                             _make_type_cb(type_combo, dh_entries[0], dh_entries[1], dh_entries[2]))
             row_entries.append(type_combo)
 
             lim_unit = "mm" if jtype == 'P' else "deg"
-            e_min = tk.Entry(table_frame, font=("Consolas", 11), width=7)
+            e_min = tk.Entry(
+                table_frame, font=("Consolas", 11), width=7,
+                **self._entry_options("standard")
+            )
             e_min.insert(0, str(round(float(lims[0]), 1)))
-            e_min.grid(row=grid_row, column=6, sticky="nsew", padx=1, pady=1)
+            e_min.grid(row=grid_row, column=6, sticky="nsew", padx=2, pady=2)
 
-            e_max = tk.Entry(table_frame, font=("Consolas", 11), width=7)
+            e_max = tk.Entry(
+                table_frame, font=("Consolas", 11), width=7,
+                **self._entry_options("standard")
+            )
             e_max.insert(0, str(round(float(lims[1]), 1)))
-            e_max.grid(row=grid_row, column=7, sticky="nsew", padx=1, pady=1)
+            e_max.grid(row=grid_row, column=7, sticky="nsew", padx=2, pady=2)
 
-            unit_lbl = tk.Label(table_frame, text=lim_unit, font=("Consolas", 9), fg="#aaaaaa")
-            unit_lbl.grid(row=grid_row, column=8, padx=1, pady=1)
+            unit_lbl = tk.Label(
+                table_frame, text=lim_unit, font=("Consolas", 9),
+                bg=SURFACE_BG, fg=TEXT_MUTED
+            )
+            unit_lbl.grid(row=grid_row, column=8, padx=2, pady=2)
 
             row_entries.extend([e_min, e_max, unit_lbl, joint_lbl])
             self._rows.append(row_entries)
@@ -1055,11 +1298,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._locked = locked
         state_spin   = "disabled" if locked else "normal"
         state_combo  = "disabled" if locked else "readonly"
-        state_btn    = "disabled" if locked else "normal"
         self._dof_spin.configure(state=state_spin)
         self._vis_combo.configure(state=state_combo)
-        self._btn_import.configure(state=state_btn)
-        self._btn_save.configure(state=state_btn)
+        self._set_action_button_enabled(self._btn_import, enabled=not locked)
+        self._set_action_button_enabled(self._btn_export, enabled=True)
+        self._set_action_button_enabled(self._btn_save, enabled=True, variant="confirm")
         # Aplicar a las filas de la tabla DH
         for row in self._rows:
             for widget in row:
@@ -1120,11 +1363,19 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _toggle_config_help(self):
         if self._help_visible:
             self._help_body.pack_forget()
-            self._help_btn.configure(text="Mostrar ayuda de configuracion")
+            self._help_frame.pack_configure(pady=(12, 12))
+            self._help_btn.configure(
+                text="Mostrar ayuda de configuracion",
+                relief=tk.RAISED,
+            )
             self._help_visible = False
         else:
-            self._help_body.pack(fill=tk.X, padx=8, pady=(0, 4))
-            self._help_btn.configure(text="Ocultar ayuda de configuracion")
+            self._help_frame.pack_configure(pady=(12, 0))
+            self._help_body.pack(fill=tk.X, padx=14, pady=(8, 12))
+            self._help_btn.configure(
+                text="Ocultar ayuda de configuracion",
+                relief=tk.SUNKEN,
+            )
             self._help_visible = True
 
     def _collect_config(self):

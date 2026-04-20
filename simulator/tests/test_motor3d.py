@@ -373,6 +373,40 @@ class TestRendering:
                 )
             )) < 1e-9, "El primer punto del arco base debe alinearse con el eje X del marco padre"
 
+    def test_generic_joint_frames_respect_fixed_theta_offset(self):
+        """La referencia neutra de un frame DH debe incluir el theta fijo."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=2,
+            link_lengths=[120.0, 120.0],
+            joint_limits=[(-90.0, 90.0), (-75.0, 75.0)],
+            joint_types=['R', 'R'],
+            joints=[25.0, 0.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 90.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 90.0, 'd': 0.0, 'a': 120.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        chain = forward_kinematics_chain(model)
+        frames = GenericDhVisualModel().get_joint_frames(model, chain)
+
+        assert len(frames) == 2
+
+        parent_transform = chain['matrices'][0]
+        expected_axis = parent_transform[:3, 2]
+        expected_xref = parent_transform[:3, 1]
+
+        np.testing.assert_allclose(frames[1]['axis'], expected_axis, atol=1e-9)
+        np.testing.assert_allclose(frames[1]['xref'], expected_xref, atol=1e-9)
+        assert abs(np.dot(frames[1]['axis'], frames[1]['xref'])) < 1e-9
+
     def test_trail_color_never_black(self, motor3d_api):
         """El color de la trayectoria no debe ser (0,0,0) para ningún punto.
         La luminosidad mínima debe ser al menos 25% del color base."""
@@ -475,6 +509,33 @@ def test_arm3d_slider_passes_visible_servo_value_to_controller():
     Arm3DControlPanel._on_slider(panel, 0, "45")
 
     assert calls == [(0, 45.0)]
+
+
+def test_arm3d_config_locked_preset_keeps_confirm_enabled():
+    """El preset Braccio bloqueado debe desactivar importar, pero no confirmar ni exportar."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    class DummyWidget:
+        def __init__(self):
+            self.options = {}
+
+        def configure(self, **kwargs):
+            self.options.update(kwargs)
+
+    window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
+    window._dof_spin = DummyWidget()
+    window._vis_combo = DummyWidget()
+    window._btn_import = DummyWidget()
+    window._btn_export = DummyWidget()
+    window._btn_save = DummyWidget()
+    window._rows = []
+    window._base_row_controls = []
+
+    Arm3DConfigurationWindow._set_locked(window, True)
+
+    assert window._btn_import.options["state"] == "disabled"
+    assert window._btn_export.options["state"] == "normal"
+    assert window._btn_save.options["state"] == "normal"
 
 
 class TestCameraNavigation:
