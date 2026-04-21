@@ -600,6 +600,62 @@ class TestCameraNavigation:
         assert abs(motor3d_api.camera.zoom - 1.0) < 0.01
         assert abs(motor3d_api.camera.screen_offset_x) < 0.1
         assert abs(motor3d_api.camera.screen_offset_y) < 0.1
+        assert abs(motor3d_api.camera.distance - Camera.DEFAULT_DISTANCE) < 0.1
+
+    def test_camera_distance_expands_for_large_auto_generic_models(self):
+        """Los modelos genericos grandes no deben arrancar con la camara dentro del brazo."""
+        from motor3d.api import Motor3DApi
+        from motor3d.camera.camera import Camera
+
+        api = Motor3DApi()
+        config = {
+            'dof': 3,
+            'link_lengths': [0.0, 500.0, 500.0],
+            'joints': [0.0, 0.0, 0.0],
+            'joint_limits': [[-180.0, 180.0], [-180.0, 180.0], [-180.0, 180.0]],
+            'joint_types': ['R', 'R', 'R'],
+            'dh_rows': [
+                {'theta': 0.0, 'd': 300.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
+            ],
+            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
+            'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        }
+
+        api.set_model_config(config)
+
+        assert api.camera.distance > Camera.DEFAULT_DISTANCE
+        assert api.camera.distance == pytest.approx(1625.0, abs=1e-6)
+
+    def test_camera_reset_restores_safe_distance_for_large_auto_generic_models(self):
+        """Reset camara debe volver a una distancia segura en modelos genericos grandes."""
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        config = {
+            'dof': 3,
+            'link_lengths': [0.0, 500.0, 500.0],
+            'joints': [0.0, 0.0, 0.0],
+            'joint_limits': [[-180.0, 180.0], [-180.0, 180.0], [-180.0, 180.0]],
+            'joint_types': ['R', 'R', 'R'],
+            'dh_rows': [
+                {'theta': 0.0, 'd': 300.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
+            ],
+            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
+            'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        }
+
+        api.set_model_config(config)
+        api.camera.distance = 700.0
+        api.drag_camera(90, 40)
+        api.set_zoom_from_scale(250)
+
+        api.reset_camera()
+
+        assert api.camera.distance == pytest.approx(1625.0, abs=1e-6)
 
     def test_camera_keyboard_move_no_crash(self, motor3d_api):
         """keyboard_camera con teclas WASD no debe lanzar excepción."""

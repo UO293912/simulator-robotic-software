@@ -3,9 +3,11 @@ Motor3DApi — Fachada principal del módulo de simulación 3D.
 Arm3DLayer (en graphics) solo llama métodos de esta clase.
 """
 import os
+import math
 from pathlib import Path
 
 from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+from motor3d.kinematics.kinematics_fk import get_base_transform
 from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
 from motor3d.kinematics.constraints_limits import clamp_model_joints
 from motor3d.camera.camera import Camera
@@ -19,6 +21,7 @@ from motor3d.safety.safety_manager import SafetyManager
 class Motor3DApi:
 
     DEFAULT_PRESET = 'braccio_tinkerkit'
+    AUTO_GENERIC_CAMERA_DISTANCE_FACTOR = 1.25
 
     def __init__(self):
         self.model = ArmKinematicState()
@@ -54,6 +57,7 @@ class Motor3DApi:
         if self.model.dof == 0:
             self._load_fallback_config()
 
+        self._sync_camera_distance_for_model()
         self.scene.update()
 
     # ------------------------------------------------------------------
@@ -77,6 +81,7 @@ class Motor3DApi:
 
     def reset_camera(self):
         self.camera.reset()
+        self._sync_camera_distance_for_model()
 
     # ------------------------------------------------------------------
     # Articulaciones
@@ -139,6 +144,7 @@ class Motor3DApi:
         self._sync_active_preset_name()
         self.renderer._canvas_image_id = None
         self.scene.clear_trail()
+        self._sync_camera_distance_for_model()
         self.scene.update()
 
     def save_model_config(self, path=None):
@@ -150,6 +156,7 @@ class Motor3DApi:
         if ok:
             self._sync_active_preset_name()
             self.scene.clear_trail()
+            self._sync_camera_distance_for_model()
             self.scene.update()
         return ok
 
@@ -214,3 +221,31 @@ class Motor3DApi:
             return
         self.active_preset_name = None
         self.model.preset_name = None
+
+    def _sync_camera_distance_for_model(self):
+        """Reencuadra la distancia orbital segun el tamano del modelo cargado."""
+        self.camera.distance = self._recommended_camera_distance()
+
+    def _recommended_camera_distance(self):
+        """Evita arrancar con la camara demasiado cerca de modelos genericos grandes."""
+        if self.model.visual.get('mode') == 'braccio_exact':
+            return self.camera.DEFAULT_DISTANCE
+
+        reach = max(0.0, float(self.model.max_reach()))
+        if reach <= 0.0:
+            return self.camera.DEFAULT_DISTANCE
+
+        try:
+            base_transform = get_base_transform(self.model)
+            base_offset = math.sqrt(sum(float(v) * float(v) for v in base_transform[:3, 3]))
+        except Exception:
+            base_offset = 0.0
+
+        tool_offset = getattr(self.model, 'tool_offset', None) or [0.0, 0.0, 0.0]
+        tool_extent = math.sqrt(sum(float(v) * float(v) for v in tool_offset[:3]))
+
+        extent = base_offset + reach + tool_extent
+        return max(
+            self.camera.DEFAULT_DISTANCE,
+            extent * self.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
+        )
