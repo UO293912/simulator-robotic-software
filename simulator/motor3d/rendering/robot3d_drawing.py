@@ -518,11 +518,16 @@ class GenericDhVisualModel:
     MIN_LINK_W = 18.0
     MAX_LINK_W = 44.0
     JOINT_STEPS = 12
+    GRIPPER_MAX_OPEN_DEG = 32.0
 
     def supports_model(self, model):
         return model.dof >= 1
 
     def get_effective_end_effector(self, model, points, chain):
+        dims = self._resolve_dimensions(model)
+        gripper = self._get_gripper_geometry(model, chain, dims)
+        if gripper is not None:
+            return gripper['tcp'].tolist()
         if chain and chain.get('end_effector'):
             return chain['end_effector']
         if points:
@@ -538,6 +543,102 @@ class GenericDhVisualModel:
         x_parent = np.asarray(parent_transform[:3, 0], dtype=float)
         y_parent = np.asarray(parent_transform[:3, 1], dtype=float)
         return math.cos(theta_rad) * x_parent + math.sin(theta_rad) * y_parent
+
+    @staticmethod
+    def _safe_normalize(vector, fallback):
+        vec = np.asarray(vector, dtype=float)
+        norm = np.linalg.norm(vec)
+        if norm < 1e-9:
+            vec = np.asarray(fallback, dtype=float)
+            norm = np.linalg.norm(vec)
+            if norm < 1e-9:
+                return np.array([1.0, 0.0, 0.0], dtype=float)
+        return vec / norm
+
+    def _is_gripper_joint(self, model, joint_idx, seg_len, radius):
+        jtype = model.joint_types[joint_idx] if joint_idx < len(model.joint_types) else 'R'
+        return joint_idx == model.dof - 1 and jtype != 'P' and seg_len < radius * 2.8
+
+    def _gripper_ratio(self, model, joint_idx):
+        jval = model.joints[joint_idx] if joint_idx < len(model.joints) else 0.0
+        mn, mx = model.joint_limits[joint_idx] if joint_idx < len(model.joint_limits) else (0.0, 90.0)
+        if mx <= mn:
+            return 0.5
+        return max(0.0, min(1.0, (jval - mn) / (mx - mn)))
+
+    def _get_gripper_geometry(self, model, chain, dims):
+        if not chain or 'matrices' not in chain or model.dof <= 0:
+            return None
+
+        positions = chain.get('positions', [])
+        matrices = chain.get('matrices', [])
+        if len(positions) < model.dof + 1:
+            return None
+
+        joint_idx = model.dof - 1
+        p0 = np.asarray(positions[joint_idx], dtype=float)
+        p1 = np.asarray(positions[joint_idx + 1], dtype=float)
+        seg_len = float(np.linalg.norm(p1 - p0))
+        radius = dims['radius']
+        if not self._is_gripper_joint(model, joint_idx, seg_len, radius):
+            return None
+
+        base_T = get_base_transform(model)
+        T_prev = matrices[joint_idx - 1] if joint_idx > 0 else base_T
+
+        hinge_axis = self._safe_normalize(T_prev[:3, 2], [0.0, 0.0, 1.0])
+        forward = self._joint_neutral_xref(model, joint_idx, T_prev)
+        forward = np.asarray(forward, dtype=float) - hinge_axis * np.dot(forward, hinge_axis)
+        forward = self._safe_normalize(forward, T_prev[:3, 0])
+        side = self._safe_normalize(np.cross(hinge_axis, forward), T_prev[:3, 1])
+
+        palm_depth = max(radius * 0.95, seg_len * 0.9, 18.0)
+        bridge_half_span = radius * 0.78
+        finger_width = radius * 0.36
+        finger_len = max(radius * 2.45, seg_len * 3.0)
+        finger_base_offset = finger_width * 0.25
+        knuckle_radius = max(radius * 0.18, finger_width * 0.42)
+
+        wrist_center = p0 - forward * (palm_depth * 0.10)
+        bridge_center = p0 + forward * (palm_depth * 0.18)
+        hinge_center = p0 + forward * (palm_depth * 0.46)
+        tcp = hinge_center + forward * (finger_base_offset + finger_len)
+
+        open_angle = math.radians(self.GRIPPER_MAX_OPEN_DEG) * (1.0 - self._gripper_ratio(model, joint_idx))
+        fingers = []
+        for sign in (+1.0, -1.0):
+            hinge = hinge_center + side * sign * bridge_half_span
+            finger_dir = (
+                math.cos(open_angle) * forward
+                + sign * math.sin(open_angle) * side
+            )
+            finger_dir = self._safe_normalize(finger_dir, forward)
+            root = hinge + finger_dir * finger_base_offset
+            tip = root + finger_dir * finger_len
+            fingers.append({
+                'sign': sign,
+                'hinge': hinge,
+                'root': root,
+                'tip': tip,
+                'dir': finger_dir,
+            })
+
+        return {
+            'joint_idx': joint_idx,
+            'radius': radius,
+            'palm_depth': palm_depth,
+            'finger_width': finger_width,
+            'bridge_half_span': bridge_half_span,
+            'knuckle_radius': knuckle_radius,
+            'wrist_center': wrist_center,
+            'bridge_center': bridge_center,
+            'hinge_center': hinge_center,
+            'forward': forward,
+            'side': side,
+            'hinge_axis': hinge_axis,
+            'tcp': tcp,
+            'fingers': fingers,
+        }
 
     def get_joint_frames(self, model, chain=None):
         frames = []
@@ -556,13 +657,54 @@ class GenericDhVisualModel:
             })
         return frames
 
+    def _get_prismatic_geometry(self, model, joint_idx, chain):
+        """
+        Separa la geometría de una junta prismática DH en:
+          - deslizamiento real sobre z_i
+          - soporte rígido restante hasta el siguiente origen
+
+        En DH modificada, el vector p0->p1 incluye tanto Tz(d+q) como Tx(a).
+        Por eso no debe usarse directamente como eje del actuador cuando `a != 0`.
+        """
+        if not chain or 'matrices' not in chain:
+            return None
+
+        positions = chain.get('positions', [])
+        matrices = chain.get('matrices', [])
+        if joint_idx < 0 or joint_idx >= model.dof or len(positions) < joint_idx + 2:
+            return None
+
+        p0 = np.asarray(positions[joint_idx], dtype=float)
+        p1 = np.asarray(positions[joint_idx + 1], dtype=float)
+
+        base_T = get_base_transform(model)
+        T_prev = matrices[joint_idx - 1] if joint_idx > 0 else base_T
+        axis_dir = self._safe_normalize(T_prev[:3, 2], [0.0, 0.0, 1.0])
+
+        row = model.dh_rows[joint_idx] if joint_idx < len(model.dh_rows) else {}
+        d = float(row.get('d', 0.0))
+        q = float(model.joints[joint_idx]) if joint_idx < len(model.joints) else 0.0
+        slide_end = p0 + axis_dir * (d + q)
+        support_vec = p1 - slide_end
+
+        return {
+            'base': p0,
+            'joint_end': p1,
+            'axis_dir': axis_dir,
+            'slide_end': slide_end,
+            'slide_len': float(np.linalg.norm(slide_end - p0)),
+            'support_vec': support_vec,
+            'support_len': float(np.linalg.norm(support_vec)),
+        }
+
     def iter_triangles(self, model, points, chain):
         """
         Genera triángulos de la geometría procedural del brazo.
 
         Cada articulación:
           - R: disco exterior (eje de rotación = col-Z del frame anterior) + hub cilíndrico.
-          - P: housing fijo en p0 + vástago delgado que se extiende hasta p1 (long. variable).
+          - P: housing fijo en p0 + vástago sobre z_i; cualquier offset fijo restante
+            se dibuja como soporte rígido separado.
           - Último joint + eslabón muy corto → pinza de dos dedos que abre/cierra.
         Yields: (np.array shape (N,3,3), (R,G,B))
         """
@@ -578,6 +720,7 @@ class GenericDhVisualModel:
         r  = dims['radius']
         lw = dims['link_w']
         base_T = get_base_transform(model)
+        gripper = self._get_gripper_geometry(model, chain, dims)
 
         for i in range(model.dof):
             p0 = np.array(positions[i],     dtype=float)
@@ -603,58 +746,83 @@ class GenericDhVisualModel:
             link_color    = (140, 145, 162)
 
             # ---- Pinza: último joint con eslabón muy corto ----
-            is_gripper = (i == model.dof - 1 and jtype != 'P' and seg_len < r * 2.8)
+            is_gripper = gripper is not None and i == gripper['joint_idx']
 
             if is_gripper:
-                # Frame real del EE (acumulado hasta el último joint).
-                # Cuando seg_len≈0 (a=0), T_link es identidad — inútil.
-                # matrices[i] = frame acumulado TRAS aplicar el joint i.
-                T_ee = matrices[i] if i < len(matrices) else T_prev
-
-                # Palma (carcasa del último joint) — perpendicular al eje de rotación
-                palm = _make_cylinder(p0, T_prev, r * 0.65, r * 0.50, self.JOINT_STEPS)
+                palm = _make_cylinder(
+                    gripper['wrist_center'],
+                    T_prev,
+                    r * 0.60,
+                    max(r * 0.80, gripper['palm_depth'] * 0.92),
+                    self.JOINT_STEPS,
+                )
                 if palm.size > 0:
                     yield palm, housing_color
 
-                jval = model.joints[i] if i < len(model.joints) else 0.0
-                mn, mx = model.joint_limits[i] if i < len(model.joint_limits) else (0.0, 90.0)
-                t = (jval - mn) / (mx - mn) if mx > mn else 0.5
-                t = max(0.0, min(1.0, t))
+                bridge = _make_link_prism(
+                    gripper['bridge_center'] - gripper['side'] * gripper['bridge_half_span'],
+                    gripper['bridge_center'] + gripper['side'] * gripper['bridge_half_span'],
+                    gripper['finger_width'] * 1.12,
+                )
+                if bridge.size > 0:
+                    yield bridge, housing_color
 
-                # Usar el frame EE real para orientar los dedos:
-                #   col-Z = dirección de avance (hacia el objeto)
-                #   col-X = dirección de apertura lateral
-                forward    = T_ee[:3, 2]
-                side       = T_ee[:3, 0]
-                finger_len = r * 2.4
-                finger_w   = r * 0.42
-                # min → abierto (t=0 → gap grande), max → cerrado (t=1 → gap pequeño)
-                half_gap   = r * (0.72 - 0.56 * t)
+                hinge_transform = _axis_aligned_transform(gripper['hinge_axis'])
+                for finger in gripper['fingers']:
+                    knuckle = _make_cylinder(
+                        finger['hinge'],
+                        hinge_transform,
+                        gripper['knuckle_radius'],
+                        gripper['finger_width'] * 1.10,
+                        self.JOINT_STEPS,
+                    )
+                    if knuckle.size > 0:
+                        yield knuckle, housing_color
 
-                for sign in (+1.0, -1.0):
-                    f_root = p0 + side * sign * half_gap
-                    f_tip  = f_root + forward * finger_len
-                    prism  = _make_link_prism(f_root, f_tip, finger_w)
+                    prism  = _make_link_prism(
+                        finger['root'],
+                        finger['tip'],
+                        gripper['finger_width'],
+                    )
                     if prism.size > 0:
                         yield prism, actuator_color
 
             elif jtype == 'P':
+                prism_geom = self._get_prismatic_geometry(model, i, chain)
+                if prism_geom is None:
+                    continue
+
+                axis_transform = _axis_aligned_transform(prism_geom['axis_dir'])
                 # Brida de conexión (flange) en p0
                 flange = _make_cylinder(p0, T_prev, r, r * 0.30, self.JOINT_STEPS)
                 if flange.size > 0:
                     yield flange, (90, 110, 130)
-                # Housing cilíndrico fijo centrado en p0
+                # Housing fijo alineado con el eje real de la prismática (z_i)
                 housing_h = r * 1.6
-                housing = _make_cylinder(p0, T_link, r * 0.58, housing_h, self.JOINT_STEPS)
+                housing = _make_cylinder(p0, axis_transform, r * 0.58, housing_h, self.JOINT_STEPS)
                 if housing.size > 0:
                     yield housing, housing_color
-                # Vástago delgado que se extiende de p0 a p1 (longitud = extensión actual)
-                if seg_len > r * 0.4:
-                    rod_center = (p0 + p1) * 0.5
-                    rod = _make_cylinder(rod_center, T_link, r * 0.20, seg_len, self.JOINT_STEPS)
+                # Vástago móvil: solo representa el desplazamiento sobre z_i
+                if prism_geom['slide_len'] > r * 0.4:
+                    rod_center = (prism_geom['base'] + prism_geom['slide_end']) * 0.5
+                    rod = _make_cylinder(
+                        rod_center,
+                        axis_transform,
+                        r * 0.20,
+                        prism_geom['slide_len'],
+                        self.JOINT_STEPS,
+                    )
                     if rod.size > 0:
                         yield rod, actuator_color
-                # No se dibuja link_prism — el vástago ya representa la conexión
+                # Offset fijo restante (por ejemplo `a`) hasta el siguiente origen.
+                if prism_geom['support_len'] > lw * 0.35:
+                    support = _make_link_prism(
+                        prism_geom['slide_end'],
+                        prism_geom['joint_end'],
+                        lw * 0.82,
+                    )
+                    if support.size > 0:
+                        yield support, link_color
 
             else:
                 # R: carcasa discoidea + hub actuador
@@ -671,7 +839,7 @@ class GenericDhVisualModel:
                     yield prism, link_color
 
         # Indicador del efector final
-        ee = np.array(chain.get('end_effector', positions[-1]), dtype=float)
+        ee = np.array(self.get_effective_end_effector(model, positions, chain), dtype=float)
         sphere = _make_sphere_approx(ee, r * 0.58)
         if sphere.size > 0:
             yield sphere, (220, 180, 50)

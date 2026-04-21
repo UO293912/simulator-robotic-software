@@ -407,6 +407,121 @@ class TestRendering:
         np.testing.assert_allclose(frames[1]['xref'], expected_xref, atol=1e-9)
         assert abs(np.dot(frames[1]['axis'], frames[1]['xref'])) < 1e-9
 
+    def test_generic_gripper_tcp_stays_stable_while_opening(self):
+        """La pinza genérica no debe desplazar el TCP visual al abrir o cerrar."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 20.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -10.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[15.0, -20.0, -80.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 20.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+
+        chain_open = forward_kinematics_chain(model)
+        tcp_open = np.array(visual.get_effective_end_effector(model, chain_open['positions'], chain_open))
+        fk_open = np.array(chain_open['end_effector'])
+
+        model.joints[2] = -10.0
+        chain_closed = forward_kinematics_chain(model)
+        tcp_closed = np.array(visual.get_effective_end_effector(model, chain_closed['positions'], chain_closed))
+        fk_closed = np.array(chain_closed['end_effector'])
+
+        np.testing.assert_allclose(tcp_open, tcp_closed, atol=1e-9)
+        assert np.linalg.norm(fk_open - fk_closed) > 5.0
+
+    def test_generic_gripper_fingers_counter_rotate_symmetrically(self):
+        """La pinza genérica debe abrir los dedos en espejo usando un pivote común."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 20.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -10.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[10.0, -15.0, -80.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 20.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        dims = visual._resolve_dimensions(model)
+
+        chain_open = forward_kinematics_chain(model)
+        gripper_open = visual._get_gripper_geometry(model, chain_open, dims)
+
+        model.joints[2] = -10.0
+        chain_closed = forward_kinematics_chain(model)
+        gripper_closed = visual._get_gripper_geometry(model, chain_closed, dims)
+
+        assert gripper_open is not None and gripper_closed is not None
+
+        left_open = next(f for f in gripper_open['fingers'] if f['sign'] > 0)
+        right_open = next(f for f in gripper_open['fingers'] if f['sign'] < 0)
+        left_closed = next(f for f in gripper_closed['fingers'] if f['sign'] > 0)
+
+        np.testing.assert_allclose(gripper_open['forward'], gripper_closed['forward'], atol=1e-9)
+        np.testing.assert_allclose(gripper_open['hinge_axis'], gripper_closed['hinge_axis'], atol=1e-9)
+        assert np.dot(left_open['dir'], gripper_open['side']) == pytest.approx(
+            -np.dot(right_open['dir'], gripper_open['side']),
+            abs=1e-9,
+        )
+        assert np.dot(left_open['dir'], gripper_open['side']) > 0.0
+        assert np.dot(right_open['dir'], gripper_open['side']) < 0.0
+        assert np.dot(left_open['dir'], gripper_open['forward']) < np.dot(
+            left_closed['dir'],
+            gripper_closed['forward'],
+        )
+
+    def test_prismatic_visual_geometry_separates_slide_axis_from_rigid_offset(self):
+        """Una P con `a` no nulo debe deslizar por z y dejar el offset lateral aparte."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            link_lengths=[120.0],
+            joint_limits=[(0.0, 120.0)],
+            joint_types=['P'],
+            joints=[60.0],
+            dh_rows=[{'theta': 0.0, 'd': 90.0, 'a': 120.0, 'alpha': 0.0}],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        chain = forward_kinematics_chain(model)
+        visual = GenericDhVisualModel()
+        prism = visual._get_prismatic_geometry(model, 0, chain)
+
+        assert prism is not None
+        np.testing.assert_allclose(prism['axis_dir'], [0.0, 0.0, 1.0], atol=1e-6)
+        np.testing.assert_allclose(prism['slide_end'], [0.0, 0.0, 150.0], atol=1e-6)
+        np.testing.assert_allclose(chain['positions'][1], [120.0, 0.0, 150.0], atol=1e-6)
+        np.testing.assert_allclose(prism['support_vec'], [120.0, 0.0, 0.0], atol=1e-6)
+
     def test_projection_context_matches_camera_project(self):
         """La proyeccion cacheada por frame debe coincidir con camera.project()."""
         import pytest
@@ -558,6 +673,98 @@ def test_arm3d_config_locked_preset_keeps_confirm_enabled():
     assert window._btn_import.options["state"] == "disabled"
     assert window._btn_export.options["state"] == "normal"
     assert window._btn_save.options["state"] == "normal"
+
+
+class _ConfigField:
+    def __init__(self, value):
+        self.value = value
+        self.options = {}
+
+    def get(self):
+        return self.value
+
+    def configure(self, **kwargs):
+        self.options.update(kwargs)
+
+
+def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_max):
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
+    window._rows = [[
+        _ConfigField(str(config_row['theta'])),
+        _ConfigField(str(config_row['d'])),
+        _ConfigField(str(config_row['a'])),
+        _ConfigField(str(config_row['alpha'])),
+        _ConfigField(joint_type),
+        _ConfigField(str(lim_min)),
+        _ConfigField(str(lim_max)),
+    ]]
+    window._base_row_entries = {
+        'theta': _ConfigField("0"),
+        'd': _ConfigField("0"),
+        'a': _ConfigField("0"),
+        'alpha': _ConfigField("0"),
+    }
+    window.motor3d = SimpleNamespace(get_model_config=lambda: {'visual': {'mode': 'auto_generic'}})
+    window._visual_var = SimpleNamespace(get=lambda: 'auto_generic')
+    return window
+
+
+def test_arm3d_collect_config_allows_zero_a_zero_d_and_equal_rotational_limits():
+    """La configuración DH debe permitir a=0, d=0 y límites iguales en juntas R."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = _make_arm3d_config_window_for_collect(
+        {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+        'R',
+        0.0,
+        0.0,
+    )
+
+    config, error = Arm3DConfigurationWindow._collect_config(window)
+
+    assert error is None
+    assert config is not None
+    assert config['dh_rows'][0] == {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}
+    assert config['joint_limits'][0] == (0.0, 0.0)
+
+
+def test_arm3d_collect_config_allows_equal_prismatic_limits():
+    """La configuración DH debe permitir límites iguales también en juntas P."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = _make_arm3d_config_window_for_collect(
+        {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+        'P',
+        0.0,
+        0.0,
+    )
+
+    config, error = Arm3DConfigurationWindow._collect_config(window)
+
+    assert error is None
+    assert config is not None
+    assert config['joint_types'][0] == 'P'
+    assert config['joint_limits'][0] == (0.0, 0.0)
+
+
+def test_arm3d_collect_config_rejects_only_minimum_greater_than_maximum():
+    """La validación de límites debe fallar solo cuando el mínimo supera al máximo."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = _make_arm3d_config_window_for_collect(
+        {'theta': 0.0, 'd': 0.0, 'a': 50.0, 'alpha': 0.0},
+        'R',
+        10.0,
+        0.0,
+    )
+
+    config, error = Arm3DConfigurationWindow._collect_config(window)
+
+    assert config is None
+    assert error is not None
+    assert "no puede ser mayor que el máximo" in error
 
 
 class TestCameraNavigation:

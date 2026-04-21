@@ -1216,6 +1216,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                     else:
                         theta_e.configure(state='normal', **self._entry_options("standard"))
                         d_e.configure(state='normal', **self._entry_options("standard"))
+                        a_e.configure(state='normal', **self._entry_options("standard"))
                         try:
                             d_val = float(d_e.get())
                             a_val = float(a_e.get())
@@ -1455,9 +1456,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 lim_ok = False
                 lim_max = 90.0
 
-            if lim_ok and lim_min >= lim_max:
-                _mark_invalid(row[5], f"J{joint_n}: límite mínimo ≥ máximo.")
-                _mark_invalid(row[6], f"J{joint_n}: límite mínimo ≥ máximo.")
+            if lim_ok and lim_min > lim_max:
+                _mark_invalid(row[5], f"J{joint_n}: el límite mínimo no puede ser mayor que el máximo.")
+                _mark_invalid(row[6], f"J{joint_n}: el límite mínimo no puede ser mayor que el máximo.")
 
             joint_limits.append((lim_min, lim_max))
 
@@ -1477,22 +1478,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             if jtype == 'P':
                 # Para articulaciones prismáticas la extensión va en 'd'; 'a' debe ser ~0.
                 a_val = dh.get('a', 0.0)
-                d_val = dh.get('d', 0.0)
                 if abs(a_val) > 1.0:
                     _mark_invalid(row[2],
                         f"J{joint_n} (P): 'a' = {a_val:.1f} mm debe ser 0. "
                         f"La extensión prismática se configura en 'd', no en 'a'.")
-                # Los límites de una P joint son recorridos en mm: rango mínimo razonable.
-                if lim_max - lim_min < 1.0:
-                    _mark_invalid(row[5],
-                        f"J{joint_n} (P): recorrido ({lim_max - lim_min:.1f} mm) "
-                        f"demasiado pequeño para una articulación prismática.")
-                # Límites en mm no deberían ser valores de grados (señal de error de unidades).
-                if abs(lim_min) <= 360.0 and abs(lim_max) <= 360.0 \
-                        and lim_max - lim_min <= 360.0 and d_val == 0.0 and a_val == 0.0:
-                    _mark_invalid(row[5],
-                        f"J{joint_n} (P): límites ({lim_min:.0f}..{lim_max:.0f} mm) y "
-                        f"'d' = 0 — el brazo no se moverá. Configura 'd' o amplía los límites.")
 
             else:  # R
                 # Los límites de una R joint son ángulos en grados.
@@ -1500,13 +1489,6 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                     _mark_invalid(row[5],
                         f"J{joint_n} (R): límites ({lim_min:.0f}°..{lim_max:.0f}°) "
                         f"superan ±360° — ¿se introdujeron valores en mm por error?")
-                # Longitud de eslabón 'a' nula en R joints no produce movimiento visible.
-                a_val = dh.get('a', 0.0)
-                d_val = dh.get('d', 0.0)
-                if abs(a_val) < 1.0 and abs(d_val) < 1.0:
-                    _mark_invalid(row[2],
-                        f"J{joint_n} (R): 'a' = 0 y 'd' = 0 — el eslabón no tiene "
-                        f"longitud y la articulación no generará movimiento visible.")
 
         if errors:
             return None, "\n".join(errors)
