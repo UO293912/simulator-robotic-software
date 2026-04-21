@@ -552,6 +552,7 @@ class Arm3DLayer(Layer):
         self._canvas = None
         self._current_joints = None  # ángulos animados actuales (interpolados)
         self._last_sync_time = None
+        self._interactive_render_until = 0.0
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
         self._sync_servos_from_model(reset_animation=True)
@@ -573,6 +574,7 @@ class Arm3DLayer(Layer):
         self.warning_message = ""
         self._current_joints = None  # resetear animación
         self._last_sync_time = None
+        self._interactive_render_until = 0.0
         if self._canvas is not None:
             try:
                 self._canvas.delete("all")
@@ -648,24 +650,30 @@ class Arm3DLayer(Layer):
             )
         if self._current_joints is not None and 0 <= joint_idx < len(self._current_joints):
             self._current_joints[joint_idx] = float(self.motor3d.model.joints[joint_idx])
+        self._request_fast_render()
 
     def solve_ik(self, x, y, z):
         """Lanza IK y retorna (converged, mensaje_estado)."""
         result = self.motor3d.solve_ik(x, y, z)
         self._sync_servos_from_model(reset_animation=True)
+        self._request_fast_render()
         return result
 
     def drag_camera(self, dx, dy, pan=False):
         self.motor3d.drag_camera(dx, dy, pan=pan)
+        self._request_fast_render()
 
     def set_camera_yaw(self, yaw):
         self.motor3d.set_camera(yaw=yaw)
+        self._request_fast_render()
 
     def set_camera_pitch(self, pitch):
         self.motor3d.set_camera(pitch=pitch)
+        self._request_fast_render()
 
     def reset_camera(self):
         self.motor3d.reset_camera()
+        self._request_fast_render()
 
     def set_camera_view(self, view_name):
         """Aplica un preset de cámara: 'front', 'side', 'iso', o None para libre."""
@@ -677,12 +685,15 @@ class Arm3DLayer(Layer):
             self.motor3d.set_camera(yaw=45.0, pitch=30.0)
         else:
             self.motor3d.reset_camera()
+        self._request_fast_render()
 
     def set_trail(self, enabled):
         self.motor3d.set_show_trail(enabled)
+        self._request_fast_render()
 
     def clear_trail(self):
         self.motor3d.scene.clear_trail()
+        self._request_fast_render()
 
     def get_model_config(self):
         return self.motor3d.get_model_config()
@@ -695,6 +706,8 @@ class Arm3DLayer(Layer):
     # Se usa tiempo real y no "grados por frame" para que el movimiento
     # no dependa de los FPS del render 3D.
     _ANIM_SPEED_DPS = 95.0
+    _FAST_RENDER_WINDOW_S = 0.25
+    _FAST_RENDER_EPS = 1e-3
 
     def _to_control_value(self, joint_idx, value):
         model = self.motor3d.model
@@ -707,6 +720,34 @@ class Arm3DLayer(Layer):
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
         return float(value) - 90.0
+
+    def _request_fast_render(self, duration_s=None):
+        """Mantiene el render en modo rapido durante una breve ventana temporal."""
+        window = self._FAST_RENDER_WINDOW_S if duration_s is None else max(0.0, float(duration_s))
+        self._interactive_render_until = max(
+            self._interactive_render_until,
+            time.monotonic() + window,
+        )
+
+    def wants_fast_render(self):
+        """Indica si conviene refrescar a mayor frecuencia por interaccion reciente."""
+        if time.monotonic() < self._interactive_render_until:
+            return True
+
+        model = self.motor3d.model
+        if self._current_joints is None or model.dof == 0:
+            return False
+
+        servo_values = self.robot.get_servo_values()
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+            if i < len(self._current_joints):
+                if abs(target - self._current_joints[i]) > self._FAST_RENDER_EPS:
+                    return True
+        return False
 
     def _sync_servos_from_model(self, reset_animation=False):
         """Sincroniza los servos virtuales con el estado actual del modelo."""

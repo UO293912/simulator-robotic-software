@@ -8,6 +8,9 @@ from datetime import datetime
 
 
 class RobotsController:
+    _ARM3D_RENDER_ACTIVE_MS = 16
+    _ARM3D_RENDER_IDLE_MS = 33
+    _ARM3D_RENDER_WAIT_MS = 50
 
     def __init__(self, view):
         self.view = view
@@ -73,18 +76,22 @@ class RobotsController:
             return
         if self.executing:
             # El drawing_loop ya renderiza; volver a comprobar en el próximo tick
-            self.view.after(50, self.arm3d_render_loop)
+            self.view.after(self._ARM3D_RENDER_WAIT_MS, self.arm3d_render_loop)
             return
+        interval_ms = self._ARM3D_RENDER_IDLE_MS
         try:
             layer = self.robot_layer
-            layer.motor3d.keyboard_camera(self.view.move_WASD)
+            move_wasd = getattr(self.view, "move_WASD", {})
+            layer.motor3d.keyboard_camera(move_wasd)
             if layer._canvas:
                 layer.motor3d.draw(layer._canvas)
             safety = layer.motor3d.evaluate_safety()
             layer._update_hud(safety)
+            if any(move_wasd.values()) or layer.wants_fast_render():
+                interval_ms = self._ARM3D_RENDER_ACTIVE_MS
         except Exception:
             pass
-        self.view.after(50, self.arm3d_render_loop)  # ~20 FPS, no saturar el hilo principal
+        self.view.after(interval_ms, self.arm3d_render_loop)
 
     def stop(self):
         self.executing = False
@@ -183,7 +190,7 @@ class RobotsController:
         if self.arm3d and isinstance(self.robot_layer, layers.Arm3DLayer):
             if not self._arm3d_loop_running:
                 self._arm3d_loop_running = True
-                self.view.after(100, self.arm3d_render_loop)
+                self.view.after(self._ARM3D_RENDER_IDLE_MS, self.arm3d_render_loop)
 
     def configure_console(self, text_component):
         self.console = console.Console(text_component)

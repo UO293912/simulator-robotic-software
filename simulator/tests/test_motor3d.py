@@ -407,6 +407,28 @@ class TestRendering:
         np.testing.assert_allclose(frames[1]['xref'], expected_xref, atol=1e-9)
         assert abs(np.dot(frames[1]['axis'], frames[1]['xref'])) < 1e-9
 
+    def test_projection_context_matches_camera_project(self):
+        """La proyeccion cacheada por frame debe coincidir con camera.project()."""
+        import pytest
+        from motor3d.camera.camera import Camera
+        from motor3d.rendering.robot3d_drawing import Robot3DDrawing
+
+        camera = Camera()
+        camera.set_orientation(yaw=32.0, pitch=18.0)
+        camera.zoom = 1.35
+        camera.screen_offset_x = 24.0
+        camera.screen_offset_y = -12.0
+
+        drawing = Robot3DDrawing()
+        projection = drawing._build_projection_context(camera, 800, 600)
+
+        point = [120.0, -85.0, 210.0]
+        expected = camera.project(point, 800, 600)
+        actual = drawing._project_point(point, projection)
+
+        assert actual is not None and expected is not None
+        assert actual == pytest.approx(expected, abs=1e-9)
+
     def test_trail_color_never_black(self, motor3d_api):
         """El color de la trayectoria no debe ser (0,0,0) para ningún punto.
         La luminosidad mínima debe ser al menos 25% del color base."""
@@ -1190,3 +1212,91 @@ void loop() {
             assert ctrl.loop_command.calls == 0
         finally:
             screen_updater.refresh = original_refresh
+
+    def test_arm3d_render_loop_uses_fast_interval_when_interacting(self):
+        """El loop pasivo del Arm3D debe acelerar el refresco si hay interaccion."""
+        import graphics.controller as controller_mod
+        import graphics.layers as layers_mod
+
+        ctrl = controller_mod.RobotsController.__new__(controller_mod.RobotsController)
+        ctrl.arm3d = True
+        ctrl.executing = False
+        ctrl._arm3d_loop_running = True
+
+        after_calls = []
+
+        class _MockView:
+            move_WASD = {'w': False, 'a': False, 's': False, 'd': False}
+
+            def after(self, ms, _cb):
+                after_calls.append(ms)
+                return None
+
+        class _MockMotor3D:
+            def __init__(self):
+                self.draw_calls = 0
+
+            def keyboard_camera(self, _move_wasd):
+                pass
+
+            def draw(self, _canvas):
+                self.draw_calls += 1
+
+            def evaluate_safety(self):
+                return {'blocked': False, 'message': '', 'in_workspace': True, 'singular': False}
+
+        layer = layers_mod.Arm3DLayer.__new__(layers_mod.Arm3DLayer)
+        layer.motor3d = _MockMotor3D()
+        layer._canvas = object()
+        layer._update_hud = lambda _safety: None
+        layer.wants_fast_render = lambda: True
+
+        ctrl.view = _MockView()
+        ctrl.robot_layer = layer
+
+        ctrl.arm3d_render_loop()
+
+        assert layer.motor3d.draw_calls == 1
+        assert after_calls == [controller_mod.RobotsController._ARM3D_RENDER_ACTIVE_MS]
+
+    def test_arm3d_render_loop_uses_idle_interval_when_quiet(self):
+        """El loop pasivo del Arm3D debe bajar el refresco cuando todo esta quieto."""
+        import graphics.controller as controller_mod
+        import graphics.layers as layers_mod
+
+        ctrl = controller_mod.RobotsController.__new__(controller_mod.RobotsController)
+        ctrl.arm3d = True
+        ctrl.executing = False
+        ctrl._arm3d_loop_running = True
+
+        after_calls = []
+
+        class _MockView:
+            move_WASD = {'w': False, 'a': False, 's': False, 'd': False}
+
+            def after(self, ms, _cb):
+                after_calls.append(ms)
+                return None
+
+        class _MockMotor3D:
+            def keyboard_camera(self, _move_wasd):
+                pass
+
+            def draw(self, _canvas):
+                pass
+
+            def evaluate_safety(self):
+                return {'blocked': False, 'message': '', 'in_workspace': True, 'singular': False}
+
+        layer = layers_mod.Arm3DLayer.__new__(layers_mod.Arm3DLayer)
+        layer.motor3d = _MockMotor3D()
+        layer._canvas = object()
+        layer._update_hud = lambda _safety: None
+        layer.wants_fast_render = lambda: False
+
+        ctrl.view = _MockView()
+        ctrl.robot_layer = layer
+
+        ctrl.arm3d_render_loop()
+
+        assert after_calls == [controller_mod.RobotsController._ARM3D_RENDER_IDLE_MS]

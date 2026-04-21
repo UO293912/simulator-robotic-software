@@ -872,10 +872,11 @@ class Robot3DDrawing:
 
         img = Image.new('RGB', (w, h), self.BG_COLOR)
         draw = ImageDraw.Draw(img)
+        projection = self._build_projection_context(camera, w, h)
 
         # Rejilla y ejes
-        self._draw_grid(draw, camera, w, h)
-        self._draw_axes(draw, camera, w, h)
+        self._draw_grid(draw, projection)
+        self._draw_axes(draw, projection)
 
         # Colectar mallas agrupadas por color (evita crear 10k+ tuplas Python)
         vm = self.resolve_visual_model(model)
@@ -888,23 +889,23 @@ class Robot3DDrawing:
 
         # Trayectoria — dibujada ANTES del mesh para que el brazo la ocluya correctamente
         if trail:
-            self._draw_trail(draw, camera, trail, w, h)
+            self._draw_trail(draw, trail, projection)
 
         # Renderizado vectorizado del mesh (NumPy pipeline)
-        self._render_mesh_vectorized(draw, camera, mesh_groups, w, h)
+        self._render_mesh_vectorized(draw, projection, mesh_groups)
 
         # Arcos de rango articular — encima del mesh para que sean visibles
         if points3d and chain and model.visual.get('show_joint_ranges', False):
-            for line in self._collect_joint_arcs(model, points3d, chain, camera, w, h):
+            for line in self._collect_joint_arcs(model, points3d, chain, projection):
                 draw.line(line, fill=_ARC_COLOR, width=1)
 
         # Esqueleto de puntos
         if model.visual.get('mode') == 'skeleton':
-            self._render_skeleton(draw, camera, points3d, model, w, h)
+            self._render_skeleton(draw, points3d, model, projection)
 
         # Ejes locales XYZ de cada articulaciÃ³n
         if points3d and chain and model.visual.get('show_joint_axes', False):
-            self._draw_joint_axes(draw, model, chain, camera, w, h)
+            self._draw_joint_axes(draw, model, chain, projection)
 
         # Blit a canvas
         self._blit(canvas, img)
@@ -927,7 +928,29 @@ class Robot3DDrawing:
                 except Exception:
                     pass
 
-    def _render_mesh_vectorized(self, draw, camera, mesh_groups, w, h):
+    def _build_projection_context(self, camera, w, h):
+        """Precalcula la proyeccion de camara compartida por todo el frame."""
+        R_view, cam_pos = camera.get_view_matrix()
+        return {
+            'R_view': R_view,
+            'cam_pos': cam_pos,
+            'f': camera.focal_length * camera.zoom,
+            'cx': w / 2.0 + camera.screen_offset_x,
+            'cy': h / 2.0 + camera.screen_offset_y,
+        }
+
+    def _project_point(self, point, projection):
+        """Proyecta un punto 3D usando la camara ya resuelta para este frame."""
+        p_world = np.asarray(point, dtype=float) - projection['cam_pos']
+        p_cs = projection['R_view'] @ p_world
+        z = p_cs[2]
+        if z <= 0.01:
+            return None
+        sx = (p_cs[0] / z) * projection['f'] + projection['cx']
+        sy = (-p_cs[1] / z) * projection['f'] + projection['cy']
+        return sx, sy
+
+    def _render_mesh_vectorized(self, draw, projection, mesh_groups):
         """
         Pipeline de renderizado vectorizado con NumPy.
 
@@ -951,10 +974,11 @@ class Robot3DDrawing:
             return
 
         # ------------------------------------------------------------------ 2. View matrix (UNA VEZ)
-        R_view, cam_pos = camera.get_view_matrix()
-        f = camera.focal_length * camera.zoom
-        cx = w / 2.0 + camera.screen_offset_x
-        cy = h / 2.0 + camera.screen_offset_y
+        R_view = projection['R_view']
+        cam_pos = projection['cam_pos']
+        f = projection['f']
+        cx = projection['cx']
+        cy = projection['cy']
 
         # ------------------------------------------------------------------ 3. Proyectar TODOS los vértices
         verts = all_tris.reshape(N * 3, 3)               # (N*3, 3)
@@ -1040,15 +1064,16 @@ class Robot3DDrawing:
         for key in order:
             arr = np.array(groups[key])
             mesh_groups.append((arr, key))
-        self._render_mesh_vectorized(draw, camera, mesh_groups, w, h)
+        projection = self._build_projection_context(camera, w, h)
+        self._render_mesh_vectorized(draw, projection, mesh_groups)
 
-    def _render_skeleton(self, draw, camera, points3d, model, w, h):
+    def _render_skeleton(self, draw, points3d, model, projection):
         """Renderizado simplificado con líneas y círculos."""
         if not points3d or len(points3d) < 2:
             return
         prev = None
         for i, p in enumerate(points3d):
-            proj = camera.project(p, w, h)
+            proj = self._project_point(p, projection)
             if proj is None:
                 prev = None
                 continue
@@ -1059,23 +1084,23 @@ class Robot3DDrawing:
             draw.ellipse([proj[0] - r, proj[1] - r, proj[0] + r, proj[1] + r], fill=color)
             prev = proj
 
-    def _draw_grid(self, draw, camera, w, h):
+    def _draw_grid(self, draw, projection):
         """Dibuja la rejilla del plano Z=0."""
         size = 400
         step = 100
         color = self.GRID_COLOR
         for x in range(-size, size + step, step):
-            p0 = camera.project([float(x), float(-size), 0.0], w, h)
-            p1 = camera.project([float(x), float(size), 0.0], w, h)
+            p0 = self._project_point([float(x), float(-size), 0.0], projection)
+            p1 = self._project_point([float(x), float(size), 0.0], projection)
             if p0 and p1:
                 draw.line([p0, p1], fill=color, width=1)
         for y in range(-size, size + step, step):
-            p0 = camera.project([float(-size), float(y), 0.0], w, h)
-            p1 = camera.project([float(size), float(y), 0.0], w, h)
+            p0 = self._project_point([float(-size), float(y), 0.0], projection)
+            p1 = self._project_point([float(size), float(y), 0.0], projection)
             if p0 and p1:
                 draw.line([p0, p1], fill=color, width=1)
 
-    def _draw_axes(self, draw, camera, w, h):
+    def _draw_axes(self, draw, projection):
         """Dibuja los ejes de coordenadas XYZ con etiquetas."""
         origin = [0.0, 0.0, 0.0]
         length = 120.0
@@ -1084,11 +1109,11 @@ class Robot3DDrawing:
             'y': ([0.0, length, 0.0], self.AXIS_COLORS['y']),
             'z': ([0.0, 0.0, length], self.AXIS_COLORS['z']),
         }
-        p0 = camera.project(origin, w, h)
+        p0 = self._project_point(origin, projection)
         if p0 is None:
             return
         for label, (end, color) in axes.items():
-            p1 = camera.project(end, w, h)
+            p1 = self._project_point(end, projection)
             if p1:
                 draw.line([p0, p1], fill=color, width=2)
                 try:
@@ -1096,7 +1121,7 @@ class Robot3DDrawing:
                 except Exception:
                     pass
 
-    def _draw_trail(self, draw, camera, trail, w, h):
+    def _draw_trail(self, draw, trail, projection):
         """Dibuja la trayectoria del efector final.
 
         Proyecta cada punto 3D al espacio pantalla.  El segmento entre un punto
@@ -1113,7 +1138,7 @@ class Robot3DDrawing:
         # Proyectar con índice original para respetar la continuidad
         projected = []  # lista de (screen_xy | None)
         for p in trail:
-            projected.append(camera.project(p, w, h))
+            projected.append(self._project_point(p, projection))
 
         n = len(projected)
         for i in range(n - 1):
@@ -1160,7 +1185,7 @@ class Robot3DDrawing:
 
         return center, axis, u, v
 
-    def _draw_joint_axes(self, draw, model, chain, camera, w, h):
+    def _draw_joint_axes(self, draw, model, chain, projection):
         """Dibuja los ejes XYZ locales de cada articulaciÃ³n usando sus frames renderizados."""
         vm = self.resolve_visual_model(model)
         frames = vm.get_joint_frames(model, chain)
@@ -1171,7 +1196,7 @@ class Robot3DDrawing:
                 continue
 
             center, axis_z, axis_x, axis_y = basis
-            p0 = camera.project(center.tolist(), w, h)
+            p0 = self._project_point(center.tolist(), projection)
             if p0 is None:
                 continue
 
@@ -1182,7 +1207,7 @@ class Robot3DDrawing:
                 (axis_z, self.AXIS_COLORS['z']),
             )
             for axis_dir, color in axes:
-                p1 = camera.project((center + axis_len * axis_dir).tolist(), w, h)
+                p1 = self._project_point((center + axis_len * axis_dir).tolist(), projection)
                 if p1 is None:
                     continue
                 try:
@@ -1190,7 +1215,7 @@ class Robot3DDrawing:
                 except Exception:
                     pass
 
-    def _collect_joint_arcs(self, model, points3d, chain, camera, w, h):
+    def _collect_joint_arcs(self, model, points3d, chain, projection):
         """Retorna lista de segmentos 2D que representan los arcos de rango articular.
 
         Delega la obtención de las posiciones y ejes articulares al modelo visual
@@ -1252,7 +1277,7 @@ class Robot3DDrawing:
                     center[1] + r_arc * (c_a * u[1] + s_a * v[1]),
                     center[2] + r_arc * (c_a * u[2] + s_a * v[2]),
                 ]
-                projected.append(camera.project(p3d, w, h))
+                projected.append(self._project_point(p3d, projection))
 
             for k in range(len(projected) - 1):
                 p0 = projected[k]
@@ -1261,7 +1286,7 @@ class Robot3DDrawing:
                     lines.append([p0, p1])
 
             # Líneas radiales del centro al inicio y fin del arco
-            c_proj = camera.project(list(center), w, h)
+            c_proj = self._project_point(list(center), projection)
             if c_proj:
                 if projected[0] is not None:
                     lines.append([c_proj, projected[0]])
