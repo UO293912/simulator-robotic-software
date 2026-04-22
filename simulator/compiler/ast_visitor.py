@@ -174,11 +174,11 @@ class ASTVisitor:
             bitwise_expression.right.accept(self, param)
         return None
 
-    def visit_compound_assignment(self, compound_asigment: ast.CompoundAssignmentNode, param):
-        if compound_asigment.left is not None:
-            compound_asigment.left.accept(self, param)
-        if compound_asigment.right is not None:
-            compound_asigment.right.accept(self, param)
+    def visit_compound_assignment(self, compound_asignment: ast.CompoundAssignmentNode, param):
+        if compound_asignment.left is not None:
+            compound_asignment.left.accept(self, param)
+        if compound_asignment.right is not None:
+            compound_asignment.right.accept(self, param)
         return None
 
     def visit_inc_dec_expression(self, inc_dec_expression: ast.IncDecExpressionNode, param):
