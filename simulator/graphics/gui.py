@@ -1470,25 +1470,22 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 base_row[key] = 0.0
 
         # ---- Validación semántica por tipo de articulación ----
-        for i, (jtype, dh, (lim_min, lim_max)) in enumerate(
+        for i, (jtype, _dh, (lim_min, lim_max)) in enumerate(
                 zip(joint_types, dh_rows, joint_limits)):
             joint_n = i + 1
             row = self._rows[i]
 
             if jtype == 'P':
-                # Para articulaciones prismáticas la extensión va en 'd'; 'a' debe ser ~0.
-                a_val = dh.get('a', 0.0)
-                if abs(a_val) > 1.0:
-                    _mark_invalid(row[2],
-                        f"J{joint_n} (P): 'a' = {a_val:.1f} mm debe ser 0. "
-                        f"La extensión prismática se configura en 'd', no en 'a'.")
+                # En DH la variable prismatica sigue yendo en `d`, pero `a` puede
+                # representar un offset rigido lateral valido hacia el siguiente origen.
+                continue
 
             else:  # R
-                # Los límites de una R joint son ángulos en grados.
+                # Los limites de una R joint son angulos en grados.
                 if abs(lim_min) > 360.0 or abs(lim_max) > 360.0:
                     _mark_invalid(row[5],
-                        f"J{joint_n} (R): límites ({lim_min:.0f}°..{lim_max:.0f}°) "
-                        f"superan ±360° — ¿se introdujeron valores en mm por error?")
+                        f"J{joint_n} (R): limites ({lim_min:.0f}deg..{lim_max:.0f}deg) "
+                        f"superan +/-360deg - se introdujeron valores en mm por error?")
 
         if errors:
             return None, "\n".join(errors)

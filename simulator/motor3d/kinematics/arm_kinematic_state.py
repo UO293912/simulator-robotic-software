@@ -109,8 +109,20 @@ class ArmKinematicState:
         return False
 
     def max_reach(self):
-        return sum(abs(row.get('a', 0.0)) + abs(row.get('d', 0.0))
-                   for row in self.dh_rows)
+        reach = 0.0
+        for i, row in enumerate(self.dh_rows):
+            a = abs(float(row.get('a', 0.0)))
+            d = float(row.get('d', 0.0))
+            max_abs_d = abs(d)
+
+            if i < len(self.joint_types) and self.joint_types[i] == 'P':
+                if i < len(self.joint_limits):
+                    mn, mx = self.joint_limits[i]
+                    max_abs_d = max(abs(d + float(mn)), abs(d + float(mx)))
+
+            reach += a + max_abs_d
+
+        return reach
 
     def to_dict(self):
         return {

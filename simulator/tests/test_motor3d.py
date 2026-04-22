@@ -255,6 +255,69 @@ class TestInverseKinematics:
         assert error_final < error_init, (
             f"IK debe reducir el error: inicial={error_init:.1f}, final={error_final:.1f}")
 
+    def test_ik_prismatic_joint_reaches_linear_target(self):
+        """Una P pura debe converger desplazando en mm sobre su eje local."""
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            joint_limits=[(0.0, 120.0)],
+            joint_types=['P'],
+            joints=[0.0],
+            dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+        )
+
+        converged, error = solve_inverse_kinematics(
+            model, [0.0, 0.0, 80.0], max_iter=30, tolerance=1.0, alpha=0.65)
+        ee = forward_kinematics_chain(model)['end_effector']
+
+        assert converged, f"IK prismatica no convergio (error={error:.2f} mm)"
+        assert abs(model.joints[0] - 80.0) <= 1.0
+        assert abs(ee[2] - 80.0) <= 1.0
+
+    def test_ik_prismatic_joint_supports_reoriented_axis(self):
+        """Una P debe poder deslizar en cualquier direccion si su eje z se reorienta."""
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            joint_limits=[(0.0, 120.0)],
+            joint_types=['P'],
+            joints=[0.0],
+            dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+            base={'theta': 90.0, 'd': 0.0, 'a': 0.0, 'alpha': 90.0},
+        )
+
+        converged, error = solve_inverse_kinematics(
+            model, [60.0, 0.0, 0.0], max_iter=30, tolerance=1.0, alpha=0.65)
+        ee = forward_kinematics_chain(model)['end_effector']
+
+        assert converged, f"IK prismatica reorientada no convergio (error={error:.2f} mm)"
+        assert abs(model.joints[0] - 60.0) <= 1.0
+        assert abs(ee[0] - 60.0) <= 1.0
+
+
+def test_max_reach_includes_prismatic_joint_stroke():
+    """El workspace debe considerar la carrera maxima de las juntas P."""
+    from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+
+    model = ArmKinematicState()
+    model.configure(
+        dof=1,
+        joint_limits=[(-30.0, 100.0)],
+        joint_types=['P'],
+        joints=[0.0],
+        dh_rows=[{'theta': 0.0, 'd': 20.0, 'a': 50.0, 'alpha': 0.0}],
+    )
+
+    assert model.max_reach() == 170.0
+
 
 # ---------------------------------------------------------------------------
 # P-CU03-01 : Rendering sin crash
@@ -747,6 +810,25 @@ def test_arm3d_collect_config_allows_equal_prismatic_limits():
     assert config is not None
     assert config['joint_types'][0] == 'P'
     assert config['joint_limits'][0] == (0.0, 0.0)
+
+
+def test_arm3d_collect_config_allows_prismatic_rigid_offset_in_a():
+    """Una P puede tener `a` como offset rígido sin que la GUI la rechace."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = _make_arm3d_config_window_for_collect(
+        {'theta': 0.0, 'd': 0.0, 'a': 50.0, 'alpha': 0.0},
+        'P',
+        0.0,
+        120.0,
+    )
+
+    config, error = Arm3DConfigurationWindow._collect_config(window)
+
+    assert error is None
+    assert config is not None
+    assert config['dh_rows'][0]['a'] == 50.0
+    assert config['joint_types'][0] == 'P'
 
 
 def test_arm3d_collect_config_rejects_only_minimum_greater_than_maximum():
