@@ -31,7 +31,11 @@ def _block_until_resumed():
     """Bloquea el hilo de fondo en su posición actual hasta que se reanude la ejecución."""
     if threading.current_thread() is threading.main_thread():
         return  # Nunca bloquear el hilo principal
-    while controller is not None and controller.paused and controller.executing:
+    while (
+        controller is not None
+        and getattr(controller, "paused", False)
+        and getattr(controller, "executing", True)
+    ):
         time.sleep(0.02)
 
 
@@ -44,14 +48,15 @@ def debug_line(line_no):
         el paso-a-paso avance a la sentencia siguiente, no a la primera de loop()."""
     if threading.current_thread() is threading.main_thread():
         refresh()
-    if controller is None:
+    ctrl = controller
+    if ctrl is None:
         return
-    if not controller.executing:
+    if not getattr(ctrl, "executing", True):
         if threading.current_thread() is not threading.main_thread():
             from compiler.commands import ExecutionPaused
             raise ExecutionPaused(line_no)
         return
-    if controller.debug_should_pause_at_line(line_no):
+    if ctrl.debug_should_pause_at_line(line_no):
         # Actualizar el highlight SINCRÓNICAMENTE: el usuario ve la nueva línea
         # antes de que el hilo se bloquee (no hay race con after()).
         if view is not None and hasattr(view, "editor_frame"):
@@ -72,6 +77,6 @@ def debug_line(line_no):
             # loop() corre en hilo de fondo: bloquear aquí para preservar la pila
             _block_until_resumed()
             # Si se detuvo la simulación mientras estábamos bloqueados, salir
-            if controller is None or not controller.executing:
+            if controller is None or not getattr(controller, "executing", True):
                 from compiler.commands import ExecutionPaused
                 raise ExecutionPaused(line_no)

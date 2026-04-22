@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 import robot_components.robots as r
 import robot_components.elements as e
 import robot_components.boards as b
@@ -8,11 +9,8 @@ import graphics.drawing as d
 class TestsChallenges(unittest.TestCase):
 
     def get_correct_code(self):
-        url = "C:\\Users\\masuh\\OneDrive\\Escritorio\\TFG\\Desarrollo\\simulator-robotic-software\\codes/challenge3"
-        code_file = open(url, "r")
-        code = code_file.read()
-        code_file.close()
-        return code
+        path = Path(__file__).resolve().parents[1] / "codes" / "challenge3"
+        return path.read_text(encoding="utf-8")
 
     def get_wrong_code(self):
         code = "// Este código no es correcto" \
@@ -23,7 +21,7 @@ class TestsChallenges(unittest.TestCase):
     def test_correct(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (CORRECTO)
@@ -74,7 +72,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (CORRECTO)
         code = self.get_correct_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código correcto
         self.assertEqual(code, True)
         # Circuito correcto
@@ -83,7 +81,7 @@ class TestsChallenges(unittest.TestCase):
     def test_incorrect_code(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (CORRECTO)
@@ -134,7 +132,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (INCORRECTO)
         code = self.get_wrong_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código incorrecto
         self.assertEqual(code, False)
         # Circuito correcto
@@ -143,7 +141,7 @@ class TestsChallenges(unittest.TestCase):
     def test_incorrect_circuit_less_elements(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (INCORRECTO)
@@ -174,7 +172,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (CORRECTO)
         code = self.get_correct_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código correcto
         self.assertEqual(code, True)
         # Circuito incorrecto
@@ -183,7 +181,7 @@ class TestsChallenges(unittest.TestCase):
     def test_incorrect_circuit_less_connections(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (INCORRECTO)
@@ -222,7 +220,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (CORRECTO)
         code = self.get_correct_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código correcto
         self.assertEqual(code, True)
         # Circuito incorrecto
@@ -231,7 +229,7 @@ class TestsChallenges(unittest.TestCase):
     def test_incorrect_circuit_wrong_elements(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (INCORRECTO)
@@ -282,7 +280,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (CORRECTO)
         code = self.get_correct_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código correcto
         self.assertEqual(code, True)
         # Circuito incorrecto
@@ -291,7 +289,7 @@ class TestsChallenges(unittest.TestCase):
     def test_incorrect_circuit_wrong_connections(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (INCORRECTO)
@@ -342,7 +340,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (CORRECTO)
         code = self.get_correct_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código correcto
         self.assertEqual(code, True)
         # Circuito incorrecto
@@ -351,7 +349,7 @@ class TestsChallenges(unittest.TestCase):
     def test_incorrect_circuit_code(self):
         drawing = d.Drawing()
         # Obtenemos el robot correcto
-        correct_robot = drawing.get_robot_challenge(2)
+        correct_robot = drawing.get_robot_challenge(3)
         # Obtenermos el código correcto
         correct_code = self.get_correct_code()
         # Configuramos el robot (INCORRECTO)
@@ -382,7 +380,7 @@ class TestsChallenges(unittest.TestCase):
         # Creamos el código a comprobar (INCORRECTO)
         code = self.get_wrong_code()
         # Comprobación
-        code, circuit = drawing.probe(0, code, correct_code, robot, correct_robot)
+        code, circuit = drawing.probe(3, code, correct_code, robot, correct_robot)
         # Código incorrecto
         self.assertEqual(code, False)
         # Circuito incorrecto

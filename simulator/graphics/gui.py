@@ -1,3 +1,4 @@
+import math
 import re
 import tkinter as tk
 import tkinter.messagebox as messagebox
@@ -17,9 +18,12 @@ SURFACE_HEADER_BG = BLUE
 PANEL_BORDER = DARK_BLUE
 TEXT_PRIMARY = "#173D3F"
 TEXT_MUTED = "#6B7D7F"
+TEXT_DISABLED = "#869396"
 INPUT_BG = "#FFFFFF"
-INPUT_DISABLED_BG = "#DCE3E4"
-INPUT_FIXED_BG = "#DDE9EA"
+INPUT_DISABLED_BG = "#D7DDDF"
+INPUT_DISABLED_BORDER = "#AAB4B7"
+INPUT_FIXED_BG = "#DCEEF5"
+INPUT_FIXED_BORDER = "#5F98A6"
 INPUT_ACCENT_BG = "#D4EDE8"
 PANEL_ACTION_BG = BLUE
 PANEL_ACTION_FG = "white"
@@ -771,10 +775,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         tk.Toplevel.__init__(self, parent, *args, **kwargs)
         self.title("Configuración Brazo 3D")
         self.focus_force()
-        self.resizable(True, True)
+        self.resizable(False, False)
         self.configure(bg=WINDOW_BG)
         self.application = application
         self.motor3d = motor3d_api
+        self._parent_window = parent
+        self._ui_scale = 0.82
         self._combo_style_name = "Arm3DConfig.TCombobox"
         self._configure_window_styles()
 
@@ -783,9 +789,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        top_frame.pack(fill=tk.X, padx=18, pady=(18, 10))
+        top_frame.pack(fill=tk.X, padx=18, pady=(14, 8))
         top_inner = tk.Frame(top_frame, bg=SURFACE_BG)
-        top_inner.pack(fill=tk.X, padx=14, pady=12)
+        top_inner.pack(fill=tk.X, padx=12, pady=8)
 
         top_inner.grid_columnconfigure(0, weight=3)
         top_inner.grid_columnconfigure(1, weight=1)
@@ -794,7 +800,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         profile_block = tk.Frame(top_inner, bg=SURFACE_BG)
         profile_block.grid(row=0, column=0, sticky="ew", padx=(0, 14))
         tk.Label(profile_block, text="Perfil", bg=SURFACE_BG, fg=DARK_BLUE,
-                 font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 4))
+                 font=self._font(10, "bold")).pack(anchor="w", pady=(0, self._s(4)))
         self._presets = self.motor3d.repository.list_builtin_presets()
         preset_names = ["Custom"] + sorted(self._presets.keys())
         current_preset = self.motor3d.active_preset_name
@@ -805,7 +811,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             textvariable=self._preset_var,
             values=preset_names,
             state="readonly",
-            width=18,
+            width=self._s(18),
             style=self._combo_style_name,
         )
         preset_combo.pack(fill=tk.X)
@@ -814,15 +820,15 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         dof_block = tk.Frame(top_inner, bg=SURFACE_BG)
         dof_block.grid(row=0, column=1, sticky="ew", padx=(0, 14))
         tk.Label(dof_block, text="DOF", bg=SURFACE_BG, fg=DARK_BLUE,
-                 font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 4))
+                 font=self._font(10, "bold")).pack(anchor="w", pady=(0, self._s(4)))
         self._dof_var = tk.IntVar(value=self.motor3d.model.dof)
         self._dof_spin = tk.Spinbox(
             dof_block,
             from_=1,
             to=6,
             textvariable=self._dof_var,
-            width=4,
-            font=("Consolas", 12),
+            width=self._s(4),
+            font=self._font(12),
             command=self._on_dof_change,
             bg=INPUT_BG,
             fg=TEXT_PRIMARY,
@@ -842,7 +848,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         visual_block = tk.Frame(top_inner, bg=SURFACE_BG)
         visual_block.grid(row=0, column=2, sticky="ew")
         tk.Label(visual_block, text="Modo visual", bg=SURFACE_BG, fg=DARK_BLUE,
-                 font=("Consolas", 10, "bold")).pack(anchor="w", pady=(0, 4))
+                 font=self._font(10, "bold")).pack(anchor="w", pady=(0, self._s(4)))
         self._visual_var = tk.StringVar()
         self._MODES_SELECTABLE = ["auto_generic", "skeleton"]
         self._vis_combo = ttk.Combobox(
@@ -850,10 +856,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             textvariable=self._visual_var,
             values=self._MODES_SELECTABLE,
             state="readonly",
-            width=15,
+            width=self._s(15),
             style=self._combo_style_name,
         )
         self._vis_combo.pack(fill=tk.X)
+        self._vis_combo.bind("<<ComboboxSelected>>", self._on_visual_mode_selected)
 
         self._base_row_widgets = []
         self._base_row_controls = []
@@ -863,9 +870,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        help_section.pack(fill=tk.X, padx=18, pady=(0, 10))
+        help_section.pack(fill=tk.X, padx=18, pady=(0, 8))
         help_frame = tk.Frame(help_section, bg=SURFACE_BG)
-        help_frame.pack(fill=tk.X, padx=14, pady=(12, 12))
+        help_frame.pack(fill=tk.X, padx=12, pady=(8, 8))
         self._help_frame = help_frame
         self._help_visible = False
         self._help_btn = tk.Button(
@@ -875,7 +882,8 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             **self._action_button_options(),
         )
         self._help_btn.configure(anchor="w", justify="left", padx=16)
-        self._help_btn.pack(fill=tk.X, pady=2)
+        self._help_btn.pack(fill=tk.X, pady=1)
+        self._legend_frame = self._build_config_legend(help_frame)
         self._help_body = tk.Frame(
             help_section,
             bg=SURFACE_ALT_BG,
@@ -884,54 +892,105 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             highlightthickness=1,
             highlightbackground=PANEL_BORDER,
         )
-        help_text = (
-            "Regla general DH: una joint R siempre gira sobre su eje local.\n"
-            "Lo que hace que visualmente parezca rotacion sobre si misma o balanceo\n"
-            "es donde queda el siguiente tramo respecto a ese eje.\n"
-            "\n"
-            "Rotacion sobre si misma:\n"
-            "  si la joint no saca el siguiente tramo fuera del eje, el giro se ve axial.\n"
-            "  Ejemplo: tipo=R, theta=0, d=0, a=0, alpha=0\n"
-            "\n"
-            "Movimiento pendular o de balanceo:\n"
-            "  si la joint deja el siguiente tramo separado del eje, el giro se ve como pendulo.\n"
-            "  Lo mas habitual es usar a > 0.\n"
-            "  Ejemplo: tipo=R, theta=0, d=0, a=200, alpha=0\n"
-            "\n"
-            "J0 fija no cuenta como DOF y solo sirve para reorientar o desplazar la base.\n"
-            "En la primera articulacion puede usarse para cambiar el plano del movimiento.\n"
-            "Ejemplo: J0 theta=90, d=0, a=0, alpha=90 + J1 con a=200 -> pendulo sobre X.\n"
-            "Si la orientacion queda invertida, prueba sumar o restar 180 a theta."
-        )
-        tk.Label(
+        self._help_canvas = tk.Canvas(
             self._help_body,
+            bg=SURFACE_ALT_BG,
+            bd=0,
+            highlightthickness=0,
+            height=72,
+            yscrollincrement=16,
+        )
+        self._help_scrollbar = tk.Scrollbar(
+            self._help_body,
+            orient=tk.VERTICAL,
+            command=self._help_canvas.yview,
+        )
+        self._help_canvas.configure(yscrollcommand=self._help_scrollbar.set)
+        self._help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self._help_content = tk.Frame(self._help_canvas, bg=SURFACE_ALT_BG)
+        self._help_canvas_window = self._help_canvas.create_window(
+            (0, 0), window=self._help_content, anchor="nw"
+        )
+        self._help_content.bind(
+            "<Configure>",
+            lambda _event: self._help_canvas.configure(
+                scrollregion=self._help_canvas.bbox("all")
+            ),
+        )
+        self._help_canvas.bind(
+            "<Configure>",
+            lambda event: self._help_canvas.itemconfigure(
+                self._help_canvas_window, width=event.width
+            ),
+        )
+        self._help_canvas.bind("<MouseWheel>", self._on_help_mousewheel)
+        self._help_content.bind("<MouseWheel>", self._on_help_mousewheel)
+        help_text = (
+            "Como usar la tabla:\n"
+            "  J0 mueve la base completa. Usala para recolocar o reorientar todo el robot.\n"
+            "  J1, J2... son las articulaciones reales del brazo.\n"
+            "  Theta gira la joint. Si es una R, normalmente es el valor que define su movimiento.\n"
+            "  d adelanta o retrasa el siguiente tramo en la direccion de la propia joint. Si es una P, normalmente es el valor que define su movimiento.\n"
+            "  a separa la siguiente pieza del centro de giro: cuanto mayor sea, mas brazo o palanca aparece.\n"
+            "  Alpha gira la orientacion de la siguiente joint: sirve para cambiar de plano, inclinar el brazo o hacer que el siguiente tramo salga en otra direccion.\n"
+            "  Lim min y Lim max recortan el movimiento permitido.\n"
+            "\n"
+            "Como construir movimientos:\n"
+            "  Giro sobre si mismo: tipo=R y a=0.\n"
+            "  Balanceo o pendulo: tipo=R y a>0.\n"
+            "  Corredera recta: tipo=P.\n"
+            "  En una P, Dir yaw y Dir pitch apuntan hacia donde quieres que deslice antes de mover.\n"
+            "  yaw=0 pitch=0 suele dejarla deslizando hacia delante; yaw=0 pitch=90 la tumba para deslizar de lado.\n"
+            "\n"
+            "Metodo rapido:\n"
+            "  1. Pon el tipo de joint.\n"
+            "  2. Da forma con a y Alpha.\n"
+            "  3. Ajusta Theta si es R o d si es P.\n"
+            "  4. Si es P, orienta con yaw/pitch.\n"
+            "  5. Cierra limites para evitar movimientos absurdos.\n"
+            "\n"
+            "Ejemplo corto:\n"
+            "  J0 alpha=90 reorienta el brazo.\n"
+            "  J1 tipo=R con a=200 crea un brazo que balancea.\n"
+            "  J2 tipo=P con yaw=0 pitch=90 hace que deslice hacia X local."
+        )
+        self._help_label = tk.Label(
+            self._help_content,
             text=help_text,
             bg=SURFACE_ALT_BG,
             fg=TEXT_PRIMARY,
             justify="left",
             anchor="w",
             wraplength=920,
-            padx=12,
-            pady=10,
-            font=("Consolas", 10),
-        ).pack(fill=tk.X)
+            padx=10,
+            pady=8,
+            font=self._font(9),
+        )
+        self._help_label.pack(fill=tk.X)
+        self._help_label.bind("<MouseWheel>", self._on_help_mousewheel)
 
         # ---- Tabla DH ----
         table_shell = tk.Frame(
             self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        table_shell.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 10))
+        table_shell.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
         table_frame = tk.Frame(table_shell, bg=SURFACE_BG)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
 
-        headers = ["J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)", "Tipo", "Lím min", "Lím max"]
+        headers = [
+            "J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)",
+            "Tipo", "Lim min", "Lim max", "Dir yaw", "Dir pitch"
+        ]
         for col, h in enumerate(headers):
-            tk.Label(table_frame, text=h, font=("Consolas", 11, "bold"), bg=SURFACE_HEADER_BG,
-                     fg="white", relief=tk.SOLID, bd=1, padx=8,
-                     pady=7).grid(row=0, column=col, sticky="nsew", padx=2, pady=(0, 4))
+            tk.Label(table_frame, text=h, font=self._font(11, "bold"), bg=SURFACE_HEADER_BG,
+                     fg="white", relief=tk.SOLID, bd=1, padx=self._s(8),
+                     pady=self._s(7)).grid(row=0, column=col, sticky="nsew", padx=2, pady=(0, self._s(4)))
         for col in range(len(headers)):
-            table_frame.grid_columnconfigure(col, weight=1 if col in (1, 2, 3, 4, 6, 7) else 0)
+            table_frame.grid_columnconfigure(
+                col, weight=1 if col in (1, 2, 3, 4, 6, 7, 8, 9) else 0
+            )
 
         self._rows = []
         self._locked = False
@@ -944,9 +1003,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        btn_frame.pack(fill=tk.X, padx=18, pady=(0, 18))
+        btn_frame.pack(fill=tk.X, padx=18, pady=(0, 14))
         btn_inner = tk.Frame(btn_frame, bg=SURFACE_BG)
-        btn_inner.pack(fill=tk.X, padx=14, pady=12)
+        btn_inner.pack(fill=tk.X, padx=12, pady=8)
 
         left_btn_frame = tk.Frame(btn_inner, bg=SURFACE_BG)
         left_btn_frame.pack(side=tk.LEFT, pady=2)
@@ -985,18 +1044,23 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         # Aplicar estado inicial según el perfil activo (debe ir después de crear todos los widgets)
         self._apply_preset_display(initial_preset)
 
-        # Centrar ventana
-        self.update_idletasks()
-        x = parent.winfo_x() + (parent.winfo_width() - self.winfo_reqwidth()) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - self.winfo_reqheight()) // 2
-        self.geometry("+%d+%d" % (x, y))
+        self._fit_window_to_content(center=True)
+
+    def _s(self, value, minimum=1):
+        scale = getattr(self, "_ui_scale", 0.82)
+        return max(minimum, int(round(value * scale)))
+
+    def _font(self, size, *styles):
+        scale = getattr(self, "_ui_scale", 0.82)
+        scaled_size = max(8, int(round(size * scale)))
+        return ("Consolas", scaled_size, *styles)
 
     def _configure_window_styles(self):
         style = ttk.Style(self)
         style.configure(
             self._combo_style_name,
-            padding=(8, 4, 8, 4),
-            font=("Consolas", 11),
+            padding=(self._s(8), self._s(4), self._s(8), self._s(4)),
+            font=self._font(11),
             foreground=TEXT_PRIMARY,
             fieldbackground=INPUT_BG,
             background=SURFACE_ALT_BG,
@@ -1015,39 +1079,172 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             arrowcolor=[("disabled", TEXT_MUTED), ("readonly", TEXT_PRIMARY)],
         )
 
+    def _fit_window_to_content(self, center=False):
+        if not hasattr(self, "tk"):
+            return
+        self.update_idletasks()
+        width = self.winfo_reqwidth()
+        height = self.winfo_reqheight()
+        self.minsize(width, height)
+
+        if center:
+            parent = getattr(self, "_parent_window", None)
+            if parent is not None:
+                x = parent.winfo_x() + (parent.winfo_width() - width) // 2
+                y = parent.winfo_y() + (parent.winfo_height() - height) // 2
+            else:
+                x = self.winfo_x()
+                y = self.winfo_y()
+            self.geometry(f"{width}x{height}+{x}+{y}")
+            return
+
+        x = self.winfo_x()
+        y = self.winfo_y()
+        self.geometry(f"{width}x{height}+{x}+{y}")
+
+    @staticmethod
+    def _base_transform_entry_behavior():
+        """Campos DH de J0: editables, pero distinguidos del resto por ser base fija."""
+        return ("fixed", False)
+
+    @staticmethod
+    def _base_metadata_entry_behavior():
+        """Campos no aplicables en J0: tipo, límites y dirección, siempre bloqueados."""
+        return ("disabled", True)
+
+    @staticmethod
+    def _joint_dh_entry_behavior(jtype, key):
+        """Clasifica el aspecto y la editabilidad de cada parámetro DH."""
+        if jtype == 'P' and key == 'theta':
+            return ("disabled", True)
+        if jtype == 'P' and key == 'd':
+            return ("accent", False)
+        if jtype == 'R' and key == 'theta':
+            return ("accent", False)
+        return ("standard", False)
+
+    @staticmethod
+    def _joint_direction_entry_behavior(jtype):
+        """Yaw/pitch solo aplican a prismáticas con preorientación."""
+        if jtype == 'P':
+            return ("standard", False)
+        return ("disabled", True)
+
     def _entry_options(self, variant="standard"):
         bg = INPUT_BG
         fg = TEXT_PRIMARY
+        border = PANEL_BORDER
         if variant == "fixed":
             bg = INPUT_FIXED_BG
-            fg = TEXT_MUTED
+            fg = TEXT_PRIMARY
+            border = INPUT_FIXED_BORDER
         elif variant == "disabled":
             bg = INPUT_DISABLED_BG
-            fg = TEXT_MUTED
+            fg = TEXT_DISABLED
+            border = INPUT_DISABLED_BORDER
         elif variant == "accent":
             bg = INPUT_ACCENT_BG
+            border = BLUE
         return {
             "bg": bg,
             "fg": fg,
             "bd": 1,
             "relief": tk.SOLID,
             "highlightthickness": 1,
-            "highlightbackground": PANEL_BORDER,
-            "highlightcolor": DARK_BLUE,
+            "highlightbackground": border,
+            "highlightcolor": border,
             "disabledbackground": INPUT_DISABLED_BG,
-            "disabledforeground": TEXT_MUTED,
+            "disabledforeground": TEXT_DISABLED,
             "readonlybackground": bg,
             "insertbackground": TEXT_PRIMARY,
         }
 
+    @staticmethod
+    def _remember_semantic_state(widget, state):
+        """Guarda el estado funcional del widget para restaurarlo tras bloquear/desbloquear."""
+        try:
+            widget._semantic_state = state
+        except Exception:
+            pass
+
+    @staticmethod
+    def _semantic_state_for_widget(widget):
+        state = getattr(widget, "_semantic_state", None)
+        if state:
+            return state
+        if isinstance(widget, ttk.Combobox):
+            return "readonly"
+        return "normal"
+
+    def _apply_widget_state(self, widget, locked):
+        target_state = "disabled" if locked else self._semantic_state_for_widget(widget)
+        try:
+            widget.configure(state=target_state)
+        except Exception:
+            pass
+
+    def _build_config_legend(self, parent):
+        """Añade una leyenda visual para interpretar los colores de la tabla."""
+        legend_frame = tk.Frame(parent, bg=SURFACE_BG)
+        legend_frame.pack(fill=tk.X, pady=(self._s(10), self._s(2)))
+
+        items_frame = tk.Frame(legend_frame, bg=SURFACE_BG)
+        items_frame.pack(fill=tk.X)
+
+        legend_items = [
+            ("Editable", "standard", "Parámetro general editable."),
+            ("Activa", "accent", "Variable principal de la articulación actual."),
+            ("Base fija", "fixed", "Parámetro de J0 editable, pero especial."),
+            ("Bloqueada", "disabled", "No aplica o no puede editarse."),
+        ]
+
+        for idx, (title, variant, description) in enumerate(legend_items):
+            item = tk.Frame(items_frame, bg=SURFACE_BG)
+            item.grid(row=idx // 2, column=idx % 2, sticky="ew", padx=(0, self._s(16)), pady=self._s(4))
+
+            options = self._entry_options(variant)
+            swatch = tk.Label(
+                item,
+                text="  ",
+                width=self._s(3),
+                relief=tk.SOLID,
+                bd=1,
+                bg=options["bg"],
+                fg=options["fg"],
+                highlightthickness=1,
+                highlightbackground=options["highlightbackground"],
+            )
+            swatch.pack(side=tk.LEFT, padx=(0, self._s(8)))
+
+            text_frame = tk.Frame(item, bg=SURFACE_BG)
+            text_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            tk.Label(
+                text_frame,
+                text=title,
+                bg=SURFACE_BG,
+                fg=TEXT_PRIMARY,
+                font=self._font(10, "bold"),
+            ).pack(anchor="w")
+            tk.Label(
+                text_frame,
+                text=description,
+                bg=SURFACE_BG,
+                fg=TEXT_MUTED,
+                font=self._font(9),
+            ).pack(anchor="w")
+
+        items_frame.grid_columnconfigure(0, weight=1)
+        items_frame.grid_columnconfigure(1, weight=1)
+        return legend_frame
+
     def _action_button_options(self, variant="secondary"):
         options = {
-            "font": ("Consolas", 11, "bold"),
+            "font": self._font(11, "bold"),
             "bd": 2,
             "relief": tk.SOLID,
             "highlightthickness": 1,
-            "padx": 14,
-            "pady": 6,
+            "padx": self._s(14),
+            "pady": self._s(6),
             "overrelief": tk.GROOVE,
         }
         if variant == "confirm":
@@ -1118,45 +1315,55 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         base = getattr(model, 'base_row', {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0})
 
         base_lbl = tk.Label(
-            table_frame, text="0", font=("Consolas", 11, "bold"),
-            width=3, bg=SURFACE_BG, fg=TEXT_MUTED
+            table_frame, text="0", font=self._font(11, "bold"),
+            width=self._s(3), bg=SURFACE_BG, fg=TEXT_MUTED
         )
         base_lbl.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
         self._base_row_widgets.append(base_lbl)
 
         for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
+            variant, disabled = self._base_transform_entry_behavior()
             entry = tk.Entry(
-                table_frame, font=("Consolas", 11), width=9,
-                **self._entry_options("fixed")
+                table_frame, font=self._font(11), width=self._s(9),
+                **self._entry_options(variant)
             )
             entry.insert(0, str(round(float(base.get(key, 0.0)), 2)))
+            self._remember_semantic_state(entry, "disabled" if disabled else "normal")
+            if disabled:
+                entry.configure(state="disabled")
             entry.grid(row=1, column=col + 1, sticky="nsew", padx=2, pady=2)
             self._base_row_entries[key] = entry
             self._base_row_widgets.append(entry)
             self._base_row_controls.append(entry)
 
+        type_variant, type_disabled = self._base_metadata_entry_behavior()
         type_entry = tk.Entry(
-            table_frame, font=("Consolas", 11), width=4, justify="center",
-            **self._entry_options("fixed")
+            table_frame, font=self._font(11), width=self._s(4), justify="center",
+            **self._entry_options(type_variant)
         )
         type_entry.insert(0, "F")
-        type_entry.configure(state="disabled")
+        self._remember_semantic_state(type_entry, "disabled" if type_disabled else "normal")
+        if type_disabled:
+            type_entry.configure(state="disabled")
         type_entry.grid(row=1, column=5, sticky="nsew", padx=2, pady=2)
         self._base_row_widgets.append(type_entry)
 
-        for col in (6, 7):
+        for col in (6, 7, 8, 9):
+            meta_variant, meta_disabled = self._base_metadata_entry_behavior()
             lim_entry = tk.Entry(
-                table_frame, font=("Consolas", 11), width=7, justify="center",
-                **self._entry_options("fixed")
+                table_frame, font=self._font(11), width=self._s(7), justify="center",
+                **self._entry_options(meta_variant)
             )
             lim_entry.insert(0, "--")
-            lim_entry.configure(state="disabled")
+            self._remember_semantic_state(lim_entry, "disabled" if meta_disabled else "normal")
+            if meta_disabled:
+                lim_entry.configure(state="disabled")
             lim_entry.grid(row=1, column=col, sticky="nsew", padx=2, pady=2)
             self._base_row_widgets.append(lim_entry)
 
-        note = tk.Label(table_frame, text="fija", font=("Consolas", 9),
+        note = tk.Label(table_frame, text="fija", font=self._font(9),
                         bg=SURFACE_BG, fg=TEXT_MUTED)
-        note.grid(row=1, column=8, padx=2, pady=2)
+        note.grid(row=1, column=10, padx=2, pady=2)
         self._base_row_widgets.append(note)
 
         for i in range(n):
@@ -1165,42 +1372,60 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             dh = model.dh_rows[i] if i < len(model.dh_rows) else {'theta': 0, 'd': 0, 'a': 100, 'alpha': 0}
             lims = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
             jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
+            raw_pre_rotations = getattr(model, 'prismatic_pre_rotations', []) or []
+            direction = raw_pre_rotations[i] if i < len(raw_pre_rotations) else {'yaw': 0.0, 'pitch': 0.0}
 
             joint_lbl = tk.Label(
-                table_frame, text=str(i + 1), font=("Consolas", 11, "bold"),
-                width=3, bg=SURFACE_BG, fg=TEXT_MUTED
+                table_frame, text=str(i + 1), font=self._font(11, "bold"),
+                width=self._s(3), bg=SURFACE_BG, fg=TEXT_MUTED
             )
             joint_lbl.grid(row=grid_row, column=0, sticky="nsew", padx=2, pady=2)
 
             dh_entries = []
             for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
-                if jtype == 'P' and key == 'theta':
-                    variant = "disabled"
-                    disabled = True
-                elif jtype == 'P' and key == 'd':
-                    variant = "accent"
-                    disabled = False
-                else:
-                    variant = "standard"
-                    disabled = False
+                variant, disabled = self._joint_dh_entry_behavior(jtype, key)
                 e = tk.Entry(
-                    table_frame, font=("Consolas", 11), width=9,
+                    table_frame, font=self._font(11), width=self._s(9),
                     **self._entry_options(variant)
                 )
                 e.insert(0, str(round(float(dh.get(key, 0.0)), 2)))
+                self._remember_semantic_state(e, "disabled" if disabled else "normal")
                 if disabled:
                     e.configure(state="disabled")
                 e.grid(row=grid_row, column=col + 1, sticky="nsew", padx=2, pady=2)
                 dh_entries.append(e)
             row_entries.extend(dh_entries)
 
-            def _make_type_cb(combo, theta_e, d_e, a_e):
+            direction_entries = []
+            for offset, key in enumerate(('yaw', 'pitch')):
+                direction_variant, direction_disabled = self._joint_direction_entry_behavior(jtype)
+                direction_entry = tk.Entry(
+                    table_frame, font=self._font(11), width=self._s(7),
+                    **self._entry_options(direction_variant)
+                )
+                direction_entry.insert(0, str(round(float(direction.get(key, 0.0)), 2)))
+                self._remember_semantic_state(direction_entry, "disabled" if direction_disabled else "normal")
+                if direction_disabled:
+                    direction_entry.configure(state="disabled")
+                direction_entry.grid(row=grid_row, column=offset + 8, sticky="nsew", padx=2, pady=2)
+                direction_entries.append(direction_entry)
+
+            def _make_type_cb(combo, theta_e, d_e, a_e, direction_widgets, unit_widget):
                 def _cb(_evt=None):
                     new_jt = combo.get()
                     if new_jt == 'P':
                         theta_e.configure(state='normal', **self._entry_options("disabled"))
                         theta_e.configure(state='disabled')
+                        self._remember_semantic_state(theta_e, "disabled")
                         d_e.configure(state='normal', **self._entry_options("accent"))
+                        self._remember_semantic_state(d_e, "normal")
+                        unit_widget.configure(text="mm")
+                        defaults = ('0.0', '0.0')
+                        for idx, direction_e in enumerate(direction_widgets):
+                            direction_e.configure(state='normal', **self._entry_options("standard"))
+                            self._remember_semantic_state(direction_e, "normal")
+                            if not str(direction_e.get()).strip():
+                                direction_e.insert(0, defaults[idx])
                         try:
                             a_val = float(a_e.get())
                             d_val = float(d_e.get())
@@ -1214,9 +1439,17 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                         except (ValueError, tk.TclError):
                             pass
                     else:
-                        theta_e.configure(state='normal', **self._entry_options("standard"))
+                        theta_e.configure(state='normal', **self._entry_options("accent"))
+                        self._remember_semantic_state(theta_e, "normal")
                         d_e.configure(state='normal', **self._entry_options("standard"))
+                        self._remember_semantic_state(d_e, "normal")
                         a_e.configure(state='normal', **self._entry_options("standard"))
+                        self._remember_semantic_state(a_e, "normal")
+                        unit_widget.configure(text="deg")
+                        for direction_e in direction_widgets:
+                            direction_e.configure(state='normal', **self._entry_options("disabled"))
+                            direction_e.configure(state='disabled')
+                            self._remember_semantic_state(direction_e, "disabled")
                         try:
                             d_val = float(d_e.get())
                             a_val = float(a_e.get())
@@ -1230,37 +1463,45 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 return _cb
 
             type_combo = ttk.Combobox(
-                table_frame, values=["R", "P"], state="readonly", width=4,
+                table_frame, values=["R", "P"], state="readonly", width=self._s(4),
                 style=self._combo_style_name
             )
             type_combo.set(jtype)
+            self._remember_semantic_state(type_combo, "readonly")
             type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=2, pady=2)
-            type_combo.bind("<<ComboboxSelected>>",
-                            _make_type_cb(type_combo, dh_entries[0], dh_entries[1], dh_entries[2]))
             row_entries.append(type_combo)
 
             lim_unit = "mm" if jtype == 'P' else "deg"
             e_min = tk.Entry(
-                table_frame, font=("Consolas", 11), width=7,
+                table_frame, font=self._font(11), width=self._s(7),
                 **self._entry_options("standard")
             )
             e_min.insert(0, str(round(float(lims[0]), 1)))
             e_min.grid(row=grid_row, column=6, sticky="nsew", padx=2, pady=2)
 
             e_max = tk.Entry(
-                table_frame, font=("Consolas", 11), width=7,
+                table_frame, font=self._font(11), width=self._s(7),
                 **self._entry_options("standard")
             )
             e_max.insert(0, str(round(float(lims[1]), 1)))
             e_max.grid(row=grid_row, column=7, sticky="nsew", padx=2, pady=2)
 
             unit_lbl = tk.Label(
-                table_frame, text=lim_unit, font=("Consolas", 9),
+                table_frame, text=lim_unit, font=self._font(9),
                 bg=SURFACE_BG, fg=TEXT_MUTED
             )
-            unit_lbl.grid(row=grid_row, column=8, padx=2, pady=2)
+            unit_lbl.grid(row=grid_row, column=10, padx=2, pady=2)
 
-            row_entries.extend([e_min, e_max, unit_lbl, joint_lbl])
+            type_combo.bind(
+                "<<ComboboxSelected>>",
+                _make_type_cb(
+                    type_combo, dh_entries[0], dh_entries[1], dh_entries[2], direction_entries, unit_lbl
+                )
+            )
+
+            row_entries.extend([e_min, e_max])
+            row_entries.extend(direction_entries)
+            row_entries.extend([unit_lbl, joint_lbl])
             self._rows.append(row_entries)
 
         # Respetar el estado de bloqueo si ya estaba activo
@@ -1307,18 +1548,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         # Aplicar a las filas de la tabla DH
         for row in self._rows:
             for widget in row:
-                try:
-                    if isinstance(widget, ttk.Combobox):
-                        widget.configure(state=state_combo)
-                    else:
-                        widget.configure(state=state_spin)
-                except Exception:
-                    pass
+                self._apply_widget_state(widget, locked)
         for widget in self._base_row_controls:
-            try:
-                widget.configure(state=state_spin)
-            except Exception:
-                pass
+            self._apply_widget_state(widget, locked)
 
     def _on_preset_selected(self, _event=None):
         """Carga el preset seleccionado y repuebla DOF, modo visual y tabla DH."""
@@ -1342,9 +1574,110 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._apply_preset_display(name)
         self.motor3d.active_preset_name = name if name != "Custom" else None
         self.motor3d.model.preset_name = self.motor3d.active_preset_name
+        self._clear_combo_focus()
+
+    def _on_visual_mode_selected(self, _event=None):
+        self._clear_combo_focus()
+
+    def _clear_combo_focus(self):
+        def _clear():
+            widget = self.focus_get()
+            try:
+                if widget is not None and hasattr(widget, "selection_clear"):
+                    widget.selection_clear()
+            except Exception:
+                pass
+            try:
+                self.focus_set()
+            except Exception:
+                pass
+
+        try:
+            self.after_idle(_clear)
+        except Exception:
+            _clear()
+
+    def _snapshot_config_from_inputs(self, target_dof=None):
+        """Construye una configuración desde la GUI actual sin invalidar el flujo por errores parciales."""
+        current = self.motor3d.get_model_config()
+        n = len(self._rows)
+
+        current_dh = list(current.get('dh_rows', []))
+        current_types = list(current.get('joint_types', []))
+        current_limits = list(current.get('joint_limits', []))
+        current_dirs = list(current.get('prismatic_pre_rotations', []))
+        current_base = dict(current.get('base', {}))
+
+        dh_rows = []
+        joint_types = []
+        joint_limits = []
+        prismatic_pre_rotations = []
+
+        for i, row in enumerate(self._rows):
+            prev_dh = current_dh[i] if i < len(current_dh) else {'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0}
+            prev_type = current_types[i] if i < len(current_types) else 'R'
+            prev_limits = current_limits[i] if i < len(current_limits) else (-90.0, 90.0)
+            prev_dir = current_dirs[i] if i < len(current_dirs) else {'yaw': 0.0, 'pitch': 0.0}
+
+            parsed_dh = {}
+            for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
+                try:
+                    parsed_dh[key] = float(row[col].get())
+                except (ValueError, TypeError):
+                    parsed_dh[key] = float(prev_dh.get(key, 0.0 if key != 'a' else 100.0))
+            dh_rows.append(parsed_dh)
+
+            try:
+                jtype = row[4].get()
+            except Exception:
+                jtype = prev_type
+            joint_types.append(jtype if jtype in ('R', 'P') else prev_type)
+
+            try:
+                lim_min = float(row[5].get())
+            except (ValueError, TypeError):
+                lim_min = float(prev_limits[0])
+            try:
+                lim_max = float(row[6].get())
+            except (ValueError, TypeError):
+                lim_max = float(prev_limits[1])
+            joint_limits.append((lim_min, lim_max))
+
+            direction = {'yaw': 0.0, 'pitch': 0.0}
+            if joint_types[-1] == 'P':
+                try:
+                    direction['yaw'] = float(row[7].get())
+                except (ValueError, TypeError):
+                    direction['yaw'] = float(prev_dir.get('yaw', 0.0))
+                try:
+                    direction['pitch'] = float(row[8].get())
+                except (ValueError, TypeError):
+                    direction['pitch'] = float(prev_dir.get('pitch', 0.0))
+            prismatic_pre_rotations.append(direction)
+
+        base_row = {}
+        for key, entry in self._base_row_entries.items():
+            try:
+                base_row[key] = float(entry.get())
+            except (ValueError, TypeError):
+                base_row[key] = float(current_base.get(key, 0.0))
+
+        current['dof'] = target_dof if target_dof is not None else n
+        current['dh_rows'] = dh_rows
+        current['joint_types'] = joint_types
+        current['joint_limits'] = joint_limits
+        current['prismatic_pre_rotations'] = prismatic_pre_rotations
+        current['base'] = base_row
+        current['visual'] = dict(current.get('visual', {}))
+        current['visual']['mode'] = self._visual_var.get()
+        return current
 
     def _on_dof_change(self):
+        config = self._snapshot_config_from_inputs(target_dof=self._dof_var.get())
+        self.motor3d.set_model_config(config)
         self._build_dh_rows(self._table_frame)
+        self._refresh_base_row_entries()
+        self._fit_window_to_content()
 
     def _refresh_base_row_entries(self):
         base_row = dict(getattr(
@@ -1373,11 +1706,29 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         else:
             self._help_frame.pack_configure(pady=(12, 0))
             self._help_body.pack(fill=tk.X, padx=14, pady=(8, 12))
+            try:
+                self._help_canvas.yview_moveto(0.0)
+            except Exception:
+                pass
             self._help_btn.configure(
                 text="Ocultar ayuda de configuracion",
                 relief=tk.SUNKEN,
             )
             self._help_visible = True
+        self._fit_window_to_content()
+
+    def _on_help_mousewheel(self, event):
+        try:
+            delta = event.delta
+        except Exception:
+            return
+        if not delta:
+            return
+        step = -1 if delta > 0 else 1
+        try:
+            self._help_canvas.yview_scroll(step, "units")
+        except Exception:
+            pass
 
     def _collect_config(self):
         """Lee los valores de la tabla y retorna (dict, None) o (None, mensaje_error).
@@ -1386,12 +1737,16 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         dh_rows = []
         joint_types = []
         joint_limits = []
+        prismatic_pre_rotations = []
         base_row = {}
         errors = []
 
         # Limpiar resaltados previos
         for row in self._rows:
-            for widget in (row[0], row[1], row[2], row[3], row[5], row[6]):
+            for idx in (0, 1, 2, 3, 5, 6, 7, 8):
+                if idx >= len(row):
+                    continue
+                widget = row[idx]
                 try:
                     widget.configure(highlightthickness=0)
                 except Exception:
@@ -1440,6 +1795,26 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
             jtype = row[4].get() if hasattr(row[4], 'get') else 'R'
             joint_types.append(jtype)
+
+            direction = {'yaw': 0.0, 'pitch': 0.0}
+            if jtype == 'P':
+                direction_ok = True
+                try:
+                    direction['yaw'] = float(row[7].get())
+                except ValueError:
+                    _mark_invalid(row[7], f"J{joint_n}: Dir yaw no es un numero valido.")
+                    direction_ok = False
+
+                try:
+                    direction['pitch'] = float(row[8].get())
+                except ValueError:
+                    _mark_invalid(row[8], f"J{joint_n}: Dir pitch no es un numero valido.")
+                    direction_ok = False
+
+                if direction_ok and abs(direction['pitch']) > 180.0:
+                    _mark_invalid(row[8], f"J{joint_n}: Dir pitch debe quedar entre -180 y 180 grados.")
+
+            prismatic_pre_rotations.append(direction)
 
             lim_ok = True
             try:
@@ -1495,6 +1870,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['dh_rows'] = dh_rows
         current['joint_types'] = joint_types
         current['joint_limits'] = joint_limits
+        current['prismatic_pre_rotations'] = prismatic_pre_rotations
         current['base'] = dict(base_row)
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()

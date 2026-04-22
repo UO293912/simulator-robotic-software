@@ -18,6 +18,7 @@ class ArmKinematicState:
         self.joint_limits = []
         self.joint_types = []
         self.dh_rows = []
+        self.prismatic_pre_rotations = []
         self.base_row = {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}
         self.preset_name = None
         self.tool_parent_joint = -1
@@ -26,7 +27,7 @@ class ArmKinematicState:
 
     def configure(self, dof, link_lengths=None, joint_limits=None,
                   joint_types=None, joints=None, dh_rows=None,
-                  tool=None, visual=None, base=None):
+                  tool=None, visual=None, base=None, prismatic_pre_rotations=None):
         self.dof = max(self.MIN_DOF, min(self.MAX_DOF, int(dof)))
         n = self.dof
 
@@ -65,6 +66,14 @@ class ArmKinematicState:
             i = len(self.dh_rows)
             ll = self.link_lengths[i] if i < len(self.link_lengths) else 100.0
             self.dh_rows.append({'theta': 0.0, 'd': 0.0, 'a': float(ll), 'alpha': 0.0})
+
+        raw_prismatic_rotations = list(prismatic_pre_rotations) if prismatic_pre_rotations else []
+        self.prismatic_pre_rotations = [
+            self._normalize_prismatic_pre_rotation(item)
+            for item in raw_prismatic_rotations[:n]
+        ]
+        while len(self.prismatic_pre_rotations) < n:
+            self.prismatic_pre_rotations.append({'yaw': 0.0, 'pitch': 0.0})
 
         self.base_row = self._normalize_base_row(base)
 
@@ -132,6 +141,7 @@ class ArmKinematicState:
             'joint_limits': [list(lim) for lim in self.joint_limits],
             'joint_types': list(self.joint_types),
             'dh_rows': [dict(row) for row in self.dh_rows],
+            'prismatic_pre_rotations': [dict(item) for item in self.prismatic_pre_rotations],
             'base': dict(self.base_row),
             'preset_name': self.preset_name,
             'tool': {
@@ -154,6 +164,7 @@ class ArmKinematicState:
             base=data.get('base'),
             tool=data.get('tool'),
             visual=data.get('visual'),
+            prismatic_pre_rotations=data.get('prismatic_pre_rotations'),
         )
 
     def _sync_link_lengths_from_dh(self):
@@ -165,6 +176,31 @@ class ArmKinematicState:
         for i in range(self.dof):
             mn, mx = self.joint_limits[i]
             self.joints[i] = max(mn, min(mx, self.joints[i]))
+
+    @staticmethod
+    def _normalize_prismatic_pre_rotation(item):
+        default = {'yaw': 0.0, 'pitch': 0.0}
+
+        if isinstance(item, dict):
+            source_yaw = item.get('yaw', 0.0)
+            source_pitch = item.get('pitch', 0.0)
+        elif isinstance(item, (list, tuple)):
+            source_yaw = item[0] if len(item) > 0 else 0.0
+            source_pitch = item[1] if len(item) > 1 else 0.0
+        else:
+            return dict(default)
+
+        try:
+            yaw = float(source_yaw)
+        except (TypeError, ValueError):
+            yaw = 0.0
+
+        try:
+            pitch = float(source_pitch)
+        except (TypeError, ValueError):
+            pitch = 0.0
+
+        return {'yaw': yaw, 'pitch': pitch}
 
     @staticmethod
     def _normalize_base_row(base):
