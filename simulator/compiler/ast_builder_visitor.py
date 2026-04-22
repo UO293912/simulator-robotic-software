@@ -21,6 +21,29 @@ else:
 
 class ASTBuilderVisitor(ArduinoVisitor):
 
+    def visit(self, tree):
+        """Compatibilidad con parsers generados sin métodos `accept()` específicos.
+
+        Parte del código heredado invoca `visitor.visit(tree)` sobre contextos del
+        parser. En este repositorio, el parser generado no expone los `accept()`
+        especializados por regla y, si delegamos en el comportamiento genérico de
+        ANTLR, la visita acaba en `visitChildren()` y el AST raíz puede quedar en
+        `None`.
+
+        Para mantener el contrato esperado por los tests heredados y por el resto
+        del compilador, despachamos explícitamente al método `visit<Rule>` cuando
+        exista para el contexto recibido.
+        """
+        if tree is None:
+            return None
+        ctx_name = type(tree).__name__
+        if ctx_name.endswith("Context"):
+            method_name = "visit" + ctx_name[:-7]
+            visitor = getattr(self, method_name, None)
+            if callable(visitor):
+                return visitor(tree)
+        return super().visit(tree)
+
     # Visit a parse tree produced by ArduinoParser#start.
     def visitStart(self, ctx: ArduinoParser.StartContext):
         return self.visitChildren(ctx)
