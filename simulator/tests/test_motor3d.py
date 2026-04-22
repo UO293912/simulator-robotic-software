@@ -42,7 +42,17 @@ def braccio_model():
 def motor3d_api():
     """Motor3DApi inicializado con preset Braccio."""
     from motor3d.api import Motor3DApi
-    return Motor3DApi()
+    from motor3d.persistence.arm_config_repository import ArmConfigRepository
+
+    api = Motor3DApi()
+    repo = ArmConfigRepository()
+    ok = repo.load_builtin_preset(api.model, "braccio_tinkerkit", silent=True)
+    assert ok, "No se pudo recargar el preset braccio_tinkerkit en Motor3DApi"
+    api._sync_active_preset_name()
+    api._sync_camera_distance_for_model()
+    api.scene.clear_trail()
+    api.scene.update()
+    return api
 
 
 class _MockCanvas:
@@ -791,6 +801,45 @@ def test_arm3d_config_locked_preset_keeps_confirm_enabled():
     assert window._btn_save.options["state"] == "normal"
 
 
+def test_arm3d_unlock_restores_semantic_disabled_fields():
+    """Al salir de modo bloqueado, los campos semánticamente deshabilitados deben seguirlo estando."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    class DummyWidget:
+        def __init__(self, semantic_state="normal"):
+            self.options = {}
+            self._semantic_state = semantic_state
+
+        def configure(self, **kwargs):
+            self.options.update(kwargs)
+
+    class DummyCombo(DummyWidget):
+        pass
+
+    window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
+    window._dof_spin = DummyWidget()
+    window._vis_combo = DummyCombo("readonly")
+    window._btn_import = DummyWidget()
+    window._btn_export = DummyWidget()
+    window._btn_save = DummyWidget()
+    yaw_disabled = DummyWidget("disabled")
+    pitch_disabled = DummyWidget("disabled")
+    theta_disabled = DummyWidget("disabled")
+    editable = DummyWidget("normal")
+    combo = DummyCombo("readonly")
+    window._rows = [[editable, theta_disabled, yaw_disabled, pitch_disabled, combo]]
+    window._base_row_controls = [DummyWidget("normal")]
+
+    Arm3DConfigurationWindow._set_locked(window, True)
+    Arm3DConfigurationWindow._set_locked(window, False)
+
+    assert editable.options["state"] == "normal"
+    assert theta_disabled.options["state"] == "disabled"
+    assert yaw_disabled.options["state"] == "disabled"
+    assert pitch_disabled.options["state"] == "disabled"
+    assert combo.options["state"] == "readonly"
+
+
 class _ConfigField:
     def __init__(self, value):
         self.value = value
@@ -828,6 +877,116 @@ def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_m
     window.motor3d = SimpleNamespace(get_model_config=lambda: {'visual': {'mode': 'auto_generic'}})
     window._visual_var = SimpleNamespace(get=lambda: 'auto_generic')
     return window
+
+
+def test_arm3d_config_field_behaviors_are_classified_explicitly():
+    """La GUI debe distinguir entre campos fijos editables y campos deshabilitados."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    assert Arm3DConfigurationWindow._base_transform_entry_behavior() == ("fixed", False)
+    assert Arm3DConfigurationWindow._base_metadata_entry_behavior() == ("disabled", True)
+    assert Arm3DConfigurationWindow._joint_dh_entry_behavior('P', 'theta') == ("disabled", True)
+    assert Arm3DConfigurationWindow._joint_dh_entry_behavior('P', 'd') == ("accent", False)
+    assert Arm3DConfigurationWindow._joint_dh_entry_behavior('R', 'theta') == ("accent", False)
+    assert Arm3DConfigurationWindow._joint_dh_entry_behavior('R', 'd') == ("standard", False)
+    assert Arm3DConfigurationWindow._joint_dh_entry_behavior('R', 'a') == ("standard", False)
+    assert Arm3DConfigurationWindow._joint_direction_entry_behavior('R') == ("disabled", True)
+    assert Arm3DConfigurationWindow._joint_direction_entry_behavior('P') == ("standard", False)
+
+
+def test_arm3d_fixed_palette_is_visually_distinct_from_disabled():
+    """Los estilos fixed y disabled deben verse distintos para evitar confusiÃ³n."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
+    fixed = Arm3DConfigurationWindow._entry_options(window, "fixed")
+    disabled = Arm3DConfigurationWindow._entry_options(window, "disabled")
+
+    assert fixed["bg"] != disabled["bg"]
+    assert fixed["fg"] != disabled["fg"]
+    assert fixed["highlightbackground"] != disabled["highlightbackground"]
+    assert fixed["disabledbackground"] == disabled["bg"]
+
+
+def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
+    """Cambiar DOF debe conservar la configuración ya escrita en las joints que siguen existiendo."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    class DummyMotor:
+        def __init__(self):
+            self.model = SimpleNamespace(dof=3)
+            self.saved_config = None
+
+        def get_model_config(self):
+            return {
+                'dof': 3,
+                'dh_rows': [
+                    {'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0},
+                    {'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0},
+                    {'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0},
+                ],
+                'joint_types': ['R', 'R', 'R'],
+                'joint_limits': [(-90.0, 90.0), (-90.0, 90.0), (-90.0, 90.0)],
+                'prismatic_pre_rotations': [
+                    {'yaw': 0.0, 'pitch': 0.0},
+                    {'yaw': 0.0, 'pitch': 0.0},
+                    {'yaw': 0.0, 'pitch': 0.0},
+                ],
+                'base': {'theta': 5.0, 'd': 6.0, 'a': 7.0, 'alpha': 8.0},
+                'visual': {'mode': 'auto_generic'},
+            }
+
+        def set_model_config(self, config):
+            self.saved_config = config
+
+    window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
+    window.motor3d = DummyMotor()
+    window._rows = [
+        [
+            _ConfigField("10"), _ConfigField("20"), _ConfigField("30"), _ConfigField("40"),
+            _ConfigField("R"), _ConfigField("-10"), _ConfigField("50"),
+            _ConfigField("0"), _ConfigField("0"),
+        ],
+        [
+            _ConfigField("1"), _ConfigField("2"), _ConfigField("3"), _ConfigField("4"),
+            _ConfigField("P"), _ConfigField("0"), _ConfigField("120"),
+            _ConfigField("90"), _ConfigField("45"),
+        ],
+        [
+            _ConfigField("7"), _ConfigField("8"), _ConfigField("9"), _ConfigField("10"),
+            _ConfigField("R"), _ConfigField("-30"), _ConfigField("30"),
+            _ConfigField("0"), _ConfigField("0"),
+        ],
+    ]
+    window._base_row_entries = {
+        'theta': _ConfigField("11"),
+        'd': _ConfigField("12"),
+        'a': _ConfigField("13"),
+        'alpha': _ConfigField("14"),
+    }
+    window._visual_var = SimpleNamespace(get=lambda: 'skeleton')
+    window._dof_var = SimpleNamespace(get=lambda: 2)
+    window._table_frame = object()
+    window._build_dh_rows = lambda _frame: None
+    window._refresh_base_row_entries = lambda: None
+
+    Arm3DConfigurationWindow._on_dof_change(window)
+
+    saved = window.motor3d.saved_config
+    assert saved is not None
+    assert saved['dof'] == 2
+    assert saved['dh_rows'][:2] == [
+        {'theta': 10.0, 'd': 20.0, 'a': 30.0, 'alpha': 40.0},
+        {'theta': 1.0, 'd': 2.0, 'a': 3.0, 'alpha': 4.0},
+    ]
+    assert saved['joint_types'][:2] == ['R', 'P']
+    assert saved['joint_limits'][:2] == [(-10.0, 50.0), (0.0, 120.0)]
+    assert saved['prismatic_pre_rotations'][:2] == [
+        {'yaw': 0.0, 'pitch': 0.0},
+        {'yaw': 90.0, 'pitch': 45.0},
+    ]
+    assert saved['base'] == {'theta': 11.0, 'd': 12.0, 'a': 13.0, 'alpha': 14.0}
+    assert saved['visual']['mode'] == 'skeleton'
 
 
 def test_arm3d_collect_config_allows_zero_a_zero_d_and_equal_rotational_limits():

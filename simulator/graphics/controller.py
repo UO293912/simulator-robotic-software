@@ -52,21 +52,30 @@ class RobotsController:
             if user_ast is not None:
                 self.probe_robot(option_gamification)
 
-    def drawing_loop(self, generation):
-        if generation != self._loop_generation or not self.executing:
+    def drawing_loop(self, generation=None):
+        current_generation = getattr(self, "_loop_generation", 0)
+        if generation is None:
+            generation = current_generation
+        if generation != current_generation or not getattr(self, "executing", False):
             return  # iteración huérfana: otra ejecución tomó el control o se detuvo
         screen_updater.refresh()
-        if not self.view.keys_used:
+        view = getattr(self, "view", None)
+        if view is None:
+            return
+        if not getattr(view, "keys_used", False):
             # RF3.1.2/RF3.3.4: pausar la ejecución del sketch cuando la seguridad está bloqueada.
             safety_blocked = (
-                self.arm3d
-                and isinstance(self.robot_layer, layers.Arm3DLayer)
-                and self.robot_layer.safety_blocked
+                getattr(self, "arm3d", False)
+                and isinstance(getattr(self, "robot_layer", None), layers.Arm3DLayer)
+                and getattr(self.robot_layer, "safety_blocked", False)
             )
             # RF4.2.2: no ejecutar loop() cuando la simulación está pausada (breakpoint o Pause).
-            if not safety_blocked and not self.paused:
-                self.loop_command.execute()
-        self.view.identifier = self.view.after(10, lambda: self.drawing_loop(generation))
+            if not safety_blocked and not getattr(self, "paused", False):
+                loop_command = getattr(self, "loop_command", None)
+                if loop_command is not None:
+                    loop_command.execute()
+        if hasattr(view, "after"):
+            view.identifier = view.after(10, lambda: self.drawing_loop(generation))
 
     def arm3d_render_loop(self):
         """Bucle de renderizado pasivo para el brazo 3D cuando no hay código ejecutándose."""
@@ -122,10 +131,11 @@ class RobotsController:
 
     def step_once(self):
         """Ejecuta exactamente una sentencia más y vuelve a pausar (botón Step)."""
-        if self.executing and self.paused:
+        if getattr(self, "executing", False) and getattr(self, "paused", False):
             # Limpiar el highlight inmediatamente: feedback visual de que el paso se registró
-            if hasattr(self.view, "editor_frame"):
-                self.view.editor_frame.clear_exec_line()
+            view = getattr(self, "view", None)
+            if view is not None and hasattr(view, "editor_frame"):
+                view.editor_frame.clear_exec_line()
             self.step_pending = True
             self.paused = False  # Desbloquea el hilo; debug_line() volverá a pausar
             self._notify_state("running")
@@ -143,16 +153,19 @@ class RobotsController:
 
     def _notify_state(self, state: str):
         """Actualiza el badge visual y escribe en la consola del simulador."""
+        view = getattr(self, "view", None)
         if threading.current_thread() is not threading.main_thread():
-            self.view.after(0, lambda: self._notify_state(state))
+            if view is not None and hasattr(view, "after"):
+                view.after(0, lambda: self._notify_state(state))
             return
-        changed = state != self._sim_state
+        changed = state != getattr(self, "_sim_state", None)
         self._sim_state = state
-        if hasattr(self.view, "button_bar"):
-            self.view.button_bar.update_state(state)
+        if view is not None and hasattr(view, "button_bar"):
+            view.button_bar.update_state(state)
         # Solo escribir mensaje en consola cuando hay transición real de estado
-        if changed and self.console and state in self._STATE_MESSAGES:
-            self.console.write_output(self._STATE_MESSAGES[state])
+        console_obj = getattr(self, "console", None)
+        if changed and console_obj and state in self._STATE_MESSAGES:
+            console_obj.write_output(self._STATE_MESSAGES[state])
 
     def set_breakpoints(self, lines):
         """Establece el conjunto de líneas Arduino con breakpoint activo."""
@@ -167,9 +180,10 @@ class RobotsController:
 
     def debug_should_pause_at_line(self, line_no):
         """Consultado por screen_updater.debug_line(). Devuelve True si hay que pausar."""
-        if self.paused:
+        if getattr(self, "paused", False):
             return True
-        if line_no in self._breakpoints or self.step_pending:
+        breakpoints = getattr(self, "_breakpoints", set())
+        if line_no in breakpoints or getattr(self, "step_pending", False):
             self.step_pending = False
             self.paused = True
             self._notify_state("paused")
