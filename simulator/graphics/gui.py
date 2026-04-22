@@ -1,3 +1,4 @@
+import math
 import re
 import tkinter as tk
 import tkinter.messagebox as messagebox
@@ -901,7 +902,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             "J0 fija no cuenta como DOF y solo sirve para reorientar o desplazar la base.\n"
             "En la primera articulacion puede usarse para cambiar el plano del movimiento.\n"
             "Ejemplo: J0 theta=90, d=0, a=0, alpha=90 + J1 con a=200 -> pendulo sobre X.\n"
-            "Si la orientacion queda invertida, prueba sumar o restar 180 a theta."
+            "Si la orientacion queda invertida, prueba sumar o restar 180 a theta.\n"
+            "\n"
+            "Prismaticas en cualquier direccion (variante con preorientacion):\n"
+            "  Dir yaw y Dir pitch giran la prismatica antes del deslizamiento.\n"
+            "  Ejemplo: yaw=0, pitch=0 -> Z local; yaw=0, pitch=90 -> X local."
         )
         tk.Label(
             self._help_body,
@@ -925,13 +930,18 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         table_frame = tk.Frame(table_shell, bg=SURFACE_BG)
         table_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
-        headers = ["J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)", "Tipo", "Lím min", "Lím max"]
+        headers = [
+            "J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)",
+            "Tipo", "Lim min", "Lim max", "Dir yaw", "Dir pitch"
+        ]
         for col, h in enumerate(headers):
             tk.Label(table_frame, text=h, font=("Consolas", 11, "bold"), bg=SURFACE_HEADER_BG,
                      fg="white", relief=tk.SOLID, bd=1, padx=8,
                      pady=7).grid(row=0, column=col, sticky="nsew", padx=2, pady=(0, 4))
         for col in range(len(headers)):
-            table_frame.grid_columnconfigure(col, weight=1 if col in (1, 2, 3, 4, 6, 7) else 0)
+            table_frame.grid_columnconfigure(
+                col, weight=1 if col in (1, 2, 3, 4, 6, 7, 8, 9) else 0
+            )
 
         self._rows = []
         self._locked = False
@@ -1144,7 +1154,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         type_entry.grid(row=1, column=5, sticky="nsew", padx=2, pady=2)
         self._base_row_widgets.append(type_entry)
 
-        for col in (6, 7):
+        for col in (6, 7, 8, 9):
             lim_entry = tk.Entry(
                 table_frame, font=("Consolas", 11), width=7, justify="center",
                 **self._entry_options("fixed")
@@ -1156,7 +1166,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
         note = tk.Label(table_frame, text="fija", font=("Consolas", 9),
                         bg=SURFACE_BG, fg=TEXT_MUTED)
-        note.grid(row=1, column=8, padx=2, pady=2)
+        note.grid(row=1, column=10, padx=2, pady=2)
         self._base_row_widgets.append(note)
 
         for i in range(n):
@@ -1165,6 +1175,8 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             dh = model.dh_rows[i] if i < len(model.dh_rows) else {'theta': 0, 'd': 0, 'a': 100, 'alpha': 0}
             lims = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
             jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
+            raw_pre_rotations = getattr(model, 'prismatic_pre_rotations', []) or []
+            direction = raw_pre_rotations[i] if i < len(raw_pre_rotations) else {'yaw': 0.0, 'pitch': 0.0}
 
             joint_lbl = tk.Label(
                 table_frame, text=str(i + 1), font=("Consolas", 11, "bold"),
@@ -1194,13 +1206,32 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 dh_entries.append(e)
             row_entries.extend(dh_entries)
 
-            def _make_type_cb(combo, theta_e, d_e, a_e):
+            direction_entries = []
+            for offset, key in enumerate(('yaw', 'pitch')):
+                direction_variant = "standard" if jtype == 'P' else "disabled"
+                direction_entry = tk.Entry(
+                    table_frame, font=("Consolas", 11), width=7,
+                    **self._entry_options(direction_variant)
+                )
+                direction_entry.insert(0, str(round(float(direction.get(key, 0.0)), 2)))
+                if jtype != 'P':
+                    direction_entry.configure(state="disabled")
+                direction_entry.grid(row=grid_row, column=offset + 8, sticky="nsew", padx=2, pady=2)
+                direction_entries.append(direction_entry)
+
+            def _make_type_cb(combo, theta_e, d_e, a_e, direction_widgets, unit_widget):
                 def _cb(_evt=None):
                     new_jt = combo.get()
                     if new_jt == 'P':
                         theta_e.configure(state='normal', **self._entry_options("disabled"))
                         theta_e.configure(state='disabled')
                         d_e.configure(state='normal', **self._entry_options("accent"))
+                        unit_widget.configure(text="mm")
+                        defaults = ('0.0', '0.0')
+                        for idx, direction_e in enumerate(direction_widgets):
+                            direction_e.configure(state='normal', **self._entry_options("standard"))
+                            if not str(direction_e.get()).strip():
+                                direction_e.insert(0, defaults[idx])
                         try:
                             a_val = float(a_e.get())
                             d_val = float(d_e.get())
@@ -1217,6 +1248,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                         theta_e.configure(state='normal', **self._entry_options("standard"))
                         d_e.configure(state='normal', **self._entry_options("standard"))
                         a_e.configure(state='normal', **self._entry_options("standard"))
+                        unit_widget.configure(text="deg")
+                        for direction_e in direction_widgets:
+                            direction_e.configure(state='normal', **self._entry_options("disabled"))
+                            direction_e.configure(state='disabled')
                         try:
                             d_val = float(d_e.get())
                             a_val = float(a_e.get())
@@ -1235,8 +1270,6 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             )
             type_combo.set(jtype)
             type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=2, pady=2)
-            type_combo.bind("<<ComboboxSelected>>",
-                            _make_type_cb(type_combo, dh_entries[0], dh_entries[1], dh_entries[2]))
             row_entries.append(type_combo)
 
             lim_unit = "mm" if jtype == 'P' else "deg"
@@ -1258,9 +1291,18 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 table_frame, text=lim_unit, font=("Consolas", 9),
                 bg=SURFACE_BG, fg=TEXT_MUTED
             )
-            unit_lbl.grid(row=grid_row, column=8, padx=2, pady=2)
+            unit_lbl.grid(row=grid_row, column=10, padx=2, pady=2)
 
-            row_entries.extend([e_min, e_max, unit_lbl, joint_lbl])
+            type_combo.bind(
+                "<<ComboboxSelected>>",
+                _make_type_cb(
+                    type_combo, dh_entries[0], dh_entries[1], dh_entries[2], direction_entries, unit_lbl
+                )
+            )
+
+            row_entries.extend([e_min, e_max])
+            row_entries.extend(direction_entries)
+            row_entries.extend([unit_lbl, joint_lbl])
             self._rows.append(row_entries)
 
         # Respetar el estado de bloqueo si ya estaba activo
@@ -1386,12 +1428,16 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         dh_rows = []
         joint_types = []
         joint_limits = []
+        prismatic_pre_rotations = []
         base_row = {}
         errors = []
 
         # Limpiar resaltados previos
         for row in self._rows:
-            for widget in (row[0], row[1], row[2], row[3], row[5], row[6]):
+            for idx in (0, 1, 2, 3, 5, 6, 7, 8):
+                if idx >= len(row):
+                    continue
+                widget = row[idx]
                 try:
                     widget.configure(highlightthickness=0)
                 except Exception:
@@ -1440,6 +1486,26 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
             jtype = row[4].get() if hasattr(row[4], 'get') else 'R'
             joint_types.append(jtype)
+
+            direction = {'yaw': 0.0, 'pitch': 0.0}
+            if jtype == 'P':
+                direction_ok = True
+                try:
+                    direction['yaw'] = float(row[7].get())
+                except ValueError:
+                    _mark_invalid(row[7], f"J{joint_n}: Dir yaw no es un numero valido.")
+                    direction_ok = False
+
+                try:
+                    direction['pitch'] = float(row[8].get())
+                except ValueError:
+                    _mark_invalid(row[8], f"J{joint_n}: Dir pitch no es un numero valido.")
+                    direction_ok = False
+
+                if direction_ok and abs(direction['pitch']) > 180.0:
+                    _mark_invalid(row[8], f"J{joint_n}: Dir pitch debe quedar entre -180 y 180 grados.")
+
+            prismatic_pre_rotations.append(direction)
 
             lim_ok = True
             try:
@@ -1495,6 +1561,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['dh_rows'] = dh_rows
         current['joint_types'] = joint_types
         current['joint_limits'] = joint_limits
+        current['prismatic_pre_rotations'] = prismatic_pre_rotations
         current['base'] = dict(base_row)
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()

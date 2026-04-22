@@ -11,17 +11,14 @@ y anadimos soporte correcto para prismatica sin mezclar grados con milimetros.
 import math
 
 from motor3d.kinematics.constraints_limits import clamp_model_joints
-from motor3d.kinematics.kinematics_fk import forward_kinematics_chain, get_base_transform
+from motor3d.kinematics.kinematics_fk import (
+    forward_kinematics_chain,
+    get_base_transform,
+    get_joint_axis_world,
+)
 
 _RAD_TO_DEG = 180.0 / math.pi
 _COL_EPS = 1e-9
-
-
-def _normalize(vec, fallback=None):
-    norm = math.sqrt(sum(v * v for v in vec))
-    if norm <= _COL_EPS:
-        return list(fallback or [0.0, 0.0, 1.0])
-    return [v / norm for v in vec]
 
 
 def _position_jacobian_native(model, chain):
@@ -43,11 +40,7 @@ def _position_jacobian_native(model, chain):
 
     for i in range(model.dof):
         T_prev = matrices[i - 1] if i > 0 else base_T
-        axis = _normalize([
-            float(T_prev[0, 2]),
-            float(T_prev[1, 2]),
-            float(T_prev[2, 2]),
-        ])
+        axis = get_joint_axis_world(model, i, T_prev)
 
         if model.joint_types[i] == 'P':
             J.append(axis)

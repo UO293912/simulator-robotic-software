@@ -302,6 +302,30 @@ class TestInverseKinematics:
         assert abs(model.joints[0] - 60.0) <= 1.0
         assert abs(ee[0] - 60.0) <= 1.0
 
+    def test_ik_prismatic_joint_supports_preoriented_axis(self):
+        """Una P debe converger tambien si su eje se preorienta con yaw/pitch."""
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            joint_limits=[(0.0, 120.0)],
+            joint_types=['P'],
+            joints=[0.0],
+            dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+            prismatic_pre_rotations=[{'yaw': 0.0, 'pitch': 90.0}],
+        )
+
+        converged, error = solve_inverse_kinematics(
+            model, [70.0, 0.0, 0.0], max_iter=30, tolerance=1.0, alpha=0.65)
+        ee = forward_kinematics_chain(model)['end_effector']
+
+        assert converged, f"IK prismatica preorientada no convergio (error={error:.2f} mm)"
+        assert abs(model.joints[0] - 70.0) <= 1.0
+        assert abs(ee[0] - 70.0) <= 1.0
+
 
 def test_max_reach_includes_prismatic_joint_stroke():
     """El workspace debe considerar la carrera maxima de las juntas P."""
@@ -585,6 +609,35 @@ class TestRendering:
         np.testing.assert_allclose(chain['positions'][1], [120.0, 0.0, 150.0], atol=1e-6)
         np.testing.assert_allclose(prism['support_vec'], [120.0, 0.0, 0.0], atol=1e-6)
 
+    def test_prismatic_visual_geometry_supports_preoriented_axis(self):
+        """La geometria visual debe seguir el yaw/pitch fijo de una P."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            link_lengths=[40.0],
+            joint_limits=[(0.0, 120.0)],
+            joint_types=['P'],
+            joints=[60.0],
+            dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 40.0, 'alpha': 0.0}],
+            prismatic_pre_rotations=[{'yaw': 0.0, 'pitch': 90.0}],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        chain = forward_kinematics_chain(model)
+        visual = GenericDhVisualModel()
+        prism = visual._get_prismatic_geometry(model, 0, chain)
+
+        assert prism is not None
+        np.testing.assert_allclose(prism['axis_dir'], [1.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(prism['slide_end'], [60.0, 0.0, 0.0], atol=1e-6)
+        np.testing.assert_allclose(chain['positions'][1], [60.0, 0.0, -40.0], atol=1e-6)
+        np.testing.assert_allclose(prism['support_vec'], [0.0, 0.0, -40.0], atol=1e-6)
+
     def test_projection_context_matches_camera_project(self):
         """La proyeccion cacheada por frame debe coincidir con camera.project()."""
         import pytest
@@ -750,9 +803,10 @@ class _ConfigField:
         self.options.update(kwargs)
 
 
-def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_max):
+def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_max, direction=None):
     from graphics.gui import Arm3DConfigurationWindow
 
+    direction = direction or {'yaw': 0.0, 'pitch': 0.0}
     window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
     window._rows = [[
         _ConfigField(str(config_row['theta'])),
@@ -762,6 +816,8 @@ def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_m
         _ConfigField(joint_type),
         _ConfigField(str(lim_min)),
         _ConfigField(str(lim_max)),
+        _ConfigField(str(direction['yaw'])),
+        _ConfigField(str(direction['pitch'])),
     ]]
     window._base_row_entries = {
         'theta': _ConfigField("0"),
@@ -810,6 +866,7 @@ def test_arm3d_collect_config_allows_equal_prismatic_limits():
     assert config is not None
     assert config['joint_types'][0] == 'P'
     assert config['joint_limits'][0] == (0.0, 0.0)
+    assert config['prismatic_pre_rotations'][0] == {'yaw': 0.0, 'pitch': 0.0}
 
 
 def test_arm3d_collect_config_allows_prismatic_rigid_offset_in_a():
@@ -829,6 +886,25 @@ def test_arm3d_collect_config_allows_prismatic_rigid_offset_in_a():
     assert config is not None
     assert config['dh_rows'][0]['a'] == 50.0
     assert config['joint_types'][0] == 'P'
+
+
+def test_arm3d_collect_config_stores_prismatic_pre_rotation():
+    """La GUI debe guardar yaw/pitch para preorientar una P antes del deslizamiento."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    window = _make_arm3d_config_window_for_collect(
+        {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+        'P',
+        0.0,
+        120.0,
+        direction={'yaw': 90.0, 'pitch': 45.0},
+    )
+
+    config, error = Arm3DConfigurationWindow._collect_config(window)
+
+    assert error is None
+    assert config is not None
+    assert config['prismatic_pre_rotations'][0] == {'yaw': 90.0, 'pitch': 45.0}
 
 
 def test_arm3d_collect_config_rejects_only_minimum_greater_than_maximum():

@@ -8,6 +8,8 @@ Convención modificada DH:
 import math
 import numpy as np
 
+_AXIS_EPS = 1e-9
+
 
 def get_base_transform(model):
     """Retorna la transformacion fija del joint 0 implicito de la base."""
@@ -49,6 +51,38 @@ def get_base_transform(model):
     return T
 
 
+def get_prismatic_pre_rotation(model, joint_idx):
+    rotations = getattr(model, 'prismatic_pre_rotations', None) or []
+    if joint_idx < len(rotations) and isinstance(rotations[joint_idx], dict):
+        item = rotations[joint_idx]
+        return {
+            'yaw': float(item.get('yaw', 0.0)),
+            'pitch': float(item.get('pitch', 0.0)),
+        }
+    return {'yaw': 0.0, 'pitch': 0.0}
+
+
+def get_prismatic_axis_local(model, joint_idx):
+    orient = get_prismatic_pre_rotation(model, joint_idx)
+    yaw = math.radians(orient['yaw'])
+    pitch = math.radians(orient['pitch'])
+    axis = _rotation_z_transform(yaw) @ _rotation_y_transform(pitch) @ np.array([0.0, 0.0, 1.0, 0.0])
+    return _normalize_vector(axis[:3].tolist())
+
+
+def get_joint_axis_world(model, joint_idx, T_prev):
+    if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
+        axis_local = np.array(get_prismatic_axis_local(model, joint_idx), dtype=float)
+        axis_world = T_prev[:3, :3] @ axis_local
+        return _normalize_vector(axis_world.tolist())
+
+    return _normalize_vector([
+        float(T_prev[0, 2]),
+        float(T_prev[1, 2]),
+        float(T_prev[2, 2]),
+    ])
+
+
 def forward_kinematics_chain(model):
     """
     Calcula la cadena cinemática completa.
@@ -75,7 +109,12 @@ def forward_kinematics_chain(model):
         alpha = math.radians(float(row.get('alpha', 0.0)))
 
         if jtype == 'P':
-            Ti = _dh_transform(theta, d + model.joints[i], a, alpha)
+            orient = get_prismatic_pre_rotation(model, i)
+            q = float(model.joints[i])
+            Ti = _rotation_z_transform(math.radians(orient['yaw']))
+            Ti = Ti @ _rotation_y_transform(math.radians(orient['pitch']))
+            Ti = Ti @ _translation_transform(0.0, 0.0, q)
+            Ti = Ti @ _dh_transform(theta, d, a, alpha)
         else:
             q = math.radians(model.joints[i])
             Ti = _dh_transform(theta + q, d, a, alpha)
@@ -121,3 +160,50 @@ def _dh_transform(theta, d, a, alpha):
         [0.0, sa,       ca,      d     ],
         [0.0, 0.0,      0.0,     1.0   ]
     ], dtype=float)
+
+
+def _translation_transform(tx, ty, tz):
+    return np.array([
+        [1.0, 0.0, 0.0, float(tx)],
+        [0.0, 1.0, 0.0, float(ty)],
+        [0.0, 0.0, 1.0, float(tz)],
+        [0.0, 0.0, 0.0, 1.0],
+    ], dtype=float)
+
+
+def _rotation_z_transform(angle):
+    ca = math.cos(angle)
+    sa = math.sin(angle)
+    return np.array([
+        [ca, -sa, 0.0, 0.0],
+        [sa,  ca, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ], dtype=float)
+
+
+def _rotation_y_transform(angle):
+    ca = math.cos(angle)
+    sa = math.sin(angle)
+    return np.array([
+        [ca,  0.0, sa, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [-sa, 0.0, ca, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ], dtype=float)
+
+
+def _normalize_vector(vec, fallback=None):
+    values = []
+    for idx in range(3):
+        try:
+            values.append(float(vec[idx]))
+        except (IndexError, TypeError, ValueError):
+            values.append(0.0)
+
+    norm = math.sqrt(sum(value * value for value in values))
+    if norm <= _AXIS_EPS:
+        base = fallback or [0.0, 0.0, 1.0]
+        return [float(base[0]), float(base[1]), float(base[2])]
+
+    return [value / norm for value in values]

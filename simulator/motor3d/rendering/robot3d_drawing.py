@@ -10,7 +10,7 @@ import math
 import os
 import struct
 import numpy as np
-from motor3d.kinematics.kinematics_fk import get_base_transform
+from motor3d.kinematics.kinematics_fk import get_base_transform, get_joint_axis_world
 
 try:
     from PIL import Image, ImageDraw, ImageTk
@@ -679,12 +679,11 @@ class GenericDhVisualModel:
 
         base_T = get_base_transform(model)
         T_prev = matrices[joint_idx - 1] if joint_idx > 0 else base_T
-        axis_dir = self._safe_normalize(T_prev[:3, 2], [0.0, 0.0, 1.0])
+        axis_dir = np.asarray(get_joint_axis_world(model, joint_idx, T_prev), dtype=float)
 
-        row = model.dh_rows[joint_idx] if joint_idx < len(model.dh_rows) else {}
-        d = float(row.get('d', 0.0))
-        q = float(model.joints[joint_idx]) if joint_idx < len(model.joints) else 0.0
-        slide_end = p0 + axis_dir * (d + q)
+        span = p1 - p0
+        slide_extent = float(np.dot(span, axis_dir))
+        slide_end = p0 + axis_dir * slide_extent
         support_vec = p1 - slide_end
 
         return {
