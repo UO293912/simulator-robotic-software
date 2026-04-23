@@ -224,7 +224,7 @@ class Motor3DApi:
 
     def _sync_camera_distance_for_model(self):
         """Reencuadra la distancia orbital segun el tamano del modelo cargado."""
-        self.camera.distance = self._recommended_camera_distance()
+        self.camera.set_distance(self._recommended_camera_distance())
 
     def _recommended_camera_distance(self):
         """Evita arrancar con la camara demasiado cerca de modelos genericos grandes."""

@@ -32,10 +32,23 @@ class Camera:
     # ------------------------------------------------------------------
 
     def set_zoom_from_scale(self, scale):
-        """Convierte un porcentaje de escala (ej. 100 = 100%) a zoom."""
+        """Convierte un porcentaje de escala en una distancia orbital real.
+
+        A diferencia del zoom optico, aqui el porcentaje representa un dolly:
+        200% acerca la camara a la mitad de distancia; 50% la aleja al doble.
+        """
         if scale and scale > 0:
-            self.zoom = scale / 100.0
-        self.zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self.zoom))
+            zoom_factor = scale / 100.0
+            zoom_factor = max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom_factor))
+            self.distance = self.DEFAULT_DISTANCE / zoom_factor
+        self._sync_zoom_from_distance()
+
+    def set_distance(self, distance):
+        """Fija la distancia orbital y actualiza el porcentaje de zoom mostrado."""
+        min_distance = self.DEFAULT_DISTANCE / self.ZOOM_MAX
+        max_distance = self.DEFAULT_DISTANCE / self.ZOOM_MIN
+        self.distance = max(min_distance, min(max_distance, float(distance)))
+        self._sync_zoom_from_distance()
 
     def set_orientation(self, yaw=None, pitch=None):
         if yaw is not None:
@@ -52,6 +65,7 @@ class Camera:
         self.pitch = self.DEFAULT_PITCH
         self.screen_offset_x = 0.0
         self.screen_offset_y = 0.0
+        self.distance = self.DEFAULT_DISTANCE
         self.zoom = self.DEFAULT_ZOOM
 
     def keyboard_update(self, move_wasd):
@@ -133,7 +147,14 @@ class Camera:
         z = p_cs[2]
         if z <= 0.01:
             return None
-        f = self.focal_length * self.zoom
+        f = self.focal_length
         sx = (p_cs[0] / z) * f + width / 2.0 + self.screen_offset_x
         sy = (-p_cs[1] / z) * f + height / 2.0 + self.screen_offset_y
         return sx, sy
+
+    def _sync_zoom_from_distance(self):
+        if self.distance <= 1e-9:
+            self.zoom = self.ZOOM_MAX
+            return
+        self.zoom = self.DEFAULT_DISTANCE / self.distance
+        self.zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self.zoom))

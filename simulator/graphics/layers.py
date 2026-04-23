@@ -611,12 +611,12 @@ class Arm3DLayer(Layer):
 
     def zoom_in(self):
         cam = self.motor3d.camera
-        cam.zoom = min(cam.ZOOM_MAX, round(cam.zoom * 1.25, 4))
+        cam.set_distance(cam.distance / 1.25)
         self.drawing.scale = cam.zoom   # sincroniza la etiqueta
 
     def zoom_out(self):
         cam = self.motor3d.camera
-        cam.zoom = max(cam.ZOOM_MIN, round(cam.zoom / 1.25, 4))
+        cam.set_distance(cam.distance * 1.25)
         self.drawing.scale = cam.zoom   # sincroniza la etiqueta
 
     def _zoom_config(self):

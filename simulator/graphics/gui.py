@@ -2566,7 +2566,11 @@ class DrawingFrame(tk.Frame):
             self.application.controller.zoom_in()
 
     def change_zoom_label(self, zoom_level):
-        self.zoom_label.configure(text="{}%".format(zoom_level))
+        try:
+            zoom_text = f"{int(round(float(zoom_level)))}%"
+        except (TypeError, ValueError):
+            zoom_text = "0%"
+        self.zoom_label.configure(text=zoom_text)
 
     def show_joystick(self):
         self.joystick_frame.pack(anchor="center", fill=tk.X)

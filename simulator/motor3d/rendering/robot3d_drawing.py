@@ -1101,7 +1101,7 @@ class Robot3DDrawing:
         return {
             'R_view': R_view,
             'cam_pos': cam_pos,
-            'f': camera.focal_length * camera.zoom,
+            'f': camera.focal_length,
             'cx': w / 2.0 + camera.screen_offset_x,
             'cy': h / 2.0 + camera.screen_offset_y,
         }
