@@ -610,6 +610,8 @@ class CodeGenerator(ast_visitor.ASTVisitor):
     def _write_debug_line(self, node):
         """Emite screen_updater.debug_line(N) si el nodo tiene número de línea válido.
         Esto permite breakpoints y ejecución paso a paso (RF4.2.2, RF4.2.3)."""
+        self.write_to_script("standard.runtime_watchdog_checkpoint()")
+        self.write_endl()
         line = getattr(node, 'line', None)
         if line is not None and line > 0:
             self.write_to_script(f"screen_updater.debug_line({line})")
@@ -641,7 +643,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         self.continue_line = False
 
     def write_no_sentence(self):
-        self.write_to_script("pass")
+        self.write_to_script("standard.runtime_watchdog_checkpoint()")
         self.write_endl()
 
     def increase_tab(self):

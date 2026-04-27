@@ -43,6 +43,7 @@ class Command:
     def prepare_exec(self):
         standard.board = self.controller.robot_layer.robot.board
         standard.state = state.State()
+        standard.reset_runtime_watchdog()
         serial.cons = self.controller.console
         self.ready = True
 
@@ -110,8 +111,11 @@ class Setup(Command):
                 and not standard.state.exec_time_ms > curr_time_ns / 1000000
         ):
             try:
+                standard.reset_runtime_watchdog()
                 module.setup()
             except ExecutionPaused:
+                return True
+            except standard.ExecutionInterrupted:
                 return True
             except Exception:
                 traceback.print_exc()
@@ -149,6 +153,7 @@ class Loop(Command):
     def _run(self):
         """Cuerpo del hilo: repite loop() mientras la simulación esté activa."""
         try:
+            standard.reset_runtime_watchdog()
             while not self._stop_flag:
                 if not self.controller.executing:
                     break
@@ -166,6 +171,8 @@ class Loop(Command):
                     module.loop()
                 except ExecutionPaused:
                     pass  # Simulación detenida mientras el hilo estaba bloqueado en debug_line
+                except standard.ExecutionInterrupted:
+                    break
                 except Exception:
                     traceback.print_exc()
                     self.controller.executing = False
