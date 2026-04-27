@@ -243,6 +243,21 @@ class TestInverseKinematics:
         assert isinstance(result[0], bool)
         assert isinstance(result[1], str)
 
+    def test_ik_api_refines_single_call_beyond_legacy_tolerance(self, motor3d_api):
+        """La API de IK debe refinar en una sola llamada hasta ~1 mm."""
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+
+        converged, _ = motor3d_api.solve_ik(100.0, 300.0, 100.0)
+        ee = forward_kinematics_chain(motor3d_api.model)['end_effector']
+        error = math.sqrt(
+            (ee[0] - 100.0) ** 2
+            + (ee[1] - 300.0) ** 2
+            + (ee[2] - 100.0) ** 2
+        )
+
+        assert converged
+        assert error <= 1.0
+
     def test_ik_improves_from_initial(self, braccio_model):
         """Tras IK el error debe ser menor que el error de la pose inicial."""
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
@@ -264,6 +279,22 @@ class TestInverseKinematics:
 
         assert error_final < error_init, (
             f"IK debe reducir el error: inicial={error_init:.1f}, final={error_final:.1f}")
+
+    def test_ik_keeps_best_approximation_for_unreachable_target(self, braccio_model):
+        """Si el target no es alcanzable exactamente, debe quedarse la mejor pose hallada."""
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
+
+        target = [0.0, 0.0, 500.0]
+        ee_init = forward_kinematics_chain(braccio_model)['end_effector']
+        error_init = math.sqrt(sum((a - b) ** 2 for a, b in zip(ee_init, target)))
+
+        converged, error_final = solve_inverse_kinematics(
+            braccio_model, target, max_iter=150, tolerance=5.0, alpha=0.65)
+
+        assert not converged
+        assert error_final < error_init
+        assert error_final < 25.0
 
     def test_ik_prismatic_joint_reaches_linear_target(self):
         """Una P pura debe converger desplazando en mm sobre su eje local."""
@@ -704,7 +735,7 @@ class TestRendering:
         for _ in range(6):
             layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] <= -89.0, (
+        assert layer.motor3d.model.joints[0] == pytest.approx(-45.0, abs=1e-6), (
             f"J1 debería alcanzar el objetivo por tiempo real, obtuvo {layer.motor3d.model.joints[0]:.1f}°")
 
 
@@ -746,6 +777,79 @@ def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
     assert layer.robot.servo_base.value == 45.0
 
 
+def test_arm3d_layer_ik_uses_animation_instead_of_pose_jump():
+    """La IK debe arrancar la animacion sin saltar visualmente a la pose final."""
+    from graphics.layers import Arm3DLayer
+
+    layer = Arm3DLayer()
+    start_joints = list(layer.motor3d.model.joints[:layer.motor3d.model.dof])
+    target_joints = [60.0, -60.0, 60.0, -60.0, 60.0, -50.0]
+
+    def _fake_solve_ik(_x, _y, _z, track_trail=True):
+        assert track_trail is False
+        layer.motor3d.model.joints[:] = list(target_joints)
+        return True, "IK convergida (error=0.0 mm)"
+
+    layer.motor3d.solve_ik = _fake_solve_ik
+
+    converged, _ = layer.solve_ik(100.0, 200.0, 300.0)
+
+    assert converged
+    assert layer.robot.servo_base.value == 150.0
+    assert layer.motor3d.model.joints[0] != start_joints[0]
+    assert layer.motor3d.model.joints[0] != target_joints[0]
+    assert layer._current_joints[0] == layer.motor3d.model.joints[0]
+
+
+def test_arm3d_layer_ik_does_not_leave_instant_trail_before_animation():
+    """La IK animada no debe dibujar una segunda estela instantanea previa."""
+    from graphics.layers import Arm3DLayer
+
+    layer = Arm3DLayer()
+    layer.motor3d.scene.set_show_trail(True)
+    layer.motor3d.scene.clear_trail()
+    layer.motor3d.scene.update()
+    initial_trail = [list(point) for point in layer.motor3d.scene.trail_points]
+    target_joints = [60.0, -60.0, 60.0, -60.0, 60.0, -50.0]
+
+    def _fake_solve_ik(_x, _y, _z, track_trail=True):
+        assert track_trail is False
+        layer.motor3d.model.joints[:] = list(target_joints)
+        layer.motor3d.scene.update(track_trail=track_trail)
+        return True, "IK convergida (error=0.0 mm)"
+
+    layer.motor3d.solve_ik = _fake_solve_ik
+
+    converged, _ = layer.solve_ik(100.0, 200.0, 300.0)
+
+    assert converged
+    assert len(layer.motor3d.scene.trail_points) == len(initial_trail) + 1
+
+
+def test_arm3d_layer_best_effort_ik_moves_on_first_unreachable_attempt():
+    """Una IK no alcanzable debe empezar a moverse hacia la mejor aproximacion en el primer clic."""
+    from graphics.layers import Arm3DLayer
+
+    layer = Arm3DLayer()
+    start_joints = list(layer.motor3d.model.joints[:layer.motor3d.model.dof])
+    target_joints = [45.0, -56.0, 12.0, 8.0, -5.0, -48.0]
+
+    def _fake_solve_ik(_x, _y, _z, track_trail=True):
+        assert track_trail is False
+        layer.motor3d.model.joints[:] = list(target_joints)
+        return False, "Mejor aproximacion IK aplicada (error=24.6 mm)"
+
+    layer.motor3d.solve_ik = _fake_solve_ik
+
+    converged, message = layer.solve_ik(100.0, 300.0, 100.0)
+
+    assert converged is False
+    assert "Mejor aproximacion" in message
+    assert layer.robot.servo_base.value == 135.0
+    assert layer.motor3d.model.joints[0] != start_joints[0]
+    assert layer.motor3d.model.joints[0] != target_joints[0]
+
+
 def test_arm3d_slider_passes_visible_servo_value_to_controller():
     """El slider no debe volver a restar 90Â° antes de llegar al controlador."""
     from graphics.gui import Arm3DControlPanel
@@ -774,6 +878,47 @@ def test_arm3d_slider_passes_visible_servo_value_to_controller():
     assert calls == [(0, 45.0)]
 
 
+def test_arm3d_ik_panel_syncs_sliders_after_best_effort_solution():
+    """Aunque la IK no converja del todo, la UI debe reflejar la mejor aproximación aplicada."""
+    from graphics.gui import Arm3DControlPanel
+
+    class DummyEntry:
+        def __init__(self, value):
+            self.value = value
+            self.options = {}
+
+        def get(self):
+            return self.value
+
+        def configure(self, **kwargs):
+            self.options.update(kwargs)
+
+    class DummyLabel:
+        def __init__(self):
+            self.options = {}
+
+        def config(self, **kwargs):
+            self.options.update(kwargs)
+
+    panel = Arm3DControlPanel.__new__(Arm3DControlPanel)
+    panel._entry_x = DummyEntry("100")
+    panel._entry_y = DummyEntry("300")
+    panel._entry_z = DummyEntry("100")
+    panel._lbl_ik_status = DummyLabel()
+    sync_calls = []
+    panel._sync_sliders_from_model = lambda: sync_calls.append(True)
+    panel.application = SimpleNamespace(
+        controller=SimpleNamespace(
+            solve_arm3d_ik=lambda x, y, z: (False, "Mejor aproximación IK aplicada")
+        )
+    )
+
+    Arm3DControlPanel._on_ik(panel)
+
+    assert sync_calls == [True]
+    assert panel._lbl_ik_status.options["fg"] == "#ffcc88"
+
+
 def test_arm3d_config_locked_preset_keeps_confirm_enabled():
     """El preset Braccio bloqueado debe desactivar importar, pero no confirmar ni exportar."""
     from graphics.gui import Arm3DConfigurationWindow
@@ -799,6 +944,56 @@ def test_arm3d_config_locked_preset_keeps_confirm_enabled():
     assert window._btn_import.options["state"] == "disabled"
     assert window._btn_export.options["state"] == "normal"
     assert window._btn_save.options["state"] == "normal"
+
+
+def test_arm3d_config_braccio_table_defaults_match_visual_lengths():
+    """La tabla del Braccio debe ofrecer longitudes acordes al modelo visual exacto."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    defaults = Arm3DConfigurationWindow._braccio_table_defaults()
+    rows = defaults["dh_rows"]
+
+    assert defaults["base"] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
+    assert rows[0] == {"theta": 0.0, "d": 72.0, "a": 0.0, "alpha": 90.0}
+    assert rows[1]["a"] == 125.0
+    assert rows[2]["a"] == 125.0
+    assert rows[3]["a"] == 60.0
+    assert rows[4]["a"] == pytest.approx(31.6227766017, abs=1e-9)
+    assert rows[5] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
+
+
+def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
+    """Seleccionar el preset Braccio debe mostrar en tabla la plantilla visual corregida."""
+    from graphics.gui import Arm3DConfigurationWindow
+
+    class DummyMotor3D:
+        def get_model_config(self):
+            return {
+                "base": {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
+                "dh_rows": [
+                    {"theta": 0.0, "d": 212.0, "a": 0.0, "alpha": 90.0},
+                    {"theta": 90.0, "d": 0.0, "a": 200.0, "alpha": 0.0},
+                    {"theta": 0.0, "d": 0.0, "a": 200.0, "alpha": 0.0},
+                    {"theta": 0.0, "d": 0.0, "a": 120.0, "alpha": 0.0},
+                    {"theta": 0.0, "d": 0.0, "a": 80.0, "alpha": 90.0},
+                    {"theta": 0.0, "d": 0.0, "a": 50.0, "alpha": 0.0},
+                ],
+            }
+
+    class DummyVar:
+        def get(self):
+            return "braccio_tinkerkit"
+
+    window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
+    window.motor3d = DummyMotor3D()
+    window._preset_var = DummyVar()
+
+    config = Arm3DConfigurationWindow._table_source_config(window)
+
+    assert config["dh_rows"][0]["d"] == 72.0
+    assert config["dh_rows"][1]["a"] == 125.0
+    assert config["dh_rows"][3]["a"] == 60.0
+    assert config["dh_rows"][4]["a"] == pytest.approx(31.6227766017, abs=1e-9)
 
 
 def test_arm3d_unlock_restores_semantic_disabled_fields():
@@ -1102,13 +1297,16 @@ class TestCameraNavigation:
         assert offset_x != 0.0 or offset_y != 0.0, "El pan debe modificar el offset de pantalla"
 
     def test_camera_zoom_via_set_zoom(self, motor3d_api):
-        """set_zoom_from_scale debe modificar camera.zoom."""
+        """set_zoom_from_scale debe acercar/alejar la camara modificando la distancia orbital."""
         initial_zoom = motor3d_api.camera.zoom
+        initial_distance = motor3d_api.camera.distance
         motor3d_api.set_zoom_from_scale(200)  # 200% zoom
         assert motor3d_api.camera.zoom > initial_zoom
+        assert motor3d_api.camera.distance < initial_distance
 
         motor3d_api.set_zoom_from_scale(50)  # 50% zoom
         assert motor3d_api.camera.zoom < initial_zoom * 1.5
+        assert motor3d_api.camera.distance > initial_distance
 
     def test_camera_reset_restores_defaults(self, motor3d_api):
         """reset_camera debe restaurar yaw, pitch, zoom y offset al valor por defecto."""
@@ -1125,6 +1323,17 @@ class TestCameraNavigation:
         assert abs(motor3d_api.camera.screen_offset_x) < 0.1
         assert abs(motor3d_api.camera.screen_offset_y) < 0.1
         assert abs(motor3d_api.camera.distance - Camera.DEFAULT_DISTANCE) < 0.1
+
+    def test_camera_dolly_close_top_view_hides_points_above_camera(self):
+        """Al acercar la camara de verdad, una vista casi cenital no debe seguir viendo puntos por encima."""
+        from motor3d.camera.camera import Camera
+
+        camera = Camera()
+        camera.set_zoom_from_scale(7000)  # DEFAULT_DISTANCE=700 -> distancia real 10 mm
+        camera.set_orientation(yaw=0.0, pitch=89.0)
+
+        assert camera.distance == pytest.approx(10.0, abs=1e-6)
+        assert camera.project([0.0, 0.0, 100.0], 800, 600) is None
 
     def test_camera_distance_expands_for_large_auto_generic_models(self):
         """Los modelos genericos grandes no deben arrancar con la camara dentro del brazo."""
@@ -1812,23 +2021,11 @@ void loop() {
                 after_calls.append(ms)
                 return None
 
-        class _MockMotor3D:
-            def __init__(self):
-                self.draw_calls = 0
-
-            def keyboard_camera(self, _move_wasd):
-                pass
-
-            def draw(self, _canvas):
-                self.draw_calls += 1
-
-            def evaluate_safety(self):
-                return {'blocked': False, 'message': '', 'in_workspace': True, 'singular': False}
-
         layer = layers_mod.Arm3DLayer.__new__(layers_mod.Arm3DLayer)
-        layer.motor3d = _MockMotor3D()
-        layer._canvas = object()
-        layer._update_hud = lambda _safety: None
+        move_calls = []
+        layer.move = lambda using_keys, move_wasd: move_calls.append(
+            (using_keys, dict(move_wasd))
+        )
         layer.wants_fast_render = lambda: True
 
         ctrl.view = _MockView()
@@ -1836,7 +2033,7 @@ void loop() {
 
         ctrl.arm3d_render_loop()
 
-        assert layer.motor3d.draw_calls == 1
+        assert move_calls == [(False, {'w': False, 'a': False, 's': False, 'd': False})]
         assert after_calls == [controller_mod.RobotsController._ARM3D_RENDER_ACTIVE_MS]
 
     def test_arm3d_render_loop_uses_idle_interval_when_quiet(self):
@@ -1858,20 +2055,11 @@ void loop() {
                 after_calls.append(ms)
                 return None
 
-        class _MockMotor3D:
-            def keyboard_camera(self, _move_wasd):
-                pass
-
-            def draw(self, _canvas):
-                pass
-
-            def evaluate_safety(self):
-                return {'blocked': False, 'message': '', 'in_workspace': True, 'singular': False}
-
         layer = layers_mod.Arm3DLayer.__new__(layers_mod.Arm3DLayer)
-        layer.motor3d = _MockMotor3D()
-        layer._canvas = object()
-        layer._update_hud = lambda _safety: None
+        move_calls = []
+        layer.move = lambda using_keys, move_wasd: move_calls.append(
+            (using_keys, dict(move_wasd))
+        )
         layer.wants_fast_render = lambda: False
 
         ctrl.view = _MockView()
@@ -1879,4 +2067,51 @@ void loop() {
 
         ctrl.arm3d_render_loop()
 
+        assert move_calls == [(False, {'w': False, 'a': False, 's': False, 'd': False})]
         assert after_calls == [controller_mod.RobotsController._ARM3D_RENDER_IDLE_MS]
+
+    def test_arm3d_render_loop_advances_ik_animation_when_idle(self):
+        """El loop pasivo debe avanzar la animacion IK aunque no haya sketch ejecutandose."""
+        import time
+        import graphics.controller as controller_mod
+        from graphics.layers import Arm3DLayer
+
+        ctrl = controller_mod.RobotsController.__new__(controller_mod.RobotsController)
+        ctrl.arm3d = True
+        ctrl.executing = False
+        ctrl._arm3d_loop_running = True
+
+        after_calls = []
+
+        class _MockView:
+            move_WASD = {'w': False, 'a': False, 's': False, 'd': False}
+
+            def after(self, ms, _cb):
+                after_calls.append(ms)
+                return None
+
+        layer = Arm3DLayer()
+        layer._canvas = object()
+        layer.motor3d.draw = lambda _canvas: None
+        layer._update_hud = lambda _safety: None
+
+        start_joints = list(layer.motor3d.model.joints[:layer.motor3d.model.dof])
+        target_joints = [60.0, -60.0, 60.0, -60.0, 60.0, -50.0]
+
+        def _fake_solve_ik(_x, _y, _z, track_trail=True):
+            assert track_trail is False
+            layer.motor3d.model.joints[:] = list(target_joints)
+            return True, "IK convergida (error=0.0 mm)"
+
+        layer.motor3d.solve_ik = _fake_solve_ik
+        layer.solve_ik(100.0, 200.0, 300.0)
+        layer._last_sync_time = time.monotonic() - 0.25
+
+        ctrl.view = _MockView()
+        ctrl.robot_layer = layer
+
+        ctrl.arm3d_render_loop()
+
+        assert layer.motor3d.model.joints[0] != start_joints[0]
+        assert layer.motor3d.model.joints[0] != target_joints[0]
+        assert after_calls == [controller_mod.RobotsController._ARM3D_RENDER_ACTIVE_MS]

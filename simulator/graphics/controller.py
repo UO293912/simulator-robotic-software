@@ -91,11 +91,7 @@ class RobotsController:
         try:
             layer = self.robot_layer
             move_wasd = getattr(self.view, "move_WASD", {})
-            layer.motor3d.keyboard_camera(move_wasd)
-            if layer._canvas:
-                layer.motor3d.draw(layer._canvas)
-            safety = layer.motor3d.evaluate_safety()
-            layer._update_hud(safety)
+            layer.move(False, move_wasd)
             if any(move_wasd.values()) or layer.wants_fast_render():
                 interval_ms = self._ARM3D_RENDER_ACTIVE_MS
         except Exception:

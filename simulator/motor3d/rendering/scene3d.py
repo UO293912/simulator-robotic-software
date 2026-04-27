@@ -22,7 +22,7 @@ class Scene3D:
         self._trail_model = None
         self._trail_signature = None
 
-    def update(self):
+    def update(self, track_trail=True):
         """
         Recalcula la cinemática directa y extiende la trayectoria si está activa.
         Debe llamarse antes de draw() en cada fotograma.
@@ -34,7 +34,7 @@ class Scene3D:
         self.last_chain = chain
         self.last_points = chain.get('positions', [])
 
-        if self.show_trail:
+        if track_trail and self.show_trail:
             self._extend_trail(chain)
 
     def draw(self, canvas):

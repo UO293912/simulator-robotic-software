@@ -115,7 +115,7 @@ class Motor3DApi:
     # Cinemática Inversa
     # ------------------------------------------------------------------
 
-    def solve_ik(self, x, y, z):
+    def solve_ik(self, x, y, z, track_trail=True):
         """
         Lanza la cinemática inversa hacia la posición (x, y, z).
 
@@ -123,13 +123,16 @@ class Motor3DApi:
             (converged: bool, message: str)
         """
         converged, error = solve_inverse_kinematics(
-            self.model, [x, y, z], max_iter=150, tolerance=25.0, alpha=0.65
+            self.model, [x, y, z], max_iter=150, tolerance=1.0, alpha=0.65
         )
-        self.scene.update()
+        self.scene.update(track_trail=track_trail)
         if converged:
             return True, f"IK convergida (error={error:.1f} mm)"
         else:
-            return False, f"IK no convergida (error={error:.1f} mm) — posición fuera del workspace"
+            return False, (
+                f"Mejor aproximación IK aplicada (error={error:.1f} mm) — "
+                f"objetivo no alcanzable exactamente con la configuración actual"
+            )
 
     # ------------------------------------------------------------------
     # Configuración

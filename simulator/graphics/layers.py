@@ -653,9 +653,23 @@ class Arm3DLayer(Layer):
         self._request_fast_render()
 
     def solve_ik(self, x, y, z):
-        """Lanza IK y retorna (converged, mensaje_estado)."""
-        result = self.motor3d.solve_ik(x, y, z)
-        self._sync_servos_from_model(reset_animation=True)
+        """Lanza IK y anima la transicion hacia la mejor solucion encontrada."""
+        start_joints = None
+        model = self.motor3d.model
+        if self._current_joints is not None and len(self._current_joints) == model.dof:
+            start_joints = list(self._current_joints)
+        else:
+            start_joints = list(model.joints[:model.dof])
+
+        result = self.motor3d.solve_ik(x, y, z, track_trail=False)
+        self._sync_servos_from_model(reset_animation=False)
+        self._current_joints = list(start_joints)
+        for i, joint in enumerate(start_joints):
+            self.motor3d.model.set_joint(i, joint)
+        # Inicia la animacion dentro de la propia accion IK para que la mejor
+        # aproximacion empiece a verse ya en el primer clic.
+        self._last_sync_time = time.monotonic() - self._IK_ANIM_KICKSTART_S
+        self._Arm3DLayer__sync_from_servos()
         self._request_fast_render()
         return result
 
@@ -705,7 +719,8 @@ class Arm3DLayer(Layer):
     # Velocidad de animación en grados por segundo.
     # Se usa tiempo real y no "grados por frame" para que el movimiento
     # no dependa de los FPS del render 3D.
-    _ANIM_SPEED_DPS = 95.0
+    _ANIM_SPEED_DPS = 45.0
+    _IK_ANIM_KICKSTART_S = 1.0 / 30.0
     _FAST_RENDER_WINDOW_S = 0.25
     _FAST_RENDER_EPS = 1e-3
 

@@ -771,6 +771,40 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     Importar/exportar configuración en JSON.
     """
 
+    BRACCIO_TABLE_BASE_ROW = {
+        "theta": 0.0,
+        "d": 0.0,
+        "a": 0.0,
+        "alpha": 0.0,
+    }
+    BRACCIO_TABLE_DH_ROWS = [
+        {"theta": 0.0, "d": 72.0, "a": 0.0, "alpha": 90.0},
+        {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
+        {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
+        {"theta": 0.0, "d": 0.0, "a": 60.0, "alpha": 0.0},
+        {"theta": 0.0, "d": 0.0, "a": math.sqrt(10.0 ** 2 + 30.0 ** 2), "alpha": 90.0},
+        {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
+    ]
+
+    @classmethod
+    def _braccio_table_defaults(cls):
+        """Valores de tabla DH alineados con el Braccio exacto visible en escena."""
+        return {
+            "base": dict(cls.BRACCIO_TABLE_BASE_ROW),
+            "dh_rows": [dict(row) for row in cls.BRACCIO_TABLE_DH_ROWS],
+        }
+
+    def _table_source_config(self):
+        """Config visible en la tabla de edición, con ajuste especial para Braccio."""
+        current = self.motor3d.get_model_config()
+        preset_name = self._preset_var.get() if hasattr(self, "_preset_var") else None
+        if preset_name == "braccio_tinkerkit":
+            table_defaults = self._braccio_table_defaults()
+            current = dict(current)
+            current["base"] = table_defaults["base"]
+            current["dh_rows"] = table_defaults["dh_rows"]
+        return current
+
     def __init__(self, parent, motor3d_api, application: MainApplication = None, *args, **kwargs):
         tk.Toplevel.__init__(self, parent, *args, **kwargs)
         self.title("Configuración Brazo 3D")
@@ -1310,9 +1344,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._base_row_controls = []
         self._base_row_entries = {}
 
+        table_config = self._table_source_config()
         model = self.motor3d.model
         n = self._dof_var.get()
-        base = getattr(model, 'base_row', {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0})
+        base = dict(table_config.get('base', {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}))
+        dh_rows = list(table_config.get('dh_rows', []))
 
         base_lbl = tk.Label(
             table_frame, text="0", font=self._font(11, "bold"),
@@ -1369,7 +1405,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         for i in range(n):
             grid_row = i + 2
             row_entries = []
-            dh = model.dh_rows[i] if i < len(model.dh_rows) else {'theta': 0, 'd': 0, 'a': 100, 'alpha': 0}
+            dh = dh_rows[i] if i < len(dh_rows) else {'theta': 0, 'd': 0, 'a': 100, 'alpha': 0}
             lims = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
             jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
             raw_pre_rotations = getattr(model, 'prismatic_pre_rotations', []) or []
@@ -1680,9 +1716,8 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._fit_window_to_content()
 
     def _refresh_base_row_entries(self):
-        base_row = dict(getattr(
-            self.motor3d.model,
-            'base_row',
+        base_row = dict(self._table_source_config().get(
+            'base',
             {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
         ))
         for key, entry in self._base_row_entries.items():
@@ -2179,6 +2214,7 @@ class Arm3DControlPanel(tk.Frame):
             self._sync_sliders_from_model()
         else:
             self._lbl_ik_status.config(text=str(msg), fg="#ffcc88")
+            self._sync_sliders_from_model()
 
     def _on_reset_cam(self):
         self.application.controller.reset_arm3d_camera()
@@ -2452,7 +2488,7 @@ class DrawingFrame(tk.Frame):
             bd=0
         )
         self.zoom_label = tk.Label(
-            self.zoom_frame, bg=BLUE, fg="white", font=("Consolas", 12))
+            self.zoom_frame, bg=BLUE, fg="white", font=("Consolas", 12), width=5)
         self.zoom_out_button = ImageButton(
             self.zoom_frame,
             {
