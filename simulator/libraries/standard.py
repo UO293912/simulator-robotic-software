@@ -20,7 +20,8 @@ _watchdog_local = threading.local()
 # Limita la CPU consumida por sketches que giran sin delay() ni esperas cooperativas.
 _WATCHDOG_TIME_SLICE_NS = 8_000_000
 _WATCHDOG_IDLE_SLEEP_S = 0.001
-_WATCHDOG_YIELD_EVERY = 128
+_WATCHDOG_CHECK_EVERY = 128
+_WATCHDOG_CHECK_MASK = _WATCHDOG_CHECK_EVERY - 1
 
 HIGH = 1
 LOW = 0
@@ -59,16 +60,14 @@ def runtime_watchdog_checkpoint():
     if _stop_event.is_set():
         raise ExecutionInterrupted()
 
-    now = time.perf_counter_ns()
     spin_count = getattr(_watchdog_local, "spin_count", 0) + 1
-    last_pause_ns = getattr(_watchdog_local, "last_pause_ns", now)
-
     _watchdog_local.spin_count = spin_count
-    _watchdog_local.last_pause_ns = last_pause_ns
 
-    if spin_count % _WATCHDOG_YIELD_EVERY == 0:
-        time.sleep(0)
+    if spin_count & _WATCHDOG_CHECK_MASK:
+        return
 
+    now = time.perf_counter_ns()
+    last_pause_ns = getattr(_watchdog_local, "last_pause_ns", now)
     if now - last_pause_ns < _WATCHDOG_TIME_SLICE_NS:
         return
 

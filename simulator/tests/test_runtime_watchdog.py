@@ -45,3 +45,25 @@ def test_runtime_watchdog_checkpoint_raises_on_stop_request():
     finally:
         standard._stop_event.clear()
         standard.reset_runtime_watchdog()
+
+
+def test_runtime_watchdog_defers_clock_checks_until_threshold(monkeypatch):
+    perf_calls = 0
+
+    standard.reset_runtime_watchdog()
+
+    def fake_perf_counter_ns():
+        nonlocal perf_calls
+        perf_calls += 1
+        return 0
+
+    monkeypatch.setattr(standard.time, "perf_counter_ns", fake_perf_counter_ns)
+
+    for _ in range(standard._WATCHDOG_CHECK_EVERY - 1):
+        standard.runtime_watchdog_checkpoint()
+
+    assert perf_calls == 0
+
+    standard.runtime_watchdog_checkpoint()
+
+    assert perf_calls == 1
