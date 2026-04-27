@@ -7,6 +7,22 @@ Servo wristVer;
 Servo wristRot;
 Servo gripper;
 
+const int SAFE_BASE = 90;
+const int SAFE_SHOULDER = 45;
+const int SAFE_ELBOW = 180;
+const int SAFE_WRIST_VER = 180;
+const int SAFE_WRIST_ROT = 90;
+const int SAFE_GRIPPER = 10;
+
+void writeSafePose() {
+  base.write(SAFE_BASE);
+  shoulder.write(SAFE_SHOULDER);
+  elbow.write(SAFE_ELBOW);
+  wristVer.write(SAFE_WRIST_VER);
+  wristRot.write(SAFE_WRIST_ROT);
+  gripper.write(SAFE_GRIPPER);
+}
+
 void setup() {
   base.attach(11);
   shoulder.attach(10);
@@ -14,16 +30,15 @@ void setup() {
   wristVer.attach(6);
   wristRot.attach(5);
   gripper.attach(3);
+
+  delay(1000);
+  writeSafePose();
+  delay(1500);
 }
 
 void loop() {
-  // Reposo
-  base.write(90);
-  shoulder.write(90);
-  elbow.write(90);
-  wristVer.write(90);
-  wristRot.write(90);
-  gripper.write(73);
+  // Pose de seguridad antes de empezar cada barrido.
+  writeSafePose();
   delay(500);
 
   // BASE: giro completo izquierda -> derecha
@@ -31,7 +46,7 @@ void loop() {
   delay(500);
   base.write(180);
   delay(500);
-  base.write(90);
+  writeSafePose();
   delay(300);
 
   // SHOULDER: subir -> bajar
@@ -39,7 +54,7 @@ void loop() {
   delay(500);
   shoulder.write(165);
   delay(500);
-  shoulder.write(90);
+  writeSafePose();
   delay(300);
 
   // ELBOW: extendido -> plegado
@@ -47,7 +62,7 @@ void loop() {
   delay(500);
   elbow.write(180);
   delay(500);
-  elbow.write(90);
+  writeSafePose();
   delay(300);
 
   // WRIST VERTICAL: arriba -> abajo
@@ -55,7 +70,7 @@ void loop() {
   delay(500);
   wristVer.write(180);
   delay(500);
-  wristVer.write(90);
+  writeSafePose();
   delay(300);
 
   // WRIST ROTATION: giro completo
@@ -63,7 +78,7 @@ void loop() {
   delay(500);
   wristRot.write(180);
   delay(500);
-  wristRot.write(90);
+  writeSafePose();
   delay(300);
 
   // GRIPPER: abrir -> cerrar
@@ -71,6 +86,8 @@ void loop() {
   delay(500);
   gripper.write(73);
   delay(500);
+  writeSafePose();
+  delay(300);
 
   // COMBINADA: extremos minimos -> extremos maximos
   base.write(0);
@@ -89,11 +106,6 @@ void loop() {
   gripper.write(73);
   delay(800);
 
-  base.write(90);
-  shoulder.write(90);
-  elbow.write(90);
-  wristVer.write(90);
-  wristRot.write(90);
-  gripper.write(73);
+  writeSafePose();
   delay(1000);
 }

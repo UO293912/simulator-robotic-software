@@ -1,14 +1,15 @@
 #include <Braccio.h>
 
-void setup(){
- Braccio.begin();
+void setup() {
+  Braccio.begin();
 }
 
-void loop(){
- Braccio.ServoMovement(20, 90, 90, 90, 90, 90, 73);
- delay(2000);
- Braccio.ServoMovement(20, 0, 90, 90, 90, 90, 73);
- delay(2000);
- Braccio.ServoMovement(20, 180, 90, 90, 90, 90, 73);
- delay(2000);
+void loop() {
+  // Partimos de la pose de seguridad para no arrancar con una configuracion rara.
+  Braccio.ServoMovement(20, 90, 45, 180, 180, 90, 10);
+  delay(2000);
+  Braccio.ServoMovement(20, 0, 45, 180, 180, 90, 10);
+  delay(2000);
+  Braccio.ServoMovement(20, 180, 45, 180, 180, 90, 10);
+  delay(2000);
 }
