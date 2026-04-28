@@ -15,17 +15,6 @@ const int STEP_DELAY_MS = 20;
 // el giro a la articulacion real del hombro.
 const int FIXED_M2_ANGLE = 45;
 
-const int M1_MIN = 0;
-const int M1_MAX = 180;
-const int M3_MIN = 0;
-const int M3_MAX = 180;
-const int M4_MIN = 0;
-const int M4_MAX = 180;
-const int M5_MIN = 0;
-const int M5_MAX = 180;
-const int M6_MIN = 10;
-const int M6_MAX = 73;
-
 int currentM1 = 90;
 int currentM3 = 180;
 int currentM4 = 180;
@@ -61,40 +50,6 @@ const char* labelForMotor(int motor) {
       return "gripper";
     default:
       return "unknown";
-  }
-}
-
-int minAngleForMotor(int motor) {
-  switch (motor) {
-    case 1:
-      return M1_MIN;
-    case 3:
-      return M3_MIN;
-    case 4:
-      return M4_MIN;
-    case 5:
-      return M5_MIN;
-    case 6:
-      return M6_MIN;
-    default:
-      return 0;
-  }
-}
-
-int maxAngleForMotor(int motor) {
-  switch (motor) {
-    case 1:
-      return M1_MAX;
-    case 3:
-      return M3_MAX;
-    case 4:
-      return M4_MAX;
-    case 5:
-      return M5_MAX;
-    case 6:
-      return M6_MAX;
-    default:
-      return 180;
   }
 }
 
@@ -150,6 +105,7 @@ void printHelp() {
   Serial.println();
   Serial.println(F("Consejo: acerca el limite con paso 10 o 5, y afinado final con paso 1."));
   Serial.println(F("Cuando veas el limite fisico real, apunta el angulo mostrado y retrocede un paso."));
+  Serial.println(F("Este sketch no impone limites fisicos por motor: solo evita salir del rango 0..180."));
 }
 
 void printPose() {
@@ -178,19 +134,16 @@ void printPose() {
   Serial.println(currentM6);
 
   Serial.println(F("Nota: los angulos mostrados son los mandados al servo, no una lectura sensorizada."));
+  Serial.println(F("No hay limites fisicos precargados en el sketch para M1, M3, M4, M5 y M6."));
 }
 
 void moveSelectedMotor(int delta) {
   int currentAngle = angleForMotor(selectedMotor);
-  int nextAngle = constrain(
-    currentAngle + delta,
-    minAngleForMotor(selectedMotor),
-    maxAngleForMotor(selectedMotor)
-  );
+  int nextAngle = constrain(currentAngle + delta, 0, 180);
 
   if (nextAngle == currentAngle) {
     Serial.println();
-    Serial.println(F("Ya estas en el limite programado de ese motor."));
+    Serial.println(F("Ya estas en el extremo generico 0..180 del comando servo."));
     printPose();
     return;
   }
