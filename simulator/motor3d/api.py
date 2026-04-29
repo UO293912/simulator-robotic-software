@@ -73,11 +73,16 @@ class Motor3DApi:
     def pan_camera(self, dx, dy):
         self.camera_controller.pan(dx, dy)
 
+    def dolly_camera(self, dy):
+        self.camera_controller.dolly(dy)
+
     def drag_camera(self, dx, dy, pan=False):
         self.camera_controller.drag(dx, dy, pan=pan)
 
-    def set_camera(self, yaw=None, pitch=None):
+    def set_camera(self, yaw=None, pitch=None, projection_mode=None):
         self.camera.set_orientation(yaw=yaw, pitch=pitch)
+        if projection_mode is not None:
+            self.camera.set_projection_mode(projection_mode)
 
     def reset_camera(self):
         self.camera.reset()
@@ -164,7 +169,7 @@ class Motor3DApi:
         return ok
 
     def uses_legacy_servo_degrees(self):
-        """True solo para el Braccio predefinido con numeraciÃ³n servo 0..180."""
+        """True solo para el Braccio predefinido con numeración servo 0..180."""
         return (
             self.model.visual.get('mode') == 'braccio_exact'
             and self.active_preset_name == self.DEFAULT_PRESET
@@ -226,11 +231,11 @@ class Motor3DApi:
         self.model.preset_name = None
 
     def _sync_camera_distance_for_model(self):
-        """Reencuadra la distancia orbital segun el tamano del modelo cargado."""
+        """Reencuadra la distancia orbital según el tamaño del modelo cargado."""
         self.camera.set_distance(self._recommended_camera_distance())
 
     def _recommended_camera_distance(self):
-        """Evita arrancar con la camara demasiado cerca de modelos genericos grandes."""
+        """Evita arrancar con la cámara demasiado cerca de modelos genéricos grandes."""
         if self.model.visual.get('mode') == 'braccio_exact':
             return self.camera.DEFAULT_DISTANCE
 

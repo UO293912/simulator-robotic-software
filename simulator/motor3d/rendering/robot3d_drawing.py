@@ -986,6 +986,10 @@ class Robot3DDrawing:
     GRID_COLOR = (60, 60, 70)
     AXIS_COLORS = {'x': (220, 60, 60), 'y': (60, 200, 60), 'z': (60, 60, 220)}
     TRAIL_COLOR = (0, 220, 180)
+    GRID_SIZE = 400.0
+    GRID_STEP = 100.0
+    GRID_HALF_WIDTH = 2.0
+    GRID_Z_OFFSET = -1.0
 
     drawing_width = 800
     drawing_height = 600
@@ -1041,18 +1045,20 @@ class Robot3DDrawing:
         draw = ImageDraw.Draw(img)
         projection = self._build_projection_context(camera, w, h)
 
-        # Rejilla y ejes
-        self._draw_grid(draw, projection)
+        # Ejes del mundo como overlay sencillo
         self._draw_axes(draw, projection)
 
         # Colectar mallas agrupadas por color (evita crear 10k+ tuplas Python)
         vm = self.resolve_visual_model(model)
         self.visual_model = vm
-        mesh_groups = []  # lista de (np.array (N,3,3), color)
+        mesh_groups = []
+        grid_mesh = self._build_grid_mesh()
+        if grid_mesh.size != 0:
+            mesh_groups.append((grid_mesh, self.GRID_COLOR, False))
         for tris_world, color in vm.iter_triangles(model, points3d, chain):
             if tris_world.size == 0:
                 continue
-            mesh_groups.append((tris_world, color))
+            mesh_groups.append((tris_world, color, True))
 
         # Trayectoria — dibujada ANTES del mesh para que el brazo la ocluya correctamente
         if trail:
@@ -1070,7 +1076,7 @@ class Robot3DDrawing:
         if model.visual.get('mode') == 'skeleton':
             self._render_skeleton(draw, points3d, model, projection)
 
-        # Ejes locales XYZ de cada articulaciÃ³n
+        # Ejes locales XYZ de cada articulación
         if points3d and chain and model.visual.get('show_joint_axes', False):
             self._draw_joint_axes(draw, model, chain, projection)
 
@@ -1096,32 +1102,56 @@ class Robot3DDrawing:
                     pass
 
     def _build_projection_context(self, camera, w, h):
-        """Precalcula la proyeccion de camara compartida por todo el frame."""
+        """Precalcula la proyección de cámara compartida por todo el frame."""
         R_view, cam_pos = camera.get_view_matrix()
-        return {
+        projection = {
             'R_view': R_view,
             'cam_pos': cam_pos,
             'f': camera.focal_length,
             'cx': w / 2.0 + camera.screen_offset_x,
             'cy': h / 2.0 + camera.screen_offset_y,
+            'mode': camera.projection_mode,
+            'ortho_scale': camera.get_projection_scale(),
+            'target_depth': camera.distance,
         }
+        if camera.projection_mode == camera.PROJECTION_CABALLERA:
+            angle = math.radians(camera.CABALLERA_ANGLE_DEG)
+            projection['oblique_dx'] = math.cos(angle) * camera.CABALLERA_DEPTH_SCALE
+            projection['oblique_dy'] = math.sin(angle) * camera.CABALLERA_DEPTH_SCALE
+        return projection
 
-    def _project_point(self, point, projection):
-        """Proyecta un punto 3D usando la camara ya resuelta para este frame."""
-        p_world = np.asarray(point, dtype=float) - projection['cam_pos']
-        p_cs = projection['R_view'] @ p_world
+    def _project_camera_space(self, p_cs, projection):
+        """Proyecta coordenadas ya transformadas al espacio de cámara."""
         z = p_cs[2]
         if z <= 0.01:
             return None
+        mode = projection.get('mode')
+        if mode == 'caballera':
+            scale = projection['ortho_scale']
+            z_rel = z - projection['target_depth']
+            sx = (p_cs[0] + z_rel * projection['oblique_dx']) * scale + projection['cx']
+            sy = (-p_cs[1] - z_rel * projection['oblique_dy']) * scale + projection['cy']
+            return sx, sy
+        if mode == 'isometrica':
+            scale = projection['ortho_scale']
+            sx = p_cs[0] * scale + projection['cx']
+            sy = -p_cs[1] * scale + projection['cy']
+            return sx, sy
         sx = (p_cs[0] / z) * projection['f'] + projection['cx']
         sy = (-p_cs[1] / z) * projection['f'] + projection['cy']
         return sx, sy
+
+    def _project_point(self, point, projection):
+        """Proyecta un punto 3D usando la cámara ya resuelta para este frame."""
+        p_world = np.asarray(point, dtype=float) - projection['cam_pos']
+        p_cs = projection['R_view'] @ p_world
+        return self._project_camera_space(p_cs, projection)
 
     def _render_mesh_vectorized(self, draw, projection, mesh_groups):
         """
         Pipeline de renderizado vectorizado con NumPy.
 
-        Recibe mesh_groups = lista de (np.array (N,3,3), color_rgb).
+        Recibe mesh_groups = lista de (np.array (N,3,3), color_rgb[, shaded]).
         Proyecta todos los vértices de una vez, calcula normales y shading
         en bulk, aplica back-face culling y ordena por profundidad (painter's)
         antes de llamar a draw.polygon — eliminando los bucles Python por vértice.
@@ -1130,10 +1160,14 @@ class Robot3DDrawing:
             return
 
         # ------------------------------------------------------------------ 1. Concatenar
-        group_tris = [tris for tris, _ in mesh_groups]      # lista de (Ni,3,3)
+        group_tris = [entry[0] for entry in mesh_groups]    # lista de (Ni,3,3)
         group_colors = []
-        for tris, color in mesh_groups:
+        group_shaded = []
+        for entry in mesh_groups:
+            tris, color = entry[0], entry[1]
+            shaded = entry[2] if len(entry) >= 3 else True
             group_colors.extend([color] * tris.shape[0])     # un color por triángulo
+            group_shaded.extend([shaded] * tris.shape[0])
 
         all_tris = np.vstack(group_tris)  # (N, 3, 3)
         N = all_tris.shape[0]
@@ -1154,10 +1188,24 @@ class Robot3DDrawing:
         z_cam = verts_cam[:, 2]                           # (N*3,)
         behind = (z_cam <= 0.01).reshape(N, 3).any(axis=1)  # triángulos con vértice detrás
 
-        # Proyección perspectiva
-        z_safe = np.where(z_cam > 0.01, z_cam, 1.0)
-        sx = (verts_cam[:, 0] / z_safe) * f + cx         # (N*3,)
-        sy = (-verts_cam[:, 1] / z_safe) * f + cy        # (N*3,)
+        mode = projection.get('mode')
+        if mode == 'caballera':
+            scale = projection['ortho_scale']
+            z_rel = z_cam - projection['target_depth']
+            sx = (
+                verts_cam[:, 0] + z_rel * projection['oblique_dx']
+            ) * scale + cx
+            sy = (
+                -verts_cam[:, 1] - z_rel * projection['oblique_dy']
+            ) * scale + cy
+        elif mode == 'isometrica':
+            scale = projection['ortho_scale']
+            sx = verts_cam[:, 0] * scale + cx
+            sy = -verts_cam[:, 1] * scale + cy
+        else:
+            z_safe = np.where(z_cam > 0.01, z_cam, 1.0)
+            sx = (verts_cam[:, 0] / z_safe) * f + cx     # (N*3,)
+            sy = (-verts_cam[:, 1] / z_safe) * f + cy    # (N*3,)
         pts2d = np.stack([sx, sy], axis=1).reshape(N, 3, 2)  # (N, 3, 2)
 
         # ------------------------------------------------------------------ 4. Normales (vectorizado)
@@ -1192,6 +1240,8 @@ class Robot3DDrawing:
         # ------------------------------------------------------------------ 8. Iluminación Lambertiana (vectorizado)
         light_dot = np.einsum('ij,j->i', normals[visible], _LIGHT_DIR)
         shade = _AMBIENT + (1.0 - _AMBIENT) * np.maximum(0.0, light_dot)  # (|visible|,)
+        shaded_flags = np.asarray(group_shaded, dtype=bool)[visible]
+        shade = np.where(shaded_flags, shade, 1.0)
 
         # ------------------------------------------------------------------ 9. Ordenar de lejos a cerca
         sort_order = np.argsort(-depths[visible])
@@ -1218,19 +1268,25 @@ class Robot3DDrawing:
         """Wrapper de compatibilidad — redirige al pipeline vectorizado."""
         if not all_tris:
             return
-        # Agrupar la lista legacy (tri, color) en el formato que espera el pipeline
+        # Agrupar la lista legacy (tri, color[, shaded]) en el formato que espera el pipeline
         groups = {}
         order = []
-        for tri, color in all_tris:
+        for entry in all_tris:
+            if len(entry) >= 3:
+                tri, color, shaded = entry[0], entry[1], entry[2]
+            else:
+                tri, color = entry
+                shaded = True
             key = color
             if key not in groups:
                 groups[key] = []
                 order.append(key)
-            groups[key].append(tri)
+            groups[key].append((tri, shaded))
         mesh_groups = []
         for key in order:
-            arr = np.array(groups[key])
-            mesh_groups.append((arr, key))
+            arr = np.array([tri for tri, _shaded in groups[key]])
+            shaded = groups[key][0][1]
+            mesh_groups.append((arr, key, shaded))
         projection = self._build_projection_context(camera, w, h)
         self._render_mesh_vectorized(draw, projection, mesh_groups)
 
@@ -1250,6 +1306,65 @@ class Robot3DDrawing:
             color = (220, 80, 30) if model.is_at_limit(i - 1) and i > 0 else (60, 180, 220)
             draw.ellipse([proj[0] - r, proj[1] - r, proj[0] + r, proj[1] + r], fill=color)
             prev = proj
+
+    def _build_grid_segment_mesh(self, start, end):
+        """Convierte un segmento del suelo en una tira 3D de dos caras."""
+        p0 = np.asarray(start, dtype=float)
+        p1 = np.asarray(end, dtype=float)
+        direction = p1 - p0
+        length = np.linalg.norm(direction[:2])
+        if length < 1e-9:
+            return np.empty((0, 3, 3), dtype=float)
+
+        side = np.array([-direction[1], direction[0], 0.0], dtype=float)
+        side_norm = np.linalg.norm(side[:2])
+        if side_norm < 1e-9:
+            return np.empty((0, 3, 3), dtype=float)
+        side = side / side_norm * self.GRID_HALF_WIDTH
+
+        c0 = p0 + side
+        c1 = p0 - side
+        c2 = p1 - side
+        c3 = p1 + side
+
+        front = np.array([
+            [c0, c1, c2],
+            [c0, c2, c3],
+        ], dtype=float)
+        back = front[:, ::-1, :]
+        return np.concatenate([front, back], axis=0)
+
+    def _build_grid_mesh(self):
+        """Construye la rejilla del suelo como pequeños segmentos 3D ordenables por profundidad."""
+        size = self.GRID_SIZE
+        step = self.GRID_STEP
+        z = self.GRID_Z_OFFSET
+        tris = []
+
+        x_values = np.arange(-size, size + step, step, dtype=float)
+        y_values = np.arange(-size, size + step, step, dtype=float)
+
+        for x in x_values:
+            for y0, y1 in zip(y_values[:-1], y_values[1:]):
+                seg = self._build_grid_segment_mesh(
+                    [x, y0, z],
+                    [x, y1, z],
+                )
+                if seg.size != 0:
+                    tris.append(seg)
+
+        for y in y_values:
+            for x0, x1 in zip(x_values[:-1], x_values[1:]):
+                seg = self._build_grid_segment_mesh(
+                    [x0, y, z],
+                    [x1, y, z],
+                )
+                if seg.size != 0:
+                    tris.append(seg)
+
+        if not tris:
+            return np.empty((0, 3, 3), dtype=float)
+        return np.concatenate(tris, axis=0)
 
     def _draw_grid(self, draw, projection):
         """Dibuja la rejilla del plano Z=0."""
@@ -1353,7 +1468,7 @@ class Robot3DDrawing:
         return center, axis, u, v
 
     def _draw_joint_axes(self, draw, model, chain, projection):
-        """Dibuja los ejes XYZ locales de cada articulaciÃ³n usando sus frames renderizados."""
+        """Dibuja los ejes XYZ locales de cada articulación usando sus frames renderizados."""
         vm = self.resolve_visual_model(model)
         frames = vm.get_joint_frames(model, chain)
 

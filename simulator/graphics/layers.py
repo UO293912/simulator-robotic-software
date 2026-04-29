@@ -534,6 +534,23 @@ class Arm3DLayer(Layer):
         joint_angle (DH) = servo_value - 90.0
         servo_value       = clamp(angle + 90.0, 0, 180)
     """
+    CAMERA_PRESETS = {
+        'caballera': {
+            'yaw': 30.0,
+            'pitch': 15.0,
+            'projection_mode': 'caballera',
+        },
+        'isometrica': {
+            'yaw': 45.0,
+            'pitch': 35.26438968,
+            'projection_mode': 'isometrica',
+        },
+        'iso': {
+            'yaw': 45.0,
+            'pitch': 35.26438968,
+            'projection_mode': 'isometrica',
+        },
+    }
 
     def __init__(self):
         # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
@@ -666,8 +683,8 @@ class Arm3DLayer(Layer):
         self._current_joints = list(start_joints)
         for i, joint in enumerate(start_joints):
             self.motor3d.model.set_joint(i, joint)
-        # Inicia la animacion dentro de la propia accion IK para que la mejor
-        # aproximacion empiece a verse ya en el primer clic.
+        # Inicia la animación dentro de la propia acción IK para que la mejor
+        # aproximación empiece a verse ya en el primer clic.
         self._last_sync_time = time.monotonic() - self._IK_ANIM_KICKSTART_S
         self._Arm3DLayer__sync_from_servos()
         self._request_fast_render()
@@ -675,6 +692,11 @@ class Arm3DLayer(Layer):
 
     def drag_camera(self, dx, dy, pan=False):
         self.motor3d.drag_camera(dx, dy, pan=pan)
+        self._request_fast_render()
+
+    def dolly_camera(self, dy):
+        self.motor3d.dolly_camera(dy)
+        self.drawing.scale = self.motor3d.camera.zoom
         self._request_fast_render()
 
     def set_camera_yaw(self, yaw):
@@ -690,13 +712,10 @@ class Arm3DLayer(Layer):
         self._request_fast_render()
 
     def set_camera_view(self, view_name):
-        """Aplica un preset de cámara: 'front', 'side', 'iso', o None para libre."""
-        if view_name == 'front':
-            self.motor3d.set_camera(yaw=0.0, pitch=10.0)
-        elif view_name == 'side':
-            self.motor3d.set_camera(yaw=90.0, pitch=10.0)
-        elif view_name == 'iso':
-            self.motor3d.set_camera(yaw=45.0, pitch=30.0)
+        """Aplica un preset de cámara: 'caballera', 'isometrica' o libre."""
+        preset = self.CAMERA_PRESETS.get(view_name)
+        if preset is not None:
+            self.motor3d.set_camera(**preset)
         else:
             self.motor3d.reset_camera()
         self._request_fast_render()
@@ -745,7 +764,7 @@ class Arm3DLayer(Layer):
         )
 
     def wants_fast_render(self):
-        """Indica si conviene refrescar a mayor frecuencia por interaccion reciente."""
+        """Indica si conviene refrescar a mayor frecuencia por interacción reciente."""
         if time.monotonic() < self._interactive_render_until:
             return True
 

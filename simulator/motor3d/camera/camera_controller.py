@@ -1,11 +1,13 @@
 """
 CameraController — Traduce eventos de entrada (ratón/teclado) en movimientos de cámara.
 """
+import math
 
 
 class CameraController:
 
     ROTATION_SENSITIVITY = 0.35  # grados por píxel
+    DOLLY_SENSITIVITY = 0.012
 
     def __init__(self, camera):
         self._camera = camera
@@ -26,6 +28,11 @@ class CameraController:
     def pan(self, dx, dy):
         """Desplazamiento lateral del plano de proyección."""
         self._camera.pan(dx * 0.5, dy * 0.5)
+
+    def dolly(self, dy):
+        """Acerca o aleja la cámara orbital con un arrastre vertical."""
+        factor = math.exp(dy * self.DOLLY_SENSITIVITY)
+        self._camera.set_distance(self._camera.distance * factor)
 
     def keyboard_update(self, move_wasd):
         """Actualiza la cámara con el estado de las teclas WASD."""

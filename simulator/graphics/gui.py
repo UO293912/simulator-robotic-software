@@ -4,6 +4,7 @@ import tkinter as tk
 import tkinter.messagebox as messagebox
 from tkinter.filedialog import askopenfilename, asksaveasfilename
 import tkinter.ttk as ttk
+from PIL import Image, ImageDraw, ImageTk
 import graphics.controller as controller
 import files.files_reader as files
 import subprocess
@@ -200,6 +201,12 @@ class MainApplication(tk.Tk):
     def change_zoom_label(self, zoom_level):
         self.drawing_frame.change_zoom_label(zoom_level)
 
+    def set_arm3d_mouse_drag_mode(self, mode):
+        if hasattr(self, "drawing_frame"):
+            self.drawing_frame.set_arm3d_mouse_mode(mode)
+        if hasattr(self, "arm3d_control_panel"):
+            self.arm3d_control_panel.set_mouse_drag_mode(mode)
+
     def change_robot(self, event):
         self.controller.stop()
         self.__update_robot()
@@ -333,6 +340,7 @@ class MainApplication(tk.Tk):
             self.after(150, self._connect_arm3d_info_panel)
         else:
             self._set_arm3d_control_tab_visible(False)
+            self.set_arm3d_mouse_drag_mode(None)
             # Ocultar panel izquierdo
             self.left_info_panel.grid_remove()
             # Restaurar HUD clásico
@@ -397,6 +405,7 @@ class MainApplication(tk.Tk):
             self.drawing_frame.key_drawing.forget()
 
     def key_press(self, event):
+        self.drawing_frame.handle_global_key_press(event)
         pressed_key = event.char
         if pressed_key in self.move_WASD:
             self.move_WASD[pressed_key] = True
@@ -2136,6 +2145,46 @@ class Arm3DControlPanel(tk.Frame):
                                         font=("Consolas", 10), command=self._on_reset_cam)
         self._btn_reset_cam.pack(fill=tk.X)
 
+        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
+
+        tk.Label(self, text="Movimiento de cámara",
+                 bg=DARK_BLUE, fg="#00E5CC",
+                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(0, 4))
+
+        self._mouse_drag_mode_var = tk.StringVar(value="none")
+        mouse_mode_frame = tk.Frame(self, bg=DARK_BLUE)
+        mouse_mode_frame.pack(fill=tk.X, padx=8)
+        for value, text in (
+            ("none", "Normal"),
+            ("rotate", "Rotar"),
+            ("pan", "Desplazar"),
+            ("zoom", "Zoom"),
+        ):
+            tk.Radiobutton(
+                mouse_mode_frame,
+                text=text,
+                value=value,
+                variable=self._mouse_drag_mode_var,
+                bg=DARK_BLUE,
+                fg="white",
+                selectcolor=DARK_BLUE,
+                activebackground=DARK_BLUE,
+                font=("Consolas", 9),
+                anchor="w",
+                command=self._on_mouse_drag_mode_change,
+            ).pack(anchor="w")
+
+        tk.Label(
+            self,
+            text="Normal: LMB rota, RMB desplaza y rueda o LMB+RMB hace zoom.\n"
+                 "Alternativo: LMB usa la opción elegida hasta pulsar una tecla.",
+            bg=DARK_BLUE,
+            fg="#AACCFF",
+            font=("Consolas", 8),
+            justify=tk.LEFT,
+            wraplength=240,
+        ).pack(anchor="w", padx=8, pady=(2, 0))
+
         self._lbl_ik_status = tk.Label(self, text="", bg=DARK_BLUE, fg="#aaffaa",
                                        font=("Consolas", 9), wraplength=240, justify=tk.LEFT)
         self._lbl_ik_status.pack(anchor="w", padx=8, pady=2)
@@ -2218,6 +2267,17 @@ class Arm3DControlPanel(tk.Frame):
 
     def _on_reset_cam(self):
         self.application.controller.reset_arm3d_camera()
+
+    def _on_mouse_drag_mode_change(self):
+        if self.application is None:
+            return
+        selected = self._mouse_drag_mode_var.get()
+        mode = None if selected == "none" else selected
+        self.application.set_arm3d_mouse_drag_mode(mode)
+
+    def set_mouse_drag_mode(self, mode):
+        if hasattr(self, "_mouse_drag_mode_var"):
+            self._mouse_drag_mode_var.set("none" if mode in (None, "") else str(mode))
 
     def _sync_sliders_from_model(self):
         self.refresh_from_model()
@@ -2349,7 +2409,7 @@ class Arm3DInfoPanel(tk.Frame):
 
         tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
 
-        tk.Label(self, text="VisualizaciÃ³n",
+        tk.Label(self, text="Visualización",
                  bg=DARK_BLUE, fg="white",
                  font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
 
@@ -2455,15 +2515,31 @@ class DrawingFrame(tk.Frame):
         self.buttons_gamification = ButtonsGamification(self.canvas_frame, application, bg=DARK_BLUE,
                                                         highlightthickness=1, highlightbackground="black")
 
-        # Botones de preset de cámara 3D [F] [L] [I] [Libre] — visibles solo para Braccio
+        # Presets de cámara 3D visibles solo para Braccio.
         self.cam_buttons_frame = tk.Frame(self.canvas_frame, bg=DARK_BLUE,
                                           highlightthickness=1, highlightbackground=BLUE)
-        for _text, _view in [("F", "front"), ("L", "side"), ("I", "iso"), ("Libre", None)]:
+        for _text, _view, _icon in [
+            ("Libre", None, self.cam_free_icon),
+            ("Caballera", "caballera", self.cam_caballera_icon),
+            ("Isométrica", "isometrica", self.cam_isometrica_icon),
+        ]:
             tk.Button(
                 self.cam_buttons_frame,
-                text=_text, bg=DARK_BLUE, fg="white",
-                font=("Consolas", 9, "bold"), bd=0, padx=8, pady=3,
-                activebackground=BLUE, cursor="hand2",
+                text=_text,
+                image=_icon,
+                compound=tk.TOP,
+                justify=tk.CENTER,
+                bg=DARK_BLUE,
+                fg="white",
+                font=("Consolas", 8, "bold"),
+                bd=0,
+                padx=8,
+                pady=4,
+                activebackground=BLUE,
+                activeforeground="white",
+                highlightthickness=0,
+                relief=tk.FLAT,
+                cursor="hand2",
                 command=lambda v=_view: self._on_cam_preset(v)
             ).pack(side=tk.LEFT, padx=2, pady=2)
 
@@ -2504,6 +2580,7 @@ class DrawingFrame(tk.Frame):
         self.canvas.bind("<ButtonRelease-1>", self.release)
         self.canvas.bind("<B1-Motion>", self.move)
         self.canvas.bind("<ButtonPress-3>", self.press_right)
+        self.canvas.bind("<ButtonRelease-3>", self.release_right)
         self.canvas.bind("<B3-Motion>", self.pan)
         self.canvas.bind("<MouseWheel>", self.zoom)
         application.bind("<Alt-m>", self.__toggle_check_manually)
@@ -2516,6 +2593,15 @@ class DrawingFrame(tk.Frame):
         self.zoom_out_button.grid(row=0, column=2, padx=5, pady=5)
 
         self.canvas.pack(fill=tk.BOTH, expand=True)
+        self.arm3d_mouse_mode_hint = tk.Label(
+            self.canvas_frame,
+            text="",
+            bg=DARK_BLUE,
+            fg="#D9F0F1",
+            font=("Consolas", 8, "bold"),
+            padx=8,
+            pady=4,
+        )
 
         self.key_movement.pack(anchor="w", side=tk.LEFT)
         self.key_drawing.pack(anchor="w", side=tk.LEFT)
@@ -2530,10 +2616,68 @@ class DrawingFrame(tk.Frame):
 
         self.init_x = 0
         self.init_y = 0
+        self._arm3d_mouse_mode = None
+        self._arm3d_left_down = False
+        self._arm3d_right_down = False
 
     def __toggle_check_manually(self, event=None):
         self.key_movement.toggle()
         self.application.toggle_keys()
+
+    def set_arm3d_mouse_mode(self, mode):
+        valid_modes = {None, "rotate", "pan", "zoom"}
+        self._arm3d_mouse_mode = mode if mode in valid_modes else None
+        self._update_arm3d_mouse_mode_hint()
+
+    def handle_global_key_press(self, event):
+        if self._arm3d_mouse_mode is None:
+            return
+        if event.keysym in {"Shift_L", "Shift_R", "Control_L", "Control_R", "Alt_L", "Alt_R"}:
+            return
+        self.application.set_arm3d_mouse_drag_mode(None)
+
+    def _update_arm3d_mouse_mode_hint(self):
+        labels = {
+            "rotate": "Rotar",
+            "pan": "Desplazar",
+            "zoom": "Zoom",
+        }
+        label = labels.get(self._arm3d_mouse_mode)
+        if not label:
+            self.arm3d_mouse_mode_hint.place_forget()
+            return
+        self.arm3d_mouse_mode_hint.configure(
+            text=f"Modo ratón: {label} | pulsa una tecla para salir"
+        )
+        self.arm3d_mouse_mode_hint.place(relx=0.0, rely=1.0, anchor="sw", x=8, y=-8)
+
+    def _handle_arm3d_mouse_drag(self, event):
+        dx = event.x - self.init_x
+        dy = event.y - self.init_y
+        self.init_x = event.x
+        self.init_y = event.y
+
+        if self._arm3d_left_down and self._arm3d_right_down:
+            self.application.controller.dolly_arm3d_camera(dy)
+            return
+
+        if self._arm3d_mouse_mode == "pan" and self._arm3d_left_down:
+            self.application.controller.drag_arm3d_camera(dx, dy, pan=True)
+            return
+
+        if self._arm3d_mouse_mode == "zoom" and self._arm3d_left_down:
+            self.application.controller.dolly_arm3d_camera(dy)
+            return
+
+        if self._arm3d_mouse_mode == "rotate" and self._arm3d_left_down:
+            self.application.controller.drag_arm3d_camera(dx, dy)
+            return
+
+        if self._arm3d_right_down:
+            self.application.controller.drag_arm3d_camera(dx, dy, pan=True)
+            return
+
+        self.application.controller.drag_arm3d_camera(dx, dy)
 
     def press(self, event):
         import graphics.layers as _layers
@@ -2543,6 +2687,7 @@ class DrawingFrame(tk.Frame):
             self.canvas.focus_force()
             self.init_x = event.x
             self.init_y = event.y
+            self._arm3d_left_down = True
             return
         if isinstance(layer.robot, robots.ArduinoBoard):
             layer.draw_component(event.x, event.y)
@@ -2555,6 +2700,7 @@ class DrawingFrame(tk.Frame):
         import graphics.layers as _layers
         layer = self.application.controller.robot_layer
         if isinstance(layer, _layers.Arm3DLayer):
+            self._arm3d_left_down = False
             return
         layer.drawing.dx += self.init_x - event.x
         layer.drawing.dy += self.init_y - event.y
@@ -2571,11 +2717,7 @@ class DrawingFrame(tk.Frame):
         import graphics.layers as _layers
         layer = self.application.controller.robot_layer
         if isinstance(layer, _layers.Arm3DLayer):
-            dx = event.x - self.init_x
-            dy = event.y - self.init_y
-            self.init_x = event.x
-            self.init_y = event.y
-            self.application.controller.drag_arm3d_camera(dx, dy)
+            self._handle_arm3d_mouse_drag(event)
             return
         self.canvas.scan_dragto(event.x, event.y, gain=1)
 
@@ -2585,15 +2727,17 @@ class DrawingFrame(tk.Frame):
             self.canvas.focus_force()
             self.init_x = event.x
             self.init_y = event.y
+            self._arm3d_right_down = True
+
+    def release_right(self, event):
+        import graphics.layers as _layers
+        if isinstance(self.application.controller.robot_layer, _layers.Arm3DLayer):
+            self._arm3d_right_down = False
 
     def pan(self, event):
         import graphics.layers as _layers
         if isinstance(self.application.controller.robot_layer, _layers.Arm3DLayer):
-            dx = event.x - self.init_x
-            dy = event.y - self.init_y
-            self.init_x = event.x
-            self.init_y = event.y
-            self.application.controller.drag_arm3d_camera(dx, dy, pan=True)
+            self._handle_arm3d_mouse_drag(event)
 
     def zoom(self, event):
         if event.delta == -120:
@@ -2646,6 +2790,98 @@ class DrawingFrame(tk.Frame):
         """Callback de los botones de preset de cámara."""
         self.application.controller.set_arm3d_camera_view(view_name)
 
+    def _build_camera_preset_icon(self, preset_name):
+        icon_size = 26
+        image = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+
+        def _add(point, vector):
+            return (point[0] + vector[0], point[1] + vector[1])
+
+        def _scale(vector, factor):
+            return (vector[0] * factor, vector[1] * factor)
+
+        def _round_point(point):
+            return (int(round(point[0])), int(round(point[1])))
+
+        def _draw_line(start, end, color, width):
+            draw.line([_round_point(start), _round_point(end)], fill=color, width=width)
+
+        def _draw_arrow(start, end, color):
+            _draw_line(start, end, color, 2)
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length < 1e-6:
+                return
+            ux = dx / length
+            uy = dy / length
+            px = -uy
+            py = ux
+            head = 3.2
+            spread = 2.0
+            back = (end[0] - ux * head, end[1] - uy * head)
+            left = (back[0] + px * spread, back[1] + py * spread)
+            right = (back[0] - px * spread, back[1] - py * spread)
+            draw.polygon(
+                [_round_point(end), _round_point(left), _round_point(right)],
+                fill=color
+            )
+
+        if preset_name == "free":
+            orbit_color = "#D9F0F1"
+            draw.ellipse((4, 6, 21, 19), outline=orbit_color, width=2)
+            _draw_arrow((18, 8), (21, 10), orbit_color)
+            _draw_arrow((7, 17), (4, 15), orbit_color)
+            draw.ellipse((11, 11, 14, 14), fill=orbit_color)
+            return ImageTk.PhotoImage(image)
+
+        if preset_name == "caballera":
+            origin = (6.0, 20.0)
+            basis_x = (9.0, 0.0)
+            basis_y = (7.0, -7.0)
+            basis_z = (0.0, -10.0)
+        else:
+            origin = (13.0, 12.0)
+            basis_x = (7.0, 4.0)
+            basis_y = (-7.0, 4.0)
+            basis_z = (0.0, -10.0)
+
+        box_color = "#E3F1F2"
+        origin_x = _add(origin, basis_x)
+        origin_y = _add(origin, basis_y)
+        origin_z = _add(origin, basis_z)
+        origin_xy = _add(origin_x, basis_y)
+        origin_xz = _add(origin_x, basis_z)
+        origin_yz = _add(origin_y, basis_z)
+
+        for start, end in (
+            (origin, origin_x),
+            (origin, origin_y),
+            (origin, origin_z),
+            (origin_x, origin_xy),
+            (origin_x, origin_xz),
+            (origin_y, origin_xy),
+            (origin_y, origin_yz),
+            (origin_z, origin_xz),
+            (origin_z, origin_yz),
+        ):
+            _draw_line(start, end, box_color, 1)
+
+        _draw_arrow(origin, _add(origin, _scale(basis_x, 1.35)), "#F26D6D")
+        _draw_arrow(origin, _add(origin, _scale(basis_y, 1.35)), "#74D67A")
+        _draw_arrow(origin, _add(origin, _scale(basis_z, 1.35)), "#6FA8FF")
+        draw.ellipse(
+            (
+                int(round(origin[0] - 1.5)),
+                int(round(origin[1] - 1.5)),
+                int(round(origin[0] + 1.5)),
+                int(round(origin[1] + 1.5)),
+            ),
+            fill=box_color,
+        )
+        return ImageTk.PhotoImage(image)
+
     def __load_images(self):
         self.zoom_img = tk.PhotoImage(file="buttons/zoom.png")
         self.zoom_whi_img = tk.PhotoImage(file="buttons/zoom_w.png")
@@ -2653,6 +2889,9 @@ class DrawingFrame(tk.Frame):
         self.dezoom_img = tk.PhotoImage(file="buttons/dezoom.png")
         self.dezoom_whi_img = tk.PhotoImage(file="buttons/dezoom_w.png")
         self.dezoom_yel_img = tk.PhotoImage(file="buttons/dezoom_y.png")
+        self.cam_free_icon = self._build_camera_preset_icon("free")
+        self.cam_caballera_icon = self._build_camera_preset_icon("caballera")
+        self.cam_isometrica_icon = self._build_camera_preset_icon("isometrica")
 
 
 class ButtonsGamification(tk.Frame):

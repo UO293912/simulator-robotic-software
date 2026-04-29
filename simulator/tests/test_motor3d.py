@@ -162,7 +162,7 @@ class TestForwardKinematics:
 
 
     def test_fk_base_orientation_can_turn_joint_1_into_pendulum(self):
-        """La base configurable debe reorientar el eje de la primera articulaciÃ³n."""
+        """La base configurable debe reorientar el eje de la primera articulación."""
         import numpy as np
         from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
@@ -680,7 +680,7 @@ class TestRendering:
         np.testing.assert_allclose(prism['support_vec'], [0.0, 0.0, -40.0], atol=1e-6)
 
     def test_projection_context_matches_camera_project(self):
-        """La proyeccion cacheada por frame debe coincidir con camera.project()."""
+        """La proyección cacheada por frame debe coincidir con camera.project()."""
         import pytest
         from motor3d.camera.camera import Camera
         from motor3d.rendering.robot3d_drawing import Robot3DDrawing
@@ -700,6 +700,17 @@ class TestRendering:
 
         assert actual is not None and expected is not None
         assert actual == pytest.approx(expected, abs=1e-9)
+
+    def test_ground_grid_is_built_as_segmented_3d_mesh(self):
+        """La rejilla del suelo debe generarse como malla 3D segmentada para compartir profundidad."""
+        import numpy as np
+        from motor3d.rendering.robot3d_drawing import Robot3DDrawing
+
+        drawing = Robot3DDrawing()
+        grid = drawing._build_grid_mesh()
+
+        assert grid.shape == (576, 3, 3)
+        assert set(np.unique(grid[:, :, 2])) == {drawing.GRID_Z_OFFSET}
 
     def test_trail_color_never_black(self, motor3d_api):
         """El color de la trayectoria no debe ser (0,0,0) para ningún punto.
@@ -768,7 +779,7 @@ def test_arm3d_custom_mode_preserves_full_internal_range_with_visible_servo_offs
 
 
 def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
-    """El Braccio predefinido debe seguir usando la numeraciÃ³n servo tradicional."""
+    """El Braccio predefinido debe seguir usando la numeración servo tradicional."""
     from graphics.layers import Arm3DLayer
 
     layer = Arm3DLayer()
@@ -851,7 +862,7 @@ def test_arm3d_layer_best_effort_ik_moves_on_first_unreachable_attempt():
 
 
 def test_arm3d_slider_passes_visible_servo_value_to_controller():
-    """El slider no debe volver a restar 90Â° antes de llegar al controlador."""
+    """El slider no debe volver a restar 90° antes de llegar al controlador."""
     from graphics.gui import Arm3DControlPanel
 
     class DummyLabel:
@@ -1090,7 +1101,7 @@ def test_arm3d_config_field_behaviors_are_classified_explicitly():
 
 
 def test_arm3d_fixed_palette_is_visually_distinct_from_disabled():
-    """Los estilos fixed y disabled deben verse distintos para evitar confusiÃ³n."""
+    """Los estilos fixed y disabled deben verse distintos para evitar confusión."""
     from graphics.gui import Arm3DConfigurationWindow
 
     window = Arm3DConfigurationWindow.__new__(Arm3DConfigurationWindow)
@@ -1297,7 +1308,7 @@ class TestCameraNavigation:
         assert offset_x != 0.0 or offset_y != 0.0, "El pan debe modificar el offset de pantalla"
 
     def test_camera_zoom_via_set_zoom(self, motor3d_api):
-        """set_zoom_from_scale debe acercar/alejar la camara modificando la distancia orbital."""
+        """set_zoom_from_scale debe acercar/alejar la cámara modificando la distancia orbital."""
         initial_zoom = motor3d_api.camera.zoom
         initial_distance = motor3d_api.camera.distance
         motor3d_api.set_zoom_from_scale(200)  # 200% zoom
@@ -1307,6 +1318,43 @@ class TestCameraNavigation:
         motor3d_api.set_zoom_from_scale(50)  # 50% zoom
         assert motor3d_api.camera.zoom < initial_zoom * 1.5
         assert motor3d_api.camera.distance > initial_distance
+
+    def test_camera_dolly_drag_changes_distance(self, motor3d_api):
+        """El dolly por arrastre vertical debe acercar o alejar la cámara orbital."""
+        initial_distance = motor3d_api.camera.distance
+        motor3d_api.dolly_camera(-30)
+        assert motor3d_api.camera.distance < initial_distance
+
+        close_distance = motor3d_api.camera.distance
+        motor3d_api.dolly_camera(30)
+        assert motor3d_api.camera.distance > close_distance
+
+    def test_camera_projection_presets_are_visibly_distinct(self, motor3d_api):
+        """Caballera e isométrica deben proyectar distinto un mismo punto."""
+        point = [120.0, 120.0, 120.0]
+
+        motor3d_api.set_camera(yaw=0.0, pitch=0.0, projection_mode="caballera")
+        caballera = motor3d_api.camera.project(point, 800, 600)
+
+        motor3d_api.set_camera(yaw=45.0, pitch=35.26438968, projection_mode="isometrica")
+        isometrica = motor3d_api.camera.project(point, 800, 600)
+
+        assert caballera is not None and isometrica is not None
+        assert abs(caballera[0] - isometrica[0]) > 15.0 or abs(caballera[1] - isometrica[1]) > 15.0
+
+    def test_caballera_projection_keeps_world_origin_centered(self):
+        """La vista caballera no debe desplazar el origen del mundo fuera del centro."""
+        import pytest
+        from motor3d.camera.camera import Camera
+
+        camera = Camera()
+        camera.set_orientation(yaw=30.0, pitch=15.0)
+        camera.set_projection_mode("caballera")
+
+        projected = camera.project([0.0, 0.0, 0.0], 800, 600)
+
+        assert projected is not None
+        assert projected == pytest.approx((400.0, 300.0), abs=1e-6)
 
     def test_camera_reset_restores_defaults(self, motor3d_api):
         """reset_camera debe restaurar yaw, pitch, zoom y offset al valor por defecto."""
@@ -1325,7 +1373,7 @@ class TestCameraNavigation:
         assert abs(motor3d_api.camera.distance - Camera.DEFAULT_DISTANCE) < 0.1
 
     def test_camera_dolly_close_top_view_hides_points_above_camera(self):
-        """Al acercar la camara de verdad, una vista casi cenital no debe seguir viendo puntos por encima."""
+        """Al acercar la cámara de verdad, una vista casi cenital no debe seguir viendo puntos por encima."""
         from motor3d.camera.camera import Camera
 
         camera = Camera()
@@ -1336,7 +1384,7 @@ class TestCameraNavigation:
         assert camera.project([0.0, 0.0, 100.0], 800, 600) is None
 
     def test_camera_distance_expands_for_large_auto_generic_models(self):
-        """Los modelos genericos grandes no deben arrancar con la camara dentro del brazo."""
+        """Los modelos genéricos grandes no deben arrancar con la cámara dentro del brazo."""
         from motor3d.api import Motor3DApi
         from motor3d.camera.camera import Camera
 
@@ -1362,7 +1410,7 @@ class TestCameraNavigation:
         assert api.camera.distance == pytest.approx(1625.0, abs=1e-6)
 
     def test_camera_reset_restores_safe_distance_for_large_auto_generic_models(self):
-        """Reset camara debe volver a una distancia segura en modelos genericos grandes."""
+        """Reset cámara debe volver a una distancia segura en modelos genéricos grandes."""
         from motor3d.api import Motor3DApi
 
         api = Motor3DApi()
@@ -2003,7 +2051,7 @@ void loop() {
             screen_updater.refresh = original_refresh
 
     def test_arm3d_render_loop_uses_fast_interval_when_interacting(self):
-        """El loop pasivo del Arm3D debe acelerar el refresco si hay interaccion."""
+        """El loop pasivo del Arm3D debe acelerar el refresco si hay interacción."""
         import graphics.controller as controller_mod
         import graphics.layers as layers_mod
 
@@ -2115,3 +2163,130 @@ void loop() {
         assert layer.motor3d.model.joints[0] != start_joints[0]
         assert layer.motor3d.model.joints[0] != target_joints[0]
         assert after_calls == [controller_mod.RobotsController._ARM3D_RENDER_ACTIVE_MS]
+
+    def test_arm3d_camera_presets_use_caballera_isometrica_and_free(self):
+        """Los presets visibles deben resolver a caballera, isométrica y libre."""
+        from graphics.layers import Arm3DLayer
+        
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        camera_calls = []
+        render_calls = []
+
+        class _MockMotor3D:
+            def set_camera(self, **kwargs):
+                camera_calls.append(("set", kwargs))
+
+            def reset_camera(self):
+                camera_calls.append(("reset", None))
+
+        layer.motor3d = _MockMotor3D()
+        layer._request_fast_render = lambda: render_calls.append(True)
+
+        layer.set_camera_view("caballera")
+        layer.set_camera_view("isometrica")
+        layer.set_camera_view(None)
+
+        assert camera_calls[0] == ("set", Arm3DLayer.CAMERA_PRESETS["caballera"])
+        assert camera_calls[1] == ("set", Arm3DLayer.CAMERA_PRESETS["isometrica"])
+        assert camera_calls[2] == ("reset", None)
+        assert render_calls == [True, True, True]
+
+    def test_arm3d_alternative_mouse_mode_uses_left_drag_until_key_exit(self):
+        """El modo alternativo debe aplicar la acción elegida con LMB hasta salir por teclado."""
+        import graphics.gui as gui_mod
+        from graphics.layers import Arm3DLayer
+
+        class _Hint:
+            def __init__(self):
+                self.visible = False
+                self.text = ""
+
+            def configure(self, **kwargs):
+                self.text = kwargs.get("text", self.text)
+
+            def place(self, **_kwargs):
+                self.visible = True
+
+            def place_forget(self):
+                self.visible = False
+
+        frame = gui_mod.DrawingFrame.__new__(gui_mod.DrawingFrame)
+        drag_calls = []
+        mode_changes = []
+        frame.canvas = SimpleNamespace(focus_force=lambda: None)
+        frame.arm3d_mouse_mode_hint = _Hint()
+        frame.init_x = 0
+        frame.init_y = 0
+        frame._arm3d_mouse_mode = None
+        frame._arm3d_left_down = False
+        frame._arm3d_right_down = False
+
+        robot_layer = Arm3DLayer.__new__(Arm3DLayer)
+
+        def _set_mode(mode):
+            mode_changes.append(mode)
+            gui_mod.DrawingFrame.set_arm3d_mouse_mode(frame, mode)
+
+        frame.application = SimpleNamespace(
+            controller=SimpleNamespace(
+                robot_layer=robot_layer,
+                drag_arm3d_camera=lambda dx, dy, pan=False: drag_calls.append((dx, dy, pan)),
+                dolly_arm3d_camera=lambda dy: drag_calls.append(("dolly", dy)),
+            ),
+            set_arm3d_mouse_drag_mode=_set_mode,
+        )
+
+        gui_mod.DrawingFrame.set_arm3d_mouse_mode(frame, "pan")
+        gui_mod.DrawingFrame.press(frame, SimpleNamespace(x=20, y=30))
+        gui_mod.DrawingFrame.move(frame, SimpleNamespace(x=34, y=45))
+
+        assert drag_calls == [(14, 15, True)]
+        assert frame.arm3d_mouse_mode_hint.visible is True
+
+        gui_mod.DrawingFrame.handle_global_key_press(
+            frame, SimpleNamespace(keysym="Escape", char="\x1b")
+        )
+
+        assert mode_changes == [None]
+        assert frame._arm3d_mouse_mode is None
+        assert frame.arm3d_mouse_mode_hint.visible is False
+
+    def test_arm3d_zoom_drag_uses_left_and_right_buttons_together(self):
+        """LMB+RMB simultáneos deben activar el zoom por arrastre vertical."""
+        import graphics.gui as gui_mod
+        from graphics.layers import Arm3DLayer
+
+        class _Hint:
+            def configure(self, **_kwargs):
+                pass
+
+            def place(self, **_kwargs):
+                pass
+
+            def place_forget(self):
+                pass
+
+        frame = gui_mod.DrawingFrame.__new__(gui_mod.DrawingFrame)
+        drag_calls = []
+        frame.canvas = SimpleNamespace(focus_force=lambda: None)
+        frame.arm3d_mouse_mode_hint = _Hint()
+        frame.init_x = 0
+        frame.init_y = 0
+        frame._arm3d_mouse_mode = None
+        frame._arm3d_left_down = False
+        frame._arm3d_right_down = False
+
+        frame.application = SimpleNamespace(
+            controller=SimpleNamespace(
+                robot_layer=Arm3DLayer.__new__(Arm3DLayer),
+                drag_arm3d_camera=lambda dx, dy, pan=False: drag_calls.append((dx, dy, pan)),
+                dolly_arm3d_camera=lambda dy: drag_calls.append(("dolly", dy)),
+            ),
+            set_arm3d_mouse_drag_mode=lambda mode: gui_mod.DrawingFrame.set_arm3d_mouse_mode(frame, mode),
+        )
+
+        gui_mod.DrawingFrame.press(frame, SimpleNamespace(x=40, y=60))
+        gui_mod.DrawingFrame.press_right(frame, SimpleNamespace(x=40, y=60))
+        gui_mod.DrawingFrame.move(frame, SimpleNamespace(x=44, y=42))
+
+        assert drag_calls == [("dolly", -18)]

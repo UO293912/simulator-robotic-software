@@ -306,6 +306,12 @@ class RobotsController:
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.drag_camera(dx, dy, pan=pan)
 
+    def dolly_arm3d_camera(self, dy):
+        """Acerca o aleja la cámara del brazo 3D con arrastre."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.dolly_camera(dy)
+            self.view.change_zoom_label(self.robot_layer.drawing.zoom_percentage())
+
     def reset_arm3d_camera(self):
         """Resetea la cámara del brazo 3D."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):
@@ -322,12 +328,12 @@ class RobotsController:
             self.robot_layer.motor3d.set_show_joint_ranges(show)
 
     def toggle_arm3d_joint_axes(self, show):
-        """Activa o desactiva los ejes XYZ locales de cada articulaciÃ³n del brazo 3D."""
+        """Activa o desactiva los ejes XYZ locales de cada articulación del brazo 3D."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.motor3d.set_show_joint_axes(show)
 
     def set_arm3d_camera_view(self, view_name):
-        """Aplica un preset de cámara 3D: 'front', 'side', 'iso', o None (libre)."""
+        """Aplica un preset de cámara 3D: 'caballera', 'isometrica' o libre."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.set_camera_view(view_name)
 

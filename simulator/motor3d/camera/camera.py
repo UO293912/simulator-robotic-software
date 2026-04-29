@@ -17,6 +17,11 @@ class Camera:
     ZOOM_MIN = 0.01
     ZOOM_MAX = 100.0
     KEYBOARD_SPEED = 2.0  # grados por tick
+    PROJECTION_PERSPECTIVE = "perspective"
+    PROJECTION_CABALLERA = "caballera"
+    PROJECTION_ISOMETRICA = "isometrica"
+    CABALLERA_ANGLE_DEG = 35.0
+    CABALLERA_DEPTH_SCALE = 0.5
 
     def __init__(self):
         self.yaw = self.DEFAULT_YAW
@@ -26,6 +31,7 @@ class Camera:
         self.zoom = self.DEFAULT_ZOOM
         self.screen_offset_x = 0.0
         self.screen_offset_y = 0.0
+        self.projection_mode = self.PROJECTION_PERSPECTIVE
 
     # ------------------------------------------------------------------
     # Configuración
@@ -56,6 +62,17 @@ class Camera:
         if pitch is not None:
             self.pitch = max(self.PITCH_MIN, min(self.PITCH_MAX, float(pitch)))
 
+    def set_projection_mode(self, projection_mode=None):
+        valid_modes = {
+            self.PROJECTION_PERSPECTIVE,
+            self.PROJECTION_CABALLERA,
+            self.PROJECTION_ISOMETRICA,
+        }
+        if projection_mode in valid_modes:
+            self.projection_mode = projection_mode
+        else:
+            self.projection_mode = self.PROJECTION_PERSPECTIVE
+
     def pan(self, dx, dy):
         self.screen_offset_x += dx
         self.screen_offset_y += dy
@@ -67,6 +84,7 @@ class Camera:
         self.screen_offset_y = 0.0
         self.distance = self.DEFAULT_DISTANCE
         self.zoom = self.DEFAULT_ZOOM
+        self.projection_mode = self.PROJECTION_PERSPECTIVE
 
     def keyboard_update(self, move_wasd):
         if not move_wasd:
@@ -144,12 +162,40 @@ class Camera:
         Retorna (sx, sy) o None si está detrás de la cámara.
         """
         p_cs = self.camera_space(point)
+        return self.project_camera_space(p_cs, width, height)
+
+    def get_projection_scale(self):
+        return self.focal_length / max(self.distance, 1e-9)
+
+    def project_camera_space(self, p_cs, width, height):
+        """Proyecta coordenadas ya expresadas en el espacio de cámara."""
         z = p_cs[2]
         if z <= 0.01:
             return None
+        cx = width / 2.0 + self.screen_offset_x
+        cy = height / 2.0 + self.screen_offset_y
+
+        if self.projection_mode == self.PROJECTION_CABALLERA:
+            scale = self.get_projection_scale()
+            angle = math.radians(self.CABALLERA_ANGLE_DEG)
+            z_rel = z - self.distance
+            sx = (
+                p_cs[0] + z_rel * math.cos(angle) * self.CABALLERA_DEPTH_SCALE
+            ) * scale + cx
+            sy = (
+                -p_cs[1] - z_rel * math.sin(angle) * self.CABALLERA_DEPTH_SCALE
+            ) * scale + cy
+            return sx, sy
+
+        if self.projection_mode == self.PROJECTION_ISOMETRICA:
+            scale = self.get_projection_scale()
+            sx = p_cs[0] * scale + cx
+            sy = -p_cs[1] * scale + cy
+            return sx, sy
+
         f = self.focal_length
-        sx = (p_cs[0] / z) * f + width / 2.0 + self.screen_offset_x
-        sy = (-p_cs[1] / z) * f + height / 2.0 + self.screen_offset_y
+        sx = (p_cs[0] / z) * f + cx
+        sy = (-p_cs[1] / z) * f + cy
         return sx, sy
 
     def _sync_zoom_from_distance(self):
