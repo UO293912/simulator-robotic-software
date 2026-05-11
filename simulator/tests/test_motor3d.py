@@ -784,7 +784,7 @@ def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
 
     layer = Arm3DLayer()
     layer.set_joint_angle(0, 45.0)
-    assert layer.motor3d.model.joints[0] == -45.0
+    assert layer.motor3d.model.joints[0] == -52.0
     assert layer.robot.servo_base.value == 45.0
 
 
@@ -806,7 +806,7 @@ def test_arm3d_layer_ik_uses_animation_instead_of_pose_jump():
     converged, _ = layer.solve_ik(100.0, 200.0, 300.0)
 
     assert converged
-    assert layer.robot.servo_base.value == 150.0
+    assert layer.robot.servo_base.value == 157.0
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
     assert layer._current_joints[0] == layer.motor3d.model.joints[0]
@@ -856,7 +856,7 @@ def test_arm3d_layer_best_effort_ik_moves_on_first_unreachable_attempt():
 
     assert converged is False
     assert "Mejor aproximacion" in message
-    assert layer.robot.servo_base.value == 135.0
+    assert layer.robot.servo_base.value == 142.0
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
 
@@ -1717,11 +1717,11 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] == -60.0
+        assert layer.motor3d.model.joints[0] == -67.0
         assert layer.motor3d.model.joints[1] == 30.0
 
-    def test_servo_write_clamps_to_official_range(self):
-        """Servo.write debe usar la convención oficial y clampear a [0, 180]."""
+    def test_braccio_preset_saturates_servo_values_to_real_limits(self):
+        """El preset Braccio debe saturar la pose visual a los limites reales."""
         from graphics.layers import Arm3DLayer
         from libraries.servo import Servo
 
@@ -1732,12 +1732,30 @@ class TestBraccioCompiler:
         servo.write(-60)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == -90.0
+        assert layer.motor3d.model.joints[0] == -97.0
 
         servo.write(250)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == 90.0
+        assert layer.motor3d.model.joints[0] == 83.0
+
+    def test_braccio_preset_uses_real_calibration_points(self):
+        """Los puntos medidos digital-real deben aplicarse en el preset Braccio."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer()
+        layer.robot.servo_base.value = 7
+        layer.robot.servo_shoulder.value = 90
+        layer.robot.servo_elbow.value = 130
+        layer.robot.servo_wrist_vertical.value = 75
+        layer.robot.servo_wrist.value = 90
+        layer.robot.servo_gripper.value = 40
+
+        layer._current_joints = None
+        layer._Arm3DLayer__sync_from_servos()
+
+        expected = [-90.0, 0.0, 0.0, 0.0, 0.0, -50.0]
+        assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
     def test_transpiler_initializes_servo_instances_with_board(self):
         """Las declaraciones Servo deben crear instancias enlazadas a la placa activa."""
@@ -1852,6 +1870,14 @@ class TestPersistence:
         assert ok
         assert model.dof == 6
         assert len(model.joint_limits) == 6
+        assert model.joint_limits == [
+            (-97.0, 83.0),
+            (-75.0, 75.0),
+            (-50.0, 115.0),
+            (-75.0, 105.0),
+            (-90.0, 90.0),
+            (-80.0, -17.0),
+        ]
 
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""

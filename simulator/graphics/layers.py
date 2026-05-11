@@ -554,6 +554,14 @@ class Arm3DLayer(Layer):
             'projection_mode': 'isometrica',
         },
     }
+    BRACCIO_SERVO_CALIBRATION = (
+        ((0.0, -7.0), (7.0, 0.0), (180.0, 173.0)),
+        ((15.0, 15.0), (90.0, 90.0), (165.0, 165.0)),
+        ((15.0, 205.0), (130.0, 90.0), (180.0, 40.0)),
+        ((0.0, 15.0), (75.0, 90.0), (180.0, 195.0)),
+        ((0.0, 0.0), (90.0, 90.0), (180.0, 180.0)),
+        ((10.0, 10.0), (40.0, 40.0), (73.0, 73.0)),
+    )
 
     def __init__(self):
         # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
@@ -757,16 +765,52 @@ class Arm3DLayer(Layer):
     _FAST_RENDER_WINDOW_S = 0.25
     _FAST_RENDER_EPS = 1e-3
 
+    def _uses_braccio_calibration(self):
+        return bool(
+            getattr(self.motor3d, "uses_legacy_servo_degrees", lambda: False)()
+        )
+
+    @staticmethod
+    def _interpolate_calibration(points, value):
+        value = float(value)
+        ordered = sorted((float(x), float(y)) for x, y in points)
+        if value <= ordered[0][0]:
+            return ordered[0][1]
+        if value >= ordered[-1][0]:
+            return ordered[-1][1]
+        for (x0, y0), (x1, y1) in zip(ordered, ordered[1:]):
+            if x0 <= value <= x1:
+                if x1 == x0:
+                    return y1
+                ratio = (value - x0) / (x1 - x0)
+                return y0 + (y1 - y0) * ratio
+        return ordered[-1][1]
+
+    def _braccio_digital_to_real(self, joint_idx, value):
+        points = self.BRACCIO_SERVO_CALIBRATION[joint_idx]
+        return self._interpolate_calibration(points, value)
+
+    def _braccio_real_to_digital(self, joint_idx, value):
+        points = (
+            (real_value, digital_value)
+            for digital_value, real_value in self.BRACCIO_SERVO_CALIBRATION[joint_idx]
+        )
+        return self._interpolate_calibration(points, value)
+
     def _to_control_value(self, joint_idx, value):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
+        if self._uses_braccio_calibration() and joint_idx < len(self.BRACCIO_SERVO_CALIBRATION):
+            return self._braccio_real_to_digital(joint_idx, float(value) + 90.0)
         return float(value) + 90.0
 
     def _to_model_value(self, joint_idx, value):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
+        if self._uses_braccio_calibration() and joint_idx < len(self.BRACCIO_SERVO_CALIBRATION):
+            return self._braccio_digital_to_real(joint_idx, value) - 90.0
         return float(value) - 90.0
 
     def _request_fast_render(self, duration_s=None):
@@ -816,7 +860,7 @@ class Arm3DLayer(Layer):
             if i < len(model.joint_limits):
                 mn, mx = model.joint_limits[i]
                 target = max(mn, min(mx, target))
-                if i < len(self.robot._joint_servos):
+                if not self._uses_braccio_calibration() and i < len(self.robot._joint_servos):
                     self.robot._joint_servos[i].value = self._to_control_value(i, target)
             targets.append(target)
         now = time.monotonic()
@@ -860,7 +904,9 @@ class Arm3DLayer(Layer):
         def _jlim(i, mn, mx):
             if i < len(jtypes) and jtypes[i] == 'P':
                 return mn, mx
-            return self._to_control_value(i, mn), self._to_control_value(i, mx)
+            lo = self._to_control_value(i, mn)
+            hi = self._to_control_value(i, mx)
+            return min(lo, hi), max(lo, hi)
 
         joints_display = [_jval(i, j) for i, j in enumerate(model.joints)]
         limits_display = [_jlim(i, mn, mx) for i, (mn, mx) in enumerate(model.joint_limits)]
