@@ -133,11 +133,14 @@ def get_methods():
     methods["abs"] = ("double", "abs", ["int"], -1)
     methods["constrain"] = ("double", "constrain", [
                             "double", "double", "double"], -1)
+    methods["F"] = ("string", "F", ["string"], -1)
     methods["map"] = ("int", "map", ["int", "int", "int", "int", "int"], -1)
     methods["max"] = ("double", "max", ["double", "double"], -1)
     methods["min"] = ("double", "min", ["double", "double"], -1)
     methods["pow"] = ("double", "pow", ["float", "float"], -1)
+    methods["sizeof"] = ("int", "sizeof", ["any"], -1)
     methods["sq"] = ("double", "sq", ["double"], -1)
+    methods["strtol"] = ("long", "strtol", ["any", "any", "int"], -1)
     methods["sqrt"] = ("double", "sqrt", ["double"], -1)
 
     # Trigonometry
@@ -434,6 +437,28 @@ def constrain(x, a, b):
         return a
     else:
         return b
+
+
+def F(value):
+    return value
+
+
+def sizeof(value):
+    try:
+        return len(value)
+    except TypeError:
+        return 1
+
+
+def strtol(value, _end=None, base=10):
+    try:
+        if hasattr(value, "string"):
+            value = value.string
+        if isinstance(value, list):
+            value = "".join(str(item) for item in value).split("\0", 1)[0]
+        return int(str(value).strip(), int(base))
+    except (TypeError, ValueError):
+        return 0
 
 
 def map(value, from_low, from_high, to_low, to_high):

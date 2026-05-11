@@ -337,6 +337,11 @@ class CaseNode(Sentence):
 
 
 @dataclass
+class BlockNode(Sentence):
+    sentences: List = None
+
+
+@dataclass
 class ArrayAccessNode(Expression):
     value: IntTypeNode = None
     indexes: List = None
@@ -371,6 +376,13 @@ class BitwiseExpressionNode(BinaryOperation):
 @dataclass
 class CompoundAssignmentNode(BinaryOperation):
     pass
+
+
+@dataclass
+class ConditionalExpressionNode(Expression):
+    condition: Expression = None
+    true_expr: Expression = None
+    false_expr: Expression = None
 
 
 @dataclass
@@ -436,6 +448,11 @@ class StringNode(SingleValue):
 
 @dataclass
 class BooleanNode(SingleValue):
+    pass
+
+
+@dataclass
+class NullPtrNode(SingleValue):
     pass
 
 

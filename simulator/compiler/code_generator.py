@@ -177,7 +177,9 @@ class CodeGenerator(ast_visitor.ASTVisitor):
                 break
 
         self.write_to_script("(")
-        for arg in function.args:
+        for i, arg in enumerate(function.args):
+            if i > 0:
+                self.write_to_script(", ")
             arg.set_function(function)
             arg.accept(self, param)
         self.write_to_script("):")
@@ -377,7 +379,9 @@ class CodeGenerator(ast_visitor.ASTVisitor):
 
     def visit_case(self, case: ast.CaseNode, param):
         self.write_to_script("case ")
-        if case.expression is not None:
+        if case.type == "default":
+            self.write_to_script("_")
+        elif case.expression is not None:
             case.expression.accept(self, param)
         self.write_to_script(":")
         self.write_endl()
@@ -392,6 +396,15 @@ class CodeGenerator(ast_visitor.ASTVisitor):
             self.write_no_sentence()
         self.decrease_tab()
 
+        return None
+
+    def visit_block(self, block: ast.BlockNode, param):
+        if block.sentences is not None:
+            for i, sent in enumerate(block.sentences):
+                self._write_debug_line(sent)
+                sent.accept(self, param)
+                if i + 1 < len(block.sentences):
+                    self.write_endl()
         return None
 
     def visit_assignment(self, assignment: ast.AssignmentNode, param):
@@ -459,6 +472,19 @@ class CodeGenerator(ast_visitor.ASTVisitor):
             compound_assignment.right.accept(self, param)
         return None
 
+    def visit_conditional_expression(self, conditional_expression: ast.ConditionalExpressionNode, param):
+        self.write_to_script("(")
+        if conditional_expression.true_expr is not None:
+            conditional_expression.true_expr.accept(self, param)
+        self.write_to_script(" if ")
+        if conditional_expression.condition is not None:
+            conditional_expression.condition.accept(self, param)
+        self.write_to_script(" else ")
+        if conditional_expression.false_expr is not None:
+            conditional_expression.false_expr.accept(self, param)
+        self.write_to_script(")")
+        return None
+
     def visit_inc_dec_expression(self, inc_dec_expression: ast.IncDecExpressionNode, param):
         if inc_dec_expression.var is not None:
             inc_dec_expression.var.accept(self, param)
@@ -512,6 +538,10 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         self.write_to_script(boolean_node.value)
         return None
 
+    def visit_null_ptr(self, null_ptr_node: ast.NullPtrNode, param):
+        self.write_to_script("None")
+        return None
+
     def visit_id(self, id_node: ast.IDNode, param):
         if param is None:
             self.write_to_script(id_node.value)
@@ -558,6 +588,23 @@ class CodeGenerator(ast_visitor.ASTVisitor):
                 if i > 0:
                     self.write_to_script(", ")
                 function_call.parameters[i].accept(self, param)
+            self.write_to_script(")")
+        return None
+
+    def visit_conversion(self, conversion: ast.ConversionNode, param):
+        cast_name = None
+        if isinstance(conversion.conv_type, (ast.IntTypeNode, ast.LongTypeNode)):
+            cast_name = "int"
+        elif isinstance(conversion.conv_type, (ast.FloatTypeNode, ast.DoubleTypeNode)):
+            cast_name = "float"
+        elif isinstance(conversion.conv_type, ast.StringTypeNode):
+            cast_name = "String.String"
+
+        if cast_name is not None:
+            self.write_to_script(f"{cast_name}(")
+        if conversion.expr is not None:
+            conversion.expr.accept(self, param)
+        if cast_name is not None:
             self.write_to_script(")")
         return None
 

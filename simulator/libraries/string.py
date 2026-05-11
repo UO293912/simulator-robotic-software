@@ -34,7 +34,7 @@ def get_methods():
     methods["reserve"] = ("void", "reserve", [], -1)  # not implemented
     methods["setCharAt"] = ("void", "set_char_at", ["int", "char"], -1)
     methods["startsWith"] = ("bool", "starts_with", ["string"], -1)
-    methods["substring"] = ("string", "substring", ["int", "int"], -1)
+    methods["substring"] = ("string", "substring", ["int", "(int)"], -1)
     methods["toCharArray"] = ("char", "to_char_array", ["char", "int"], 0)
     methods["toDouble"] = ("double", "to_double", [], -1)
     methods["toInt"] = ("int", "to_int", [], -1)
