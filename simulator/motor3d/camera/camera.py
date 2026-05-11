@@ -63,9 +63,11 @@ class Camera:
             self.pitch = max(self.PITCH_MIN, min(self.PITCH_MAX, float(pitch)))
 
     def set_projection_mode(self, projection_mode=None):
+        if projection_mode == self.PROJECTION_CABALLERA:
+            projection_mode = self.PROJECTION_PERSPECTIVE
+
         valid_modes = {
             self.PROJECTION_PERSPECTIVE,
-            self.PROJECTION_CABALLERA,
             self.PROJECTION_ISOMETRICA,
         }
         if projection_mode in valid_modes:
@@ -174,18 +176,6 @@ class Camera:
             return None
         cx = width / 2.0 + self.screen_offset_x
         cy = height / 2.0 + self.screen_offset_y
-
-        if self.projection_mode == self.PROJECTION_CABALLERA:
-            scale = self.get_projection_scale()
-            angle = math.radians(self.CABALLERA_ANGLE_DEG)
-            z_rel = z - self.distance
-            sx = (
-                p_cs[0] + z_rel * math.cos(angle) * self.CABALLERA_DEPTH_SCALE
-            ) * scale + cx
-            sy = (
-                -p_cs[1] - z_rel * math.sin(angle) * self.CABALLERA_DEPTH_SCALE
-            ) * scale + cy
-            return sx, sy
 
         if self.projection_mode == self.PROJECTION_ISOMETRICA:
             scale = self.get_projection_scale()

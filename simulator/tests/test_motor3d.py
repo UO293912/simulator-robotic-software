@@ -1319,6 +1319,14 @@ class TestCameraNavigation:
         assert motor3d_api.camera.zoom < initial_zoom * 1.5
         assert motor3d_api.camera.distance > initial_distance
 
+    def test_set_camera_can_apply_distance(self, motor3d_api):
+        """Los presets de cámara pueden fijar una distancia orbital inicial."""
+        motor3d_api.set_camera(yaw=120.0, pitch=18.0, distance=950.0)
+
+        assert motor3d_api.camera.yaw == pytest.approx(120.0)
+        assert motor3d_api.camera.pitch == pytest.approx(18.0)
+        assert motor3d_api.camera.distance == pytest.approx(950.0)
+
     def test_camera_dolly_drag_changes_distance(self, motor3d_api):
         """El dolly por arrastre vertical debe acercar o alejar la cámara orbital."""
         initial_distance = motor3d_api.camera.distance
@@ -1335,6 +1343,7 @@ class TestCameraNavigation:
 
         motor3d_api.set_camera(yaw=0.0, pitch=0.0, projection_mode="caballera")
         caballera = motor3d_api.camera.project(point, 800, 600)
+        assert motor3d_api.camera.projection_mode == "perspective"
 
         motor3d_api.set_camera(yaw=45.0, pitch=35.26438968, projection_mode="isometrica")
         isometrica = motor3d_api.camera.project(point, 800, 600)
@@ -1350,6 +1359,7 @@ class TestCameraNavigation:
         camera = Camera()
         camera.set_orientation(yaw=30.0, pitch=15.0)
         camera.set_projection_mode("caballera")
+        assert camera.projection_mode == "perspective"
 
         projected = camera.project([0.0, 0.0, 0.0], 800, 600)
 
@@ -2187,9 +2197,63 @@ void loop() {
         layer.set_camera_view(None)
 
         assert camera_calls[0] == ("set", Arm3DLayer.CAMERA_PRESETS["caballera"])
+        assert camera_calls[0][1]["projection_mode"] == "perspective"
+        assert camera_calls[0][1]["yaw"] == 240.0
+        assert camera_calls[0][1]["pitch"] != 30.0
+        assert camera_calls[0][1]["distance"] > 700.0
         assert camera_calls[1] == ("set", Arm3DLayer.CAMERA_PRESETS["isometrica"])
+        assert camera_calls[1][1]["projection_mode"] == "isometrica"
         assert camera_calls[2] == ("reset", None)
         assert render_calls == [True, True, True]
+
+    def test_fixed_camera_presets_only_allow_zoom_interaction(self):
+        """Caballera e isométrica bloquean rotación y pan, pero permiten zoom."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        calls = []
+        layer.drawing = type(
+            "_Drawing",
+            (),
+            {"scale": 1.0, "zoom_percentage": lambda self: 100},
+        )()
+        layer._request_fast_render = lambda: calls.append(("render",))
+
+        class _MockMotor3D:
+            def set_camera(self, **kwargs):
+                calls.append(("set_camera", kwargs))
+
+            def reset_camera(self):
+                calls.append(("reset_camera",))
+
+            def drag_camera(self, dx, dy, pan=False):
+                calls.append(("drag_camera", dx, dy, pan))
+
+            def dolly_camera(self, dy):
+                calls.append(("dolly_camera", dy))
+
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
+        layer.motor3d = _MockMotor3D()
+
+        layer.set_camera_view("caballera")
+        layer.drag_camera(20, 10)
+        layer.drag_camera(20, 10, pan=True)
+        layer.set_camera_yaw(90)
+        layer.set_camera_pitch(25)
+        layer.dolly_camera(12)
+
+        assert ("drag_camera", 20, 10, False) not in calls
+        assert ("drag_camera", 20, 10, True) not in calls
+        assert not any(call[0] == "set_camera" and call[1] == {"yaw": 90} for call in calls)
+        assert not any(call[0] == "set_camera" and call[1] == {"pitch": 25} for call in calls)
+        assert ("dolly_camera", 12) in calls
+
+        layer.set_camera_view(None)
+        layer.drag_camera(5, 6)
+
+        assert ("reset_camera",) in calls
+        assert ("drag_camera", 5, 6, False) in calls
 
     def test_arm3d_alternative_mouse_mode_uses_left_drag_until_key_exit(self):
         """El modo alternativo debe aplicar la acción elegida con LMB hasta salir por teclado."""

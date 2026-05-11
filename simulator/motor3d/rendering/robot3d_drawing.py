@@ -1114,10 +1114,6 @@ class Robot3DDrawing:
             'ortho_scale': camera.get_projection_scale(),
             'target_depth': camera.distance,
         }
-        if camera.projection_mode == camera.PROJECTION_CABALLERA:
-            angle = math.radians(camera.CABALLERA_ANGLE_DEG)
-            projection['oblique_dx'] = math.cos(angle) * camera.CABALLERA_DEPTH_SCALE
-            projection['oblique_dy'] = math.sin(angle) * camera.CABALLERA_DEPTH_SCALE
         return projection
 
     def _project_camera_space(self, p_cs, projection):
@@ -1126,12 +1122,6 @@ class Robot3DDrawing:
         if z <= 0.01:
             return None
         mode = projection.get('mode')
-        if mode == 'caballera':
-            scale = projection['ortho_scale']
-            z_rel = z - projection['target_depth']
-            sx = (p_cs[0] + z_rel * projection['oblique_dx']) * scale + projection['cx']
-            sy = (-p_cs[1] - z_rel * projection['oblique_dy']) * scale + projection['cy']
-            return sx, sy
         if mode == 'isometrica':
             scale = projection['ortho_scale']
             sx = p_cs[0] * scale + projection['cx']
@@ -1189,16 +1179,7 @@ class Robot3DDrawing:
         behind = (z_cam <= 0.01).reshape(N, 3).any(axis=1)  # triángulos con vértice detrás
 
         mode = projection.get('mode')
-        if mode == 'caballera':
-            scale = projection['ortho_scale']
-            z_rel = z_cam - projection['target_depth']
-            sx = (
-                verts_cam[:, 0] + z_rel * projection['oblique_dx']
-            ) * scale + cx
-            sy = (
-                -verts_cam[:, 1] - z_rel * projection['oblique_dy']
-            ) * scale + cy
-        elif mode == 'isometrica':
+        if mode == 'isometrica':
             scale = projection['ortho_scale']
             sx = verts_cam[:, 0] * scale + cx
             sy = -verts_cam[:, 1] * scale + cy

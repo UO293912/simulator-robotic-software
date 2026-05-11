@@ -536,18 +536,21 @@ class Arm3DLayer(Layer):
     """
     CAMERA_PRESETS = {
         'caballera': {
-            'yaw': 30.0,
-            'pitch': 15.0,
-            'projection_mode': 'caballera',
+            # Use the free camera projection, but start from a flatter
+            # side-oblique angle, pulled back to frame the whole arm cleanly.
+            'yaw': 240.0,
+            'pitch': 18.0,
+            'distance': 950.0,
+            'projection_mode': 'perspective',
         },
         'isometrica': {
             'yaw': 45.0,
-            'pitch': 35.26438968,
+            'pitch': 32.0,
             'projection_mode': 'isometrica',
         },
         'iso': {
             'yaw': 45.0,
-            'pitch': 35.26438968,
+            'pitch': 32.0,
             'projection_mode': 'isometrica',
         },
     }
@@ -570,6 +573,7 @@ class Arm3DLayer(Layer):
         self._current_joints = None  # ángulos animados actuales (interpolados)
         self._last_sync_time = None
         self._interactive_render_until = 0.0
+        self._camera_locked = False
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
         self._sync_servos_from_model(reset_animation=True)
@@ -611,7 +615,8 @@ class Arm3DLayer(Layer):
             return
 
         # Mover cámara con teclado
-        self.motor3d.keyboard_camera(move_WASD)
+        if not getattr(self, "_camera_locked", False):
+            self.motor3d.keyboard_camera(move_WASD)
 
         # Sincronizar valores de servo → ángulos DH
         self.__sync_from_servos()
@@ -691,6 +696,8 @@ class Arm3DLayer(Layer):
         return result
 
     def drag_camera(self, dx, dy, pan=False):
+        if getattr(self, "_camera_locked", False):
+            return
         self.motor3d.drag_camera(dx, dy, pan=pan)
         self._request_fast_render()
 
@@ -700,15 +707,20 @@ class Arm3DLayer(Layer):
         self._request_fast_render()
 
     def set_camera_yaw(self, yaw):
+        if getattr(self, "_camera_locked", False):
+            return
         self.motor3d.set_camera(yaw=yaw)
         self._request_fast_render()
 
     def set_camera_pitch(self, pitch):
+        if getattr(self, "_camera_locked", False):
+            return
         self.motor3d.set_camera(pitch=pitch)
         self._request_fast_render()
 
     def reset_camera(self):
         self.motor3d.reset_camera()
+        self._camera_locked = False
         self._request_fast_render()
 
     def set_camera_view(self, view_name):
@@ -716,8 +728,10 @@ class Arm3DLayer(Layer):
         preset = self.CAMERA_PRESETS.get(view_name)
         if preset is not None:
             self.motor3d.set_camera(**preset)
+            self._camera_locked = view_name in ('caballera', 'isometrica', 'iso')
         else:
             self.motor3d.reset_camera()
+            self._camera_locked = False
         self._request_fast_render()
 
     def set_trail(self, enabled):

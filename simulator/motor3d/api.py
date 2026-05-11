@@ -79,8 +79,10 @@ class Motor3DApi:
     def drag_camera(self, dx, dy, pan=False):
         self.camera_controller.drag(dx, dy, pan=pan)
 
-    def set_camera(self, yaw=None, pitch=None, projection_mode=None):
+    def set_camera(self, yaw=None, pitch=None, projection_mode=None, distance=None):
         self.camera.set_orientation(yaw=yaw, pitch=pitch)
+        if distance is not None:
+            self.camera.set_distance(distance)
         if projection_mode is not None:
             self.camera.set_projection_mode(projection_mode)
 
