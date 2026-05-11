@@ -3,6 +3,8 @@ import graphics.robot_drawings as robot_drawings
 import graphics.huds as huds
 import robot_components.robots as robots
 import files.files_reader as filesr
+import time
+from motor3d.api import Motor3DApi
 
 
 class Layer:
@@ -521,6 +523,344 @@ class ArduinoBoardLayer(Layer):
         Stops all the executing code and clears the canvas
         """
         self.is_drawing = False
+
+
+class Arm3DLayer(Layer):
+    """
+    Capa de integración entre el sistema legado S4R y el motor 3D.
+    Puente entre la GUI y Motor3DApi.
+
+    Conversión de ángulos:
+        joint_angle (DH) = servo_value - 90.0
+        servo_value       = clamp(angle + 90.0, 0, 180)
+    """
+    CAMERA_PRESETS = {
+        'caballera': {
+            'yaw': 30.0,
+            'pitch': 15.0,
+            'projection_mode': 'caballera',
+        },
+        'isometrica': {
+            'yaw': 45.0,
+            'pitch': 35.26438968,
+            'projection_mode': 'isometrica',
+        },
+        'iso': {
+            'yaw': 45.0,
+            'pitch': 35.26438968,
+            'projection_mode': 'isometrica',
+        },
+    }
+
+    def __init__(self):
+        # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
+        import graphics.drawing as _drawing
+        self.drawing = _drawing.Drawing()
+        self.is_drawing = False
+        self.is_board = False
+        self.hud = huds.Arm3DHUD()
+        self.robot = robots.ArmHardwareRobot()
+        self.robot_drawing = None
+        self._zoom_percentage()
+
+        self.motor3d = Motor3DApi()
+        self.safety_blocked = False
+        self.warning_message = ""
+        self._canvas = None
+        self._current_joints = None  # ángulos animados actuales (interpolados)
+        self._last_sync_time = None
+        self._interactive_render_until = 0.0
+        # Sincronizar la escala del Drawing con el zoom inicial de la cámara
+        self.drawing.scale = self.motor3d.camera.zoom
+        self._sync_servos_from_model(reset_animation=True)
+
+    def set_canvas(self, canvas, hud_canvas):
+        self._canvas = canvas
+        self.drawing.set_canvas(canvas)
+        self.hud.set_canvas(hud_canvas)
+        # Resetear el ID de imagen del renderer para que se cree nuevo
+        self.motor3d.renderer._canvas_image_id = None
+
+    def execute(self):
+        self.is_drawing = True
+        self.motor3d.scene.update()
+
+    def stop(self):
+        self.is_drawing = False
+        self.safety_blocked = False
+        self.warning_message = ""
+        self._current_joints = None  # resetear animación
+        self._last_sync_time = None
+        self._interactive_render_until = 0.0
+        if self._canvas is not None:
+            try:
+                self._canvas.delete("all")
+            except Exception:
+                pass
+        # Invalidar el ID de imagen del renderer para que el siguiente draw()
+        # cree un nuevo item en lugar de intentar itemconfig sobre uno inexistente.
+        self.motor3d.renderer._canvas_image_id = None
+        if self.hud:
+            self.hud.reboot()
+
+    def move(self, using_keys, move_WASD):
+        """
+        Tick principal (~16 ms). Lee los servos del robot, actualiza Motor3D y renderiza.
+        """
+        if not self.is_drawing and not self._canvas:
+            return
+
+        # Mover cámara con teclado
+        self.motor3d.keyboard_camera(move_WASD)
+
+        # Sincronizar valores de servo → ángulos DH
+        self.__sync_from_servos()
+
+        # Renderizar
+        if self._canvas:
+            self.motor3d.draw(self._canvas)
+
+        # Evaluar seguridad y actualizar HUD
+        safety = self.motor3d.evaluate_safety()
+        self.safety_blocked = safety['blocked']
+        self.warning_message = safety['message']
+        self._update_hud(safety)
+
+    def zoom_in(self):
+        cam = self.motor3d.camera
+        cam.set_distance(cam.distance / 1.25)
+        self.drawing.scale = cam.zoom   # sincroniza la etiqueta
+
+    def zoom_out(self):
+        cam = self.motor3d.camera
+        cam.set_distance(cam.distance * 1.25)
+        self.drawing.scale = cam.zoom   # sincroniza la etiqueta
+
+    def _zoom_config(self):
+        self._zoom_percentage()
+
+    def _zoom_redraw(self):
+        pass
+
+    # ------------------------------------------------------------------
+    # API expuesta al controlador
+    # ------------------------------------------------------------------
+
+    def set_joint_angle(self, joint_idx, angle):
+        """
+        Fija la articulación desde el valor visible en la UI.
+        Para juntas R, la UI trabaja en grados tipo servo (0..180).
+        """
+        model_value = self._to_model_value(joint_idx, angle)
+        self.motor3d.set_joint(joint_idx, model_value)
+        servos = [
+            self.robot.servo_base,
+            self.robot.servo_shoulder,
+            self.robot.servo_elbow,
+            self.robot.servo_wrist_vertical,
+            self.robot.servo_wrist,
+            self.robot.servo_gripper,
+        ]
+        if 0 <= joint_idx < len(servos):
+            servos[joint_idx].value = self._to_control_value(
+                joint_idx, self.motor3d.model.joints[joint_idx]
+            )
+        if self._current_joints is not None and 0 <= joint_idx < len(self._current_joints):
+            self._current_joints[joint_idx] = float(self.motor3d.model.joints[joint_idx])
+        self._request_fast_render()
+
+    def solve_ik(self, x, y, z):
+        """Lanza IK y anima la transicion hacia la mejor solucion encontrada."""
+        start_joints = None
+        model = self.motor3d.model
+        if self._current_joints is not None and len(self._current_joints) == model.dof:
+            start_joints = list(self._current_joints)
+        else:
+            start_joints = list(model.joints[:model.dof])
+
+        result = self.motor3d.solve_ik(x, y, z, track_trail=False)
+        self._sync_servos_from_model(reset_animation=False)
+        self._current_joints = list(start_joints)
+        for i, joint in enumerate(start_joints):
+            self.motor3d.model.set_joint(i, joint)
+        # Inicia la animación dentro de la propia acción IK para que la mejor
+        # aproximación empiece a verse ya en el primer clic.
+        self._last_sync_time = time.monotonic() - self._IK_ANIM_KICKSTART_S
+        self._Arm3DLayer__sync_from_servos()
+        self._request_fast_render()
+        return result
+
+    def drag_camera(self, dx, dy, pan=False):
+        self.motor3d.drag_camera(dx, dy, pan=pan)
+        self._request_fast_render()
+
+    def dolly_camera(self, dy):
+        self.motor3d.dolly_camera(dy)
+        self.drawing.scale = self.motor3d.camera.zoom
+        self._request_fast_render()
+
+    def set_camera_yaw(self, yaw):
+        self.motor3d.set_camera(yaw=yaw)
+        self._request_fast_render()
+
+    def set_camera_pitch(self, pitch):
+        self.motor3d.set_camera(pitch=pitch)
+        self._request_fast_render()
+
+    def reset_camera(self):
+        self.motor3d.reset_camera()
+        self._request_fast_render()
+
+    def set_camera_view(self, view_name):
+        """Aplica un preset de cámara: 'caballera', 'isometrica' o libre."""
+        preset = self.CAMERA_PRESETS.get(view_name)
+        if preset is not None:
+            self.motor3d.set_camera(**preset)
+        else:
+            self.motor3d.reset_camera()
+        self._request_fast_render()
+
+    def set_trail(self, enabled):
+        self.motor3d.set_show_trail(enabled)
+        self._request_fast_render()
+
+    def clear_trail(self):
+        self.motor3d.scene.clear_trail()
+        self._request_fast_render()
+
+    def get_model_config(self):
+        return self.motor3d.get_model_config()
+
+    # ------------------------------------------------------------------
+    # Helpers privados
+    # ------------------------------------------------------------------
+
+    # Velocidad de animación en grados por segundo.
+    # Se usa tiempo real y no "grados por frame" para que el movimiento
+    # no dependa de los FPS del render 3D.
+    _ANIM_SPEED_DPS = 45.0
+    _IK_ANIM_KICKSTART_S = 1.0 / 30.0
+    _FAST_RENDER_WINDOW_S = 0.25
+    _FAST_RENDER_EPS = 1e-3
+
+    def _to_control_value(self, joint_idx, value):
+        model = self.motor3d.model
+        if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
+            return float(value)
+        return float(value) + 90.0
+
+    def _to_model_value(self, joint_idx, value):
+        model = self.motor3d.model
+        if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
+            return float(value)
+        return float(value) - 90.0
+
+    def _request_fast_render(self, duration_s=None):
+        """Mantiene el render en modo rapido durante una breve ventana temporal."""
+        window = self._FAST_RENDER_WINDOW_S if duration_s is None else max(0.0, float(duration_s))
+        self._interactive_render_until = max(
+            self._interactive_render_until,
+            time.monotonic() + window,
+        )
+
+    def wants_fast_render(self):
+        """Indica si conviene refrescar a mayor frecuencia por interacción reciente."""
+        if time.monotonic() < self._interactive_render_until:
+            return True
+
+        model = self.motor3d.model
+        if self._current_joints is None or model.dof == 0:
+            return False
+
+        servo_values = self.robot.get_servo_values()
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+            if i < len(self._current_joints):
+                if abs(target - self._current_joints[i]) > self._FAST_RENDER_EPS:
+                    return True
+        return False
+
+    def _sync_servos_from_model(self, reset_animation=False):
+        """Sincroniza los servos virtuales con el estado actual del modelo."""
+        model = self.motor3d.model
+        for i, servo in enumerate(self.robot._joint_servos[:model.dof]):
+            servo.value = self._to_control_value(i, model.joints[i])
+        if reset_animation:
+            self._current_joints = list(model.joints[:model.dof])
+            self._last_sync_time = time.monotonic()
+
+    def __sync_from_servos(self):
+        """Lee los valores objetivo de los servos e interpola suavemente hacia ellos."""
+        servo_values = self.robot.get_servo_values()
+        model = self.motor3d.model
+        targets = []
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+                if i < len(self.robot._joint_servos):
+                    self.robot._joint_servos[i].value = self._to_control_value(i, target)
+            targets.append(target)
+        now = time.monotonic()
+
+        # Inicializar posición actual en el primer frame
+        if self._current_joints is None or len(self._current_joints) != len(targets):
+            self._current_joints = list(targets)
+            self._last_sync_time = now
+
+        if self._last_sync_time is None:
+            dt = 0.016
+        else:
+            # Permitimos frames lentos (p. ej. 5 FPS) sin frenar artificialmente
+            # la animación. Solo se limita para evitar saltos enormes tras pausas
+            # largas o al reanudar depuración.
+            dt = max(0.0, min(0.25, now - self._last_sync_time))
+        self._last_sync_time = now
+
+        speed = self._ANIM_SPEED_DPS * dt
+        for i, target in enumerate(targets):
+            curr = self._current_joints[i]
+            diff = target - curr
+            if abs(diff) <= speed:
+                self._current_joints[i] = target
+            else:
+                self._current_joints[i] = curr + speed * (1.0 if diff > 0 else -1.0)
+            self.motor3d.model.set_joint(i, self._current_joints[i])
+
+        self.motor3d.scene.update()
+
+    def _update_hud(self, safety):
+        ee = self.motor3d.scene.get_end_effector()
+        model = self.motor3d.model
+        jtypes = model.joint_types
+
+        def _jval(i, j):
+            if i < len(jtypes) and jtypes[i] == 'P':
+                return j
+            return self._to_control_value(i, j)
+
+        def _jlim(i, mn, mx):
+            if i < len(jtypes) and jtypes[i] == 'P':
+                return mn, mx
+            return self._to_control_value(i, mn), self._to_control_value(i, mx)
+
+        joints_display = [_jval(i, j) for i, j in enumerate(model.joints)]
+        limits_display = [_jlim(i, mn, mx) for i, (mn, mx) in enumerate(model.joint_limits)]
+        self.hud.update(
+            dof=model.dof,
+            joints=joints_display,
+            end_effector=ee,
+            joint_limits=limits_display,
+            joint_types=list(jtypes),
+            in_workspace=safety['in_workspace'],
+            singular=safety['singular'],
+            safety_blocked=safety['blocked'],
+            warning_message=safety['message'],
+        )
 
     def draw_component(self, x, y):
         if self.hud.drawing is not None:

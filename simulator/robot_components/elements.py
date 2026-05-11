@@ -71,6 +71,24 @@ class Servo(Element):
         return "digital"
 
 
+class ArmJointServo(Servo):
+
+    def __init__(self):
+        super().__init__()
+        self.value = 0.0
+
+    def set_value(self, pin, value):
+        """
+        Guarda directamente el valor articular del brazo en grados DH/mm.
+        El clamping real se aplica después en el modelo cinemático.
+        """
+        try:
+            Element.set_value(self, pin, float(value))
+            return True
+        except (TypeError, ValueError):
+            return False
+
+
 class Button(Element):
 
     def __init__(self):

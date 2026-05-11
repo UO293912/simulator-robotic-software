@@ -1,0 +1,10 @@
+#include <Braccio.h>
+
+void setup() {
+  Braccio.begin();
+}
+
+void loop() {
+  // Pose de seguridad oficial del Braccio.
+  Braccio.ServoMovement(20, 90, 45, 180, 180, 90, 10);
+}

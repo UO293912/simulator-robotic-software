@@ -190,6 +190,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
 
         if len(function.sentences) > 0:
             for sent in function.sentences:
+                self._write_debug_line(sent)
                 sent.accept(self, param)
                 self.write_endl()
         else:
@@ -210,6 +211,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         if n_sents > 0:
             for i in range(0, n_sents):
                 sent = while_p.sentences[i]
+                self._write_debug_line(sent)
                 sent.accept(self, param)
                 if i + 1 < n_sents:
                     self.write_endl()
@@ -230,6 +232,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         if n_sents > 0:
             for i in range(0, n_sents):
                 sent = do_while.sentences[i]
+                self._write_debug_line(sent)
                 sent.accept(self, param)
                 if i + 1 < n_sents:
                     self.write_endl()
@@ -261,7 +264,25 @@ class CodeGenerator(ast_visitor.ASTVisitor):
             self.write_to_script(for_p.assignment.expr.value)
         self.write_to_script(", ")
         if for_p.condition is not None:
-            for_p.condition.accept(self, param)
+            # Extraer solo el operando derecho de la condición para el stop del range.
+            # Para '<' y '>' el stop es el valor literal del lado derecho.
+            # Para '<=' el stop es right + 1; para '>=' es right - 1.
+            if isinstance(for_p.condition, ast.ComparisionExpressionNode):
+                op = for_p.condition.op
+                if op in ('<', '>'):
+                    for_p.condition.right.accept(self, param)
+                elif op == '<=':
+                    self.write_to_script("(")
+                    for_p.condition.right.accept(self, param)
+                    self.write_to_script(" + 1)")
+                elif op == '>=':
+                    self.write_to_script("(")
+                    for_p.condition.right.accept(self, param)
+                    self.write_to_script(" - 1)")
+                else:
+                    for_p.condition.accept(self, param)
+            else:
+                for_p.condition.accept(self, param)
         self.write_to_script(", ")
         if for_p.expression is not None:
             if isinstance(for_p.expression, ast.IncDecExpressionNode):
@@ -279,6 +300,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         if n_sents > 0:
             for i in range(0, n_sents):
                 sent = for_p.sentences[i]
+                self._write_debug_line(sent)
                 sent.accept(self, param)
                 if i + 1 < n_sents:
                     self.write_endl()
@@ -304,6 +326,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         if n_ifs > 0:
             for i in range(0, n_ifs):
                 if_sent = conditional_sentence.if_expr[i]
+                self._write_debug_line(if_sent)
                 if_sent.accept(self, param)
                 if i + 1 < n_ifs:
                     self.write_endl()
@@ -428,12 +451,12 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         self.write_to_script(")")
         return None
 
-    def visit_compound_assigment(self, compound_asigment: ast.CompoundAssignmentNode, param):
-        if compound_asigment.left is not None:
-            compound_asigment.left.accept(self, param)
-        self.write_to_script(" {} ".format(compound_asigment.op))
-        if compound_asigment.right is not None:
-            compound_asigment.right.accept(self, param)
+    def visit_compound_assignment(self, compound_assignment: ast.CompoundAssignmentNode, param):
+        if compound_assignment.left is not None:
+            compound_assignment.left.accept(self, param)
+        self.write_to_script(" {} ".format(compound_assignment.op))
+        if compound_assignment.right is not None:
+            compound_assignment.right.accept(self, param)
         return None
 
     def visit_inc_dec_expression(self, inc_dec_expression: ast.IncDecExpressionNode, param):
@@ -584,6 +607,16 @@ class CodeGenerator(ast_visitor.ASTVisitor):
                     elements[i].accept(self, param)
         return None
 
+    def _write_debug_line(self, node):
+        """Emite screen_updater.debug_line(N) si el nodo tiene número de línea válido.
+        Esto permite breakpoints y ejecución paso a paso (RF4.2.2, RF4.2.3)."""
+        self.write_to_script("standard.runtime_watchdog_checkpoint()")
+        self.write_endl()
+        line = getattr(node, 'line', None)
+        if line is not None and line > 0:
+            self.write_to_script(f"screen_updater.debug_line({line})")
+            self.write_endl()
+
     def write_to_script(self, sentence):
         """
         Writes a sentence into a python script, which will be
@@ -610,7 +643,7 @@ class CodeGenerator(ast_visitor.ASTVisitor):
         self.continue_line = False
 
     def write_no_sentence(self):
-        self.write_to_script("pass")
+        self.write_to_script("standard.runtime_watchdog_checkpoint()")
         self.write_endl()
 
     def increase_tab(self):
