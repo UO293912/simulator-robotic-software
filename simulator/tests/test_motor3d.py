@@ -1852,6 +1852,26 @@ class TestSafetyAndConstraints:
         missing = required - result.keys()
         assert not missing, f"Faltan claves en el resultado: {missing}"
 
+    def test_safety_does_not_warn_singularity_for_braccio_rest_pose(self, motor3d_api):
+        """La pose inicial real del Braccio no debe aparecer como singularidad espuria."""
+        motor3d_api.model.joints = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+        motor3d_api.scene.update()
+
+        result = motor3d_api.evaluate_safety()
+
+        assert result['singular'] is False
+        assert result['message'] == ""
+
+    def test_safety_warns_for_true_jacobian_singularity(self, motor3d_api):
+        """Una pose extendida con perdida de rango del Jacobiano mantiene el aviso."""
+        motor3d_api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -80.0]
+        motor3d_api.scene.update()
+
+        result = motor3d_api.evaluate_safety()
+
+        assert result['singular'] is True
+        assert "singularidad" in result['message']
+
     def test_set_joint_within_limits(self, motor3d_api):
         """set_joint con valor fuera de límite debe aplicar clamping."""
         # J1 tiene límite [-90, 90]

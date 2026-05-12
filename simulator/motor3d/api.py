@@ -193,7 +193,7 @@ class Motor3DApi:
         """Evalúa el estado de seguridad de la pose actual."""
         points = self.scene.last_points
         max_reach = self.model.max_reach()
-        return self.safety_manager.evaluate(points, max_reach)
+        return self.safety_manager.evaluate(points, max_reach, model=self.model)
 
 
     # ------------------------------------------------------------------
