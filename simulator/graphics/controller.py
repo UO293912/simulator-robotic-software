@@ -59,6 +59,7 @@ class RobotsController:
         if generation != current_generation or not getattr(self, "executing", False):
             return  # iteración huérfana: otra ejecución tomó el control o se detuvo
         screen_updater.refresh()
+        self._refresh_arm3d_control_panel()
         view = getattr(self, "view", None)
         if view is None:
             return
@@ -92,11 +93,24 @@ class RobotsController:
             layer = self.robot_layer
             move_wasd = getattr(self.view, "move_WASD", {})
             layer.move(False, move_wasd)
+            self._refresh_arm3d_control_panel()
             if any(move_wasd.values()) or layer.wants_fast_render():
                 interval_ms = self._ARM3D_RENDER_ACTIVE_MS
         except Exception:
             pass
         self.view.after(interval_ms, self.arm3d_render_loop)
+
+    def _refresh_arm3d_control_panel(self):
+        view = getattr(self, "view", None)
+        panel = getattr(view, "arm3d_control_panel", None)
+        if panel is None:
+            return
+        if not self.arm3d or not isinstance(self.robot_layer, layers.Arm3DLayer):
+            return
+        try:
+            panel.refresh_from_model()
+        except Exception:
+            pass
 
     def stop(self):
         self.executing = False

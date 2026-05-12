@@ -2073,6 +2073,8 @@ class Arm3DControlPanel(tk.Frame):
     def __init__(self, parent, application: 'MainApplication' = None, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.application = application
+        self._syncing_sliders = False
+        self._sliders_locked = False
 
         # --- Cinemática Directa: sliders verticales ---
         tk.Label(self, text="Cinemática Directa",
@@ -2202,20 +2204,25 @@ class Arm3DControlPanel(tk.Frame):
     # ------------------------------------------------------------------ helpers
 
     def _get_model(self):
+        layer = self._get_layer()
+        if layer is not None:
+            return layer.motor3d.model
+        return None
+
+    def _get_layer(self):
         try:
             import graphics.layers as _layers
             layer = self.application.controller.robot_layer
             if isinstance(layer, _layers.Arm3DLayer):
-                return layer.motor3d.model
+                return layer
         except Exception:
             pass
         return None
 
     def _get_motor3d(self):
         try:
-            import graphics.layers as _layers
-            layer = self.application.controller.robot_layer
-            if isinstance(layer, _layers.Arm3DLayer):
+            layer = self._get_layer()
+            if layer is not None:
                 return layer.motor3d
         except Exception:
             pass
@@ -2227,6 +2234,8 @@ class Arm3DControlPanel(tk.Frame):
         return True
 
     def _on_slider(self, joint_idx, val):
+        if getattr(self, "_syncing_sliders", False) or getattr(self, "_sliders_locked", False):
+            return
         try:
             float_val = float(val)
             model = self._get_model()
@@ -2294,11 +2303,18 @@ class Arm3DControlPanel(tk.Frame):
     def refresh_from_model(self):
         """Sincroniza todo el panel con el modelo actual: DOF, tipos, rangos y valores."""
         try:
-            model = self._get_model()
+            layer = self._get_layer()
+            model = layer.motor3d.model if layer is not None else self._get_model()
             if model is None:
                 return
             dof = model.dof
             servo = self._is_servo_mode()
+            motion_locked = bool(
+                layer is not None
+                and getattr(layer, "is_motion_active", lambda: False)()
+            )
+            self._sliders_locked = motion_locked
+            self._syncing_sliders = True
             for i, (slider, val_lbl, jlbl) in enumerate(
                     zip(self._sliders, self._val_labels, self._jlabels)):
                 if i < dof:
@@ -2315,22 +2331,35 @@ class Arm3DControlPanel(tk.Frame):
                         disp_val = raw_dh
                         unit = "mm"
                     elif servo:
-                        lim_min, lim_max = mn + 90.0, mx + 90.0
-                        disp_val = raw_dh + 90.0
+                        if layer is not None and hasattr(layer, "_to_control_value"):
+                            lim_a = layer._to_control_value(i, mn)
+                            lim_b = layer._to_control_value(i, mx)
+                            lim_min, lim_max = min(lim_a, lim_b), max(lim_a, lim_b)
+                            disp_val = layer._to_control_value(i, raw_dh)
+                        else:
+                            lim_min, lim_max = mn + 90.0, mx + 90.0
+                            disp_val = raw_dh + 90.0
                         unit = "°"
                     else:
                         lim_min, lim_max = mn, mx
                         disp_val = raw_dh
                         unit = "°"
 
-                    slider.configure(from_=lim_min, to=lim_max)
+                    slider.configure(
+                        from_=lim_min,
+                        to=lim_max,
+                        state="disabled" if motion_locked else "normal",
+                    )
                     slider.set(disp_val)
-                    val_lbl.config(text=f"{int(disp_val):>4}{unit}")
+                    val_lbl.config(text=f"{int(round(disp_val)):>4}{unit}")
                 else:
                     jlbl.grid_remove()
                     slider.grid_remove()
                     val_lbl.grid_remove()
+                    slider.configure(state="normal")
+            self._syncing_sliders = False
         except Exception:
+            self._syncing_sliders = False
             pass
 
 

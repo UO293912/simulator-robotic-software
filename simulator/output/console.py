@@ -173,6 +173,10 @@ class Console:
         message = str(message)
         self.logger.write_log(m_type, message)
         self.messages.append((m_type, message))
+        if threading.current_thread() is threading.main_thread():
+            self.__flush_output()
+            self.__insert_output(message, m_type)
+            return
         with self._pending_output_lock:
             self._pending_output.append(message)
             if self._pending_output_scheduled:
@@ -191,6 +195,12 @@ class Console:
         m_type = 'info'
         self.text_widget.config(state=tk.NORMAL)
         self.text_widget.insert(tk.END, message, m_type)
+        self.text_widget.see("end")
+        self.text_widget.config(state=tk.DISABLED)
+
+    def __insert_output(self, message, tag='info'):
+        self.text_widget.config(state=tk.NORMAL)
+        self.text_widget.insert(tk.END, message, tag)
         self.text_widget.see("end")
         self.text_widget.config(state=tk.DISABLED)
 

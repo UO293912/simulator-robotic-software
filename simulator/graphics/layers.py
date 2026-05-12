@@ -841,6 +841,23 @@ class Arm3DLayer(Layer):
                     return True
         return False
 
+    def is_motion_active(self):
+        """Indica si el brazo todavia esta animando hacia los servos objetivo."""
+        model = self.motor3d.model
+        if self._current_joints is None or model.dof == 0:
+            return False
+
+        servo_values = self.robot.get_servo_values()
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+            if i < len(self._current_joints):
+                if abs(target - self._current_joints[i]) > self._FAST_RENDER_EPS:
+                    return True
+        return False
+
     def _sync_servos_from_model(self, reset_animation=False):
         """Sincroniza los servos virtuales con el estado actual del modelo."""
         model = self.motor3d.model
