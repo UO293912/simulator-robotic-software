@@ -69,10 +69,14 @@ def tk_root():
     tcl_root = Path(sys.base_prefix) / "tcl"
     os.environ["TCL_LIBRARY"] = str(tcl_root / "tcl8.6")
     os.environ["TK_LIBRARY"] = str(tcl_root / "tk8.6")
-    root = tk.Tk()
-    root.withdraw()
+    root = getattr(tk, "_default_root", None)
+    owns_root = root is None
+    if owns_root:
+        root = tk.Tk()
+        root.withdraw()
     yield root
-    root.destroy()
+    if owns_root:
+        root.destroy()
 
 
 @pytest.fixture
