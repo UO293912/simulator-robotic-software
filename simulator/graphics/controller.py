@@ -1,4 +1,5 @@
 import threading
+import time
 import graphics.layers as layers
 import output.console as console
 import output.console_gamification as console_gamification
@@ -11,6 +12,7 @@ class RobotsController:
     _ARM3D_RENDER_ACTIVE_MS = 16
     _ARM3D_RENDER_IDLE_MS = 33
     _ARM3D_RENDER_WAIT_MS = 50
+    _ARM3D_PANEL_REFRESH_S = 1.0 / 30.0
 
     def __init__(self, view):
         self.view = view
@@ -29,6 +31,7 @@ class RobotsController:
         self.board = False
         self.arm3d = False
         self.new = True
+        self._last_arm3d_panel_refresh = 0.0
         self._arm3d_loop_running = False  # evita múltiples instancias del render loop
 
     def execute(self, option_gamification):
@@ -107,8 +110,13 @@ class RobotsController:
             return
         if not self.arm3d or not isinstance(self.robot_layer, layers.Arm3DLayer):
             return
+        now = time.monotonic()
+        last_refresh = getattr(self, "_last_arm3d_panel_refresh", 0.0)
+        if now - last_refresh < self._ARM3D_PANEL_REFRESH_S:
+            return
         try:
             panel.refresh_from_model()
+            self._last_arm3d_panel_refresh = now
         except Exception:
             pass
 

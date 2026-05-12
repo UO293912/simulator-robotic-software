@@ -2075,6 +2075,7 @@ class Arm3DControlPanel(tk.Frame):
         self.application = application
         self._syncing_sliders = False
         self._sliders_locked = False
+        self._slider_sync_cache = []
 
         # --- Cinemática Directa: sliders verticales ---
         tk.Label(self, text="Cinemática Directa",
@@ -2101,20 +2102,26 @@ class Arm3DControlPanel(tk.Frame):
                 orient=tk.HORIZONTAL,
                 bg=DARK_BLUE, fg="white",
                 sliderrelief=tk.FLAT, highlightthickness=0,
-                width=12, showvalue=False,
+                width=12, showvalue=False, resolution=0.1,
                 command=lambda val, idx=i: self._on_slider(idx, val)
             )
             slider.set(90)
             slider.grid(row=i, column=1, padx=2, pady=1, sticky="ew")
 
-            val_lbl = tk.Label(sliders_container, text=" 90°",
+            val_lbl = tk.Label(sliders_container, text=f"90{chr(176)}",
                                bg=DARK_BLUE, fg="white",
-                               font=("Consolas", 9), width=6, anchor="w")
+                               font=("Consolas", 9), width=6, anchor="e")
             val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="w")
 
             self._sliders.append(slider)
             self._val_labels.append(val_lbl)
             self._jlabels.append(jlbl)
+            self._slider_sync_cache.append({
+                "visible": True,
+                "range_state": None,
+                "value": 90.0,
+                "label": f"90{chr(176)}",
+            })
 
         # --- Separador ---
         tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
@@ -2244,13 +2251,13 @@ class Arm3DControlPanel(tk.Frame):
             servo = self._is_servo_mode()
             if jtype == 'P':
                 dh_val = float_val
-                self._val_labels[joint_idx].config(text=f"{int(float_val):>4}mm")
+                self._val_labels[joint_idx].config(text=f"{int(round(float_val))}mm")
             elif servo:
                 dh_val = float_val
-                self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
             else:
                 dh_val = float_val
-                self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
+            unit = "mm" if jtype == 'P' else chr(176)
+            self._val_labels[joint_idx].config(text=f"{int(round(float_val))}{unit}")
             self.application.controller.update_arm3d_joint(joint_idx, dh_val)
         except Exception:
             pass
@@ -2300,6 +2307,18 @@ class Arm3DControlPanel(tk.Frame):
     def update_joint_limits(self):
         self.refresh_from_model()
 
+    def _ensure_slider_sync_cache(self):
+        if not hasattr(self, "_slider_sync_cache"):
+            self._slider_sync_cache = []
+        while len(self._slider_sync_cache) < len(getattr(self, "_sliders", [])):
+            self._slider_sync_cache.append({
+                "visible": None,
+                "range_state": None,
+                "value": None,
+                "label": None,
+            })
+        return self._slider_sync_cache
+
     def refresh_from_model(self):
         """Sincroniza todo el panel con el modelo actual: DOF, tipos, rangos y valores."""
         try:
@@ -2315,12 +2334,16 @@ class Arm3DControlPanel(tk.Frame):
             )
             self._sliders_locked = motion_locked
             self._syncing_sliders = True
+            cache = self._ensure_slider_sync_cache()
             for i, (slider, val_lbl, jlbl) in enumerate(
                     zip(self._sliders, self._val_labels, self._jlabels)):
+                item_cache = cache[i]
                 if i < dof:
-                    jlbl.grid()
-                    slider.grid()
-                    val_lbl.grid()
+                    if item_cache.get("visible") is not True:
+                        jlbl.grid()
+                        slider.grid()
+                        val_lbl.grid()
+                        item_cache["visible"] = True
 
                     jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
                     mn, mx = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
@@ -2339,24 +2362,39 @@ class Arm3DControlPanel(tk.Frame):
                         else:
                             lim_min, lim_max = mn + 90.0, mx + 90.0
                             disp_val = raw_dh + 90.0
-                        unit = "°"
+                        unit = chr(176)
                     else:
                         lim_min, lim_max = mn, mx
                         disp_val = raw_dh
-                        unit = "°"
+                        unit = chr(176)
 
-                    slider.configure(
-                        from_=lim_min,
-                        to=lim_max,
-                        state="disabled" if motion_locked else "normal",
-                    )
-                    slider.set(disp_val)
-                    val_lbl.config(text=f"{int(round(disp_val)):>4}{unit}")
+                    state = "disabled" if motion_locked else "normal"
+                    range_state = (round(lim_min, 4), round(lim_max, 4), state)
+                    if item_cache.get("range_state") != range_state:
+                        slider.configure(from_=lim_min, to=lim_max, state=state)
+                        item_cache["range_state"] = range_state
+
+                    prev_value = item_cache.get("value")
+                    if prev_value is None or abs(float(prev_value) - float(disp_val)) >= 0.05:
+                        if motion_locked:
+                            slider.configure(state="normal")
+                        slider.set(disp_val)
+                        if motion_locked:
+                            slider.configure(state="disabled")
+                        item_cache["value"] = float(disp_val)
+
+                    label_text = f"{int(round(disp_val))}{unit}"
+                    if item_cache.get("label") != label_text:
+                        val_lbl.config(text=label_text)
+                        item_cache["label"] = label_text
                 else:
-                    jlbl.grid_remove()
-                    slider.grid_remove()
-                    val_lbl.grid_remove()
-                    slider.configure(state="normal")
+                    if item_cache.get("visible") is not False:
+                        jlbl.grid_remove()
+                        slider.grid_remove()
+                        val_lbl.grid_remove()
+                        slider.configure(state="normal")
+                        item_cache["visible"] = False
+                        item_cache["range_state"] = None
             self._syncing_sliders = False
         except Exception:
             self._syncing_sliders = False

@@ -154,6 +154,8 @@ def test_arm3d_slider_sync_locks_manual_input_while_model_moves(monkeypatch):
             self.options.update(kwargs)
 
         def set(self, value):
+            if self.options.get("state") == "disabled":
+                return
             self.value = value
             if self.on_set is not None:
                 self.on_set(value)
