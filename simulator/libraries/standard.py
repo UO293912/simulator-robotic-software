@@ -45,6 +45,19 @@ class ExecutionInterrupted(Exception):
     pass
 
 
+class Ref:
+    """Contenedor mutable para simular parametros C/C++ pasados por referencia."""
+
+    def __init__(self, value=None):
+        self.value = value
+
+    def __repr__(self):
+        return repr(self.value)
+
+    def __str__(self):
+        return str(self.value)
+
+
 def reset_runtime_watchdog():
     """Reinicia el estado local del watchdog para el hilo actual."""
     _watchdog_local.spin_count = 0
@@ -140,7 +153,7 @@ def get_methods():
     methods["pow"] = ("double", "pow", ["float", "float"], -1)
     methods["sizeof"] = ("int", "sizeof", ["any"], -1)
     methods["sq"] = ("double", "sq", ["double"], -1)
-    methods["strtol"] = ("long", "strtol", ["any", "any", "int"], -1)
+    methods["strtol"] = ("long", "strtol", ["any", "ref", "int"], -1)
     methods["sqrt"] = ("double", "sqrt", ["double"], -1)
 
     # Trigonometry
@@ -450,14 +463,19 @@ def sizeof(value):
         return 1
 
 
-def strtol(value, _end=None, base=10):
+def strtol(value, end=None, base=10):
     try:
         if hasattr(value, "string"):
             value = value.string
         if isinstance(value, list):
             value = "".join(str(item) for item in value).split("\0", 1)[0]
-        return int(str(value).strip(), int(base))
+        parsed = int(str(value).strip(), int(base))
+        if isinstance(end, Ref):
+            end.value = "\0"
+        return parsed
     except (TypeError, ValueError):
+        if isinstance(end, Ref):
+            end.value = value
         return 0
 
 

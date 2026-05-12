@@ -3402,6 +3402,7 @@ class ConsoleFrame(tk.Frame):
         self.application.bind("<Alt-w>", self.change_warning)
         self.application.bind("<Alt-o>", self.change_error)
         self.application.bind("<Alt-e>", lambda event: self.__send_input())
+        self.input_entry.bind("<Return>", lambda event: self.__send_input())
 
     def change_output(self, event=None):
         self.check_out.toggle()
@@ -3420,6 +3421,7 @@ class ConsoleFrame(tk.Frame):
 
     def __send_input(self):
         self.application.controller.send_input(self.input_entry.get())
+        self.input_entry.delete(0, tk.END)
 
 
 class ButtonBar(tk.Frame):

@@ -90,3 +90,13 @@ def test_standard_abs_uses_builtin_absolute_value():
     import libraries.standard as standard
 
     assert standard.abs(-12) == 12
+
+
+def test_arduino_string_supports_index_access():
+    import libraries.string as string_lib
+
+    line = string_lib.String("+120")
+
+    assert line[0] == "+"
+    assert line[1] == "1"
+    assert line[99] == "\0"

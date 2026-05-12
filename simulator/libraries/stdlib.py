@@ -11,7 +11,7 @@ def get_name():
 
 def get_methods():
     methods = {}
-    methods["strtol"] = ("long", "strtol", ["any", "any", "int"], -1)
+    methods["strtol"] = ("long", "strtol", ["any", "ref", "int"], -1)
     return methods
 
 

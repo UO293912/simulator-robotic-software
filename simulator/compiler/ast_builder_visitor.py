@@ -116,6 +116,8 @@ class ASTBuilderVisitor(ArduinoVisitor):
         if ctx.val is not None:
             expr = self.visitExpression(ctx.val)
         node = DeclarationNode(type=v_type, var_name=var_name, expr=expr)
+        if ctx.ptr_type is not None:
+            node.is_reference = True
         self.__add_line_info(node, ctx)
         return node
 
@@ -258,11 +260,15 @@ class ASTBuilderVisitor(ArduinoVisitor):
         if ctx.val is not None:
             expr = self.visitExpression(ctx.val)
         node = DeclarationNode(type=v_type, var_name=var_name, expr=expr)
+        if ctx.reference_ref() is not None and not getattr(node, "is_const", False):
+            node.is_reference = True
         if ctx.qual is not None:
             if ctx.qual.text == "const":
                 node.is_const = True
             if ctx.qual.text == "static":
                 node.is_static = True
+            if ctx.qual.text == "const":
+                node.is_reference = False
         self.__add_line_info(node, ctx)
         return node
 

@@ -571,7 +571,7 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
                     type_to_check = definition.opts_args[i - len(definition.args)].type
                 not_any = True
                 if type(type_to_check) == ast.IDTypeNode:
-                    if type_to_check.type_name == 'any':
+                    if type_to_check.type_name in ('any', 'ref'):
                         is_wrong_type = False
                         not_any = False
                 if not_any:

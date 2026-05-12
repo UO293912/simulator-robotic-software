@@ -168,7 +168,9 @@ class Braccio:
         """
         self._resolve_servos()
         # Posición de reposo estándar
-        self.servo_movement(20, 90, 45, 180, 180, 90, 10)
+        self._step_positions = dict(_DEFAULT_STEP_POSITIONS)
+        for name, value in self._step_positions.items():
+            self._write_servo(name, value)
         return self.OK
 
     def servo_movement(self, step_delay, v_base, v_shoulder, v_elbow,

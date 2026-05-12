@@ -99,6 +99,7 @@ class DeclarationNode(Sentence):
     expr: str = field(default_factory=lambda: None)
     is_const: bool = field(default_factory=lambda: False)
     is_static: bool = field(default_factory=lambda: False)
+    is_reference: bool = field(default_factory=lambda: False)
 
 
 @dataclass

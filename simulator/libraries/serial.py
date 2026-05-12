@@ -171,7 +171,7 @@ def peek():
     return NOT_IMPL_WARNING
 
 
-def print(val):
+def print(val=""):
     """
     Prints a value to the console
     Arguments:
@@ -180,7 +180,7 @@ def print(val):
     cons.write_output(val)
 
 
-def println(val):
+def println(val=""):
     """
     Prints a value to the console and finishes the line
     Arguments:

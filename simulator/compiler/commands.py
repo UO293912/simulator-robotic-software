@@ -169,6 +169,7 @@ class Loop(Command):
                     continue
                 try:
                     module.loop()
+                    time.sleep(0.001)
                 except ExecutionPaused:
                     pass  # Simulación detenida mientras el hilo estaba bloqueado en debug_line
                 except standard.ExecutionInterrupted:
