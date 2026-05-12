@@ -186,6 +186,16 @@ def test_setup_execute_prepares_and_handles_runtime_paths(monkeypatch):
     assert imported["value"] is True
     assert command.ready is True
     assert setup_calls == ["setup"]
+    assert standard._stop_event.is_set() is False
+
+    standard._stop_event.set()
+    standard.state = state.State()
+    stale_stop = commands.Setup(controller)
+    stale_stop.ready = True
+    monkeypatch.setattr(commands, "module", SimpleNamespace(setup=lambda: setup_calls.append("setup-after-stop")))
+    assert stale_stop.execute() is True
+    assert setup_calls[-1] == "setup-after-stop"
+    assert standard._stop_event.is_set() is False
 
     standard.state = state.State()
     standard.state.exec_time_us = 10**18

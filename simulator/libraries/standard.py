@@ -386,10 +386,24 @@ def delay(ms):
     Arguments:
         ms: the number of milliseconds to pause
     """
-    state.exec_time_ms = int(time.time_ns() / 1000000) + ms
-    # _stop_event.wait() duerme el tiempo pedido pero despierta inmediatamente
-    # si se activa el evento (stop/reset), haciendo el delay() interrumpible.
-    _stop_event.wait(ms / 1000.0)
+    ms = max(0, int(ms))
+    if state is not None:
+        state.exec_time_ms = int(time.time_ns() / 1000000) + ms
+
+    seconds = ms / 1000.0
+    if threading.current_thread() is threading.main_thread():
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if _stop_event.wait(min(remaining, 0.016)):
+                break
+            screen_updater.refresh()
+    else:
+        # _stop_event.wait() duerme el tiempo pedido pero despierta inmediatamente
+        # si se activa el evento (stop/reset), haciendo el delay() interrumpible.
+        _stop_event.wait(seconds)
     note_runtime_blocking()
 
 

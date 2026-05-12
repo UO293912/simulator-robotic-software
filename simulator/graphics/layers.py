@@ -858,6 +858,25 @@ class Arm3DLayer(Layer):
                     return True
         return False
 
+    def snap_to_servo_targets(self):
+        """Aplica inmediatamente al modelo los valores actuales de los servos."""
+        servo_values = self.robot.get_servo_values()
+        model = self.motor3d.model
+        targets = []
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+            targets.append(target)
+
+        for i, target in enumerate(targets):
+            model.set_joint(i, target)
+        self._current_joints = list(targets)
+        self._last_sync_time = time.monotonic()
+        self.motor3d.scene.update()
+        self._request_fast_render()
+
     def _sync_servos_from_model(self, reset_animation=False):
         """Sincroniza los servos virtuales con el estado actual del modelo."""
         model = self.motor3d.model

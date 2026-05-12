@@ -233,6 +233,7 @@ class Braccio:
             _delay_ms(step_delay)
 
         self._step_positions = step_positions
+        self._refresh_screen_if_main_thread()
 
         return self.OK
 
@@ -273,7 +274,10 @@ class Braccio:
             return
         try:
             import graphics.screen_updater as _screen_updater
-            _screen_updater.refresh()
+            layer = getattr(_screen_updater, "layer", None)
+            if hasattr(layer, "snap_to_servo_targets"):
+                layer.snap_to_servo_targets()
+            _screen_updater.refresh(force=True)
         except Exception:
             pass
 

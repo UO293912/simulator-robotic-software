@@ -1700,6 +1700,35 @@ class TestBraccioCompiler:
             standard.board = original_board
             braccio._singleton = original_singleton
 
+    def test_braccio_begin_snaps_visible_arm_to_initial_pose(self, monkeypatch):
+        """Braccio.begin debe colocar el modelo 3D en la pose inicial sin esperar a la animacion."""
+        import graphics.screen_updater as screen_updater
+        import libraries.standard as standard
+        import libraries.braccio as braccio
+        from graphics.layers import Arm3DLayer
+
+        original_board = standard.board
+        original_singleton = braccio._singleton
+        original_layer = screen_updater.layer
+        original_view = screen_updater.view
+        try:
+            layer = Arm3DLayer()
+            standard.board = layer.robot.board
+            braccio._singleton = None
+            screen_updater.layer = layer
+            screen_updater.view = None
+
+            assert braccio.begin() == 1
+
+            expected = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+            assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
+            assert layer._current_joints == pytest.approx(expected)
+        finally:
+            standard.board = original_board
+            braccio._singleton = original_singleton
+            screen_updater.layer = original_layer
+            screen_updater.view = original_view
+
     def test_arm3d_assigns_joints_by_attach_order(self):
         """Servo.attach/write debe asignar J1..J6 por orden de attach, no por nombre."""
         from graphics.layers import Arm3DLayer

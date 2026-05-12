@@ -43,6 +43,7 @@ class Command:
     def prepare_exec(self):
         standard.board = self.controller.robot_layer.robot.board
         standard.state = state.State()
+        standard._stop_event.clear()
         standard.reset_runtime_watchdog()
         serial.cons = self.controller.console
         self.ready = True
@@ -111,6 +112,7 @@ class Setup(Command):
                 and not standard.state.exec_time_ms > curr_time_ns / 1000000
         ):
             try:
+                standard._stop_event.clear()
                 standard.reset_runtime_watchdog()
                 module.setup()
             except ExecutionPaused:
