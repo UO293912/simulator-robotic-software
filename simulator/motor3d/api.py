@@ -118,6 +118,12 @@ class Motor3DApi:
         else:
             self.model.visual.pop('show_joint_axes', None)
 
+    def set_show_fps_counter(self, show):
+        if show:
+            self.model.visual['show_fps_counter'] = True
+        else:
+            self.model.visual['show_fps_counter'] = False
+
     # ------------------------------------------------------------------
     # Cinemática Inversa
     # ------------------------------------------------------------------

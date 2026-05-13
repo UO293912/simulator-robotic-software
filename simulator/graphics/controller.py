@@ -354,6 +354,11 @@ class RobotsController:
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.motor3d.set_show_joint_axes(show)
 
+    def toggle_arm3d_fps_counter(self, show):
+        """Activa o desactiva el contador FPS del visor 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.set_fps_counter(show)
+
     def set_arm3d_camera_view(self, view_name):
         """Aplica un preset de cámara 3D: 'caballera', 'isometrica' o libre."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):

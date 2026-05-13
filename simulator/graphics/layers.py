@@ -582,6 +582,8 @@ class Arm3DLayer(Layer):
         self._last_sync_time = None
         self._interactive_render_until = 0.0
         self._camera_locked = False
+        self._fps_last_frame_time = None
+        self._fps_display_value = 0.0
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
         self._sync_servos_from_model(reset_animation=True)
@@ -604,6 +606,8 @@ class Arm3DLayer(Layer):
         self._current_joints = None  # resetear animación
         self._last_sync_time = None
         self._interactive_render_until = 0.0
+        self._fps_last_frame_time = None
+        self._fps_display_value = 0.0
         if self._canvas is not None:
             try:
                 self._canvas.delete("all")
@@ -632,6 +636,7 @@ class Arm3DLayer(Layer):
         # Renderizar
         if self._canvas:
             self.motor3d.draw(self._canvas)
+            self._draw_fps_counter()
 
         # Evaluar seguridad y actualizar HUD
         safety = self.motor3d.evaluate_safety()
@@ -750,6 +755,15 @@ class Arm3DLayer(Layer):
         self.motor3d.scene.clear_trail()
         self._request_fast_render()
 
+    def set_fps_counter(self, enabled):
+        self.motor3d.set_show_fps_counter(enabled)
+        if not enabled and self._canvas is not None:
+            try:
+                self._canvas.delete("arm3d_fps_counter")
+            except Exception:
+                pass
+        self._request_fast_render()
+
     def get_model_config(self):
         return self.motor3d.get_model_config()
 
@@ -764,6 +778,61 @@ class Arm3DLayer(Layer):
     _IK_ANIM_KICKSTART_S = 1.0 / 30.0
     _FAST_RENDER_WINDOW_S = 0.25
     _FAST_RENDER_EPS = 1e-3
+
+    def _draw_fps_counter(self):
+        if self._canvas is None:
+            return
+
+        show = self.motor3d.model.visual.get('show_fps_counter', True)
+        try:
+            self._canvas.delete("arm3d_fps_counter")
+        except Exception:
+            return
+        if not show:
+            self._fps_last_frame_time = time.monotonic()
+            return
+
+        now = time.monotonic()
+        if self._fps_last_frame_time is not None:
+            dt = now - self._fps_last_frame_time
+            if dt > 1e-6:
+                instant_fps = 1.0 / dt
+                if self._fps_display_value <= 0.0:
+                    self._fps_display_value = instant_fps
+                else:
+                    self._fps_display_value = (
+                        self._fps_display_value * 0.85 + instant_fps * 0.15
+                    )
+        self._fps_last_frame_time = now
+
+        text = "FPS: {:.0f}".format(self._fps_display_value)
+        try:
+            width = self._canvas.winfo_width()
+        except Exception:
+            width = 800
+        x = max(72, width - 12)
+        y = 12
+        try:
+            text_id = self._canvas.create_text(
+                x, y, text=text, anchor="ne",
+                font=("Consolas", 11, "bold"),
+                fill="#E8FFFB",
+                tags="arm3d_fps_counter",
+            )
+            bbox = self._canvas.bbox(text_id)
+            if bbox:
+                pad = 5
+                rect_id = self._canvas.create_rectangle(
+                    bbox[0] - pad, bbox[1] - pad,
+                    bbox[2] + pad, bbox[3] + pad,
+                    fill="#102729",
+                    outline="#00D8C0",
+                    width=1,
+                    tags="arm3d_fps_counter",
+                )
+                self._canvas.tag_lower(rect_id, text_id)
+        except Exception:
+            pass
 
     def _uses_braccio_calibration(self):
         return bool(

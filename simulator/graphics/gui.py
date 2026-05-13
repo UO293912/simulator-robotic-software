@@ -904,6 +904,20 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         )
         self._vis_combo.pack(fill=tk.X)
         self._vis_combo.bind("<<ComboboxSelected>>", self._on_visual_mode_selected)
+        self._fps_counter_var = tk.BooleanVar(
+            value=self.motor3d.model.visual.get('show_fps_counter', True)
+        )
+        tk.Checkbutton(
+            visual_block,
+            text="Mostrar FPS",
+            variable=self._fps_counter_var,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            selectcolor=INPUT_BG,
+            activebackground=SURFACE_BG,
+            activeforeground=TEXT_PRIMARY,
+            font=self._font(9),
+        ).pack(anchor="w", pady=(self._s(6), 0))
 
         self._base_row_widgets = []
         self._base_row_controls = []
@@ -1562,6 +1576,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _apply_preset_display(self, name):
         """Actualiza el modo visual y el estado de bloqueo según el perfil indicado."""
         is_tinkerkit = (name == "braccio_tinkerkit")
+        if hasattr(self, "_fps_counter_var"):
+            self._fps_counter_var.set(
+                self.motor3d.model.visual.get('show_fps_counter', True)
+            )
         if is_tinkerkit:
             # braccio_exact es el modo propio del tinkerkit; mostrarlo aunque no sea seleccionable
             self._vis_combo.configure(values=["braccio_exact"] + self._MODES_SELECTABLE)
@@ -1648,6 +1666,18 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         except Exception:
             _clear()
 
+    def _fps_counter_enabled(self):
+        var = getattr(self, "_fps_counter_var", None)
+        if var is not None:
+            try:
+                return bool(var.get())
+            except Exception:
+                pass
+        try:
+            return bool(self.motor3d.model.visual.get('show_fps_counter', True))
+        except Exception:
+            return True
+
     def _snapshot_config_from_inputs(self, target_dof=None):
         """Construye una configuración desde la GUI actual sin invalidar el flujo por errores parciales."""
         current = self.motor3d.get_model_config()
@@ -1721,6 +1751,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['base'] = base_row
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
+        current['visual']['show_fps_counter'] = self._fps_counter_enabled()
         return current
 
     def _on_dof_change(self):
@@ -1924,6 +1955,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['base'] = dict(base_row)
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
+        current['visual']['show_fps_counter'] = self._fps_counter_enabled()
 
         return current, None
 
@@ -1950,6 +1982,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             ok = self.motor3d.load_model_config(path=path)
             if ok:
                 self._dof_var.set(self.motor3d.model.dof)
+                if hasattr(self, "_fps_counter_var"):
+                    self._fps_counter_var.set(
+                        self.motor3d.model.visual.get('show_fps_counter', True)
+                    )
                 self._build_dh_rows(self._table_frame)
                 self._refresh_base_row_entries()
             else:
