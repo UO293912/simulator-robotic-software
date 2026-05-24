@@ -736,14 +736,25 @@ class Arm3DLayer(Layer):
         self._camera_locked = False
         self._request_fast_render()
 
+    def unlock_camera_view(self):
+        """Vuelve a libre; solo reencuadra si se sale de un preset fijo."""
+        if getattr(self, "_camera_locked", False):
+            self.motor3d.reset_camera()
+            self.drawing.scale = self.motor3d.camera.zoom
+        self._camera_locked = False
+        self._request_fast_render()
+
     def set_camera_view(self, view_name):
         """Aplica un preset de cámara: 'caballera', 'isometrica' o libre."""
         preset = self.CAMERA_PRESETS.get(view_name)
         if preset is not None:
+            self.motor3d.reset_camera()
             self.motor3d.set_camera(**preset)
+            self.drawing.scale = self.motor3d.camera.zoom
             self._camera_locked = view_name in ('caballera', 'isometrica', 'iso')
         else:
             self.motor3d.reset_camera()
+            self.drawing.scale = self.motor3d.camera.zoom
             self._camera_locked = False
         self._request_fast_render()
 

@@ -79,7 +79,7 @@ class RobotsController:
                 if loop_command is not None:
                     loop_command.execute()
         if hasattr(view, "after"):
-            view.identifier = view.after(10, lambda: self.drawing_loop(generation))
+            view.identifier = view.after(16, lambda: self.drawing_loop(generation))
 
     def arm3d_render_loop(self):
         """Bucle de renderizado pasivo para el brazo 3D cuando no hay código ejecutándose."""
@@ -363,6 +363,12 @@ class RobotsController:
         """Aplica un preset de cámara 3D: 'caballera', 'isometrica' o libre."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.set_camera_view(view_name)
+
+    def unlock_arm3d_camera_view(self):
+        """Vuelve a vista libre sin reiniciar la cámara actual."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.unlock_camera_view()
+            self.view.change_zoom_label(self.robot_layer.drawing.zoom_percentage())
 
     def open_arm3d_config(self):
         """Abre la ventana de configuración del brazo 3D (delegado a la vista)."""

@@ -2258,6 +2258,8 @@ void loop() {
         render_calls = []
 
         class _MockMotor3D:
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
             def set_camera(self, **kwargs):
                 camera_calls.append(("set", kwargs))
 
@@ -2265,21 +2267,73 @@ void loop() {
                 camera_calls.append(("reset", None))
 
         layer.motor3d = _MockMotor3D()
+        layer.drawing = type("_Drawing", (), {"scale": 0.0})()
         layer._request_fast_render = lambda: render_calls.append(True)
 
         layer.set_camera_view("caballera")
         layer.set_camera_view("isometrica")
         layer.set_camera_view(None)
 
-        assert camera_calls[0] == ("set", Arm3DLayer.CAMERA_PRESETS["caballera"])
-        assert camera_calls[0][1]["projection_mode"] == "perspective"
-        assert camera_calls[0][1]["yaw"] == 240.0
-        assert camera_calls[0][1]["pitch"] != 30.0
-        assert camera_calls[0][1]["distance"] > 700.0
-        assert camera_calls[1] == ("set", Arm3DLayer.CAMERA_PRESETS["isometrica"])
-        assert camera_calls[1][1]["projection_mode"] == "isometrica"
+        assert camera_calls[0] == ("reset", None)
+        assert camera_calls[1] == ("set", Arm3DLayer.CAMERA_PRESETS["caballera"])
+        assert camera_calls[1][1]["projection_mode"] == "perspective"
+        assert camera_calls[1][1]["yaw"] == 240.0
+        assert camera_calls[1][1]["pitch"] != 30.0
+        assert camera_calls[1][1]["distance"] > 700.0
         assert camera_calls[2] == ("reset", None)
+        assert camera_calls[3] == ("set", Arm3DLayer.CAMERA_PRESETS["isometrica"])
+        assert camera_calls[3][1]["projection_mode"] == "isometrica"
+        assert camera_calls[4] == ("reset", None)
         assert render_calls == [True, True, True]
+
+    def test_unlock_camera_view_keeps_current_camera_state(self):
+        """Salir del preset fijo para RMB no debe resetear orientación ni zoom."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        calls = []
+
+        class _MockMotor3D:
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
+            def reset_camera(self):
+                calls.append(("reset_camera",))
+
+            def set_camera(self, **kwargs):
+                calls.append(("set_camera", kwargs))
+
+        layer.motor3d = _MockMotor3D()
+        layer.drawing = type("_Drawing", (), {"scale": 0.0})()
+        layer._camera_locked = False
+        layer._request_fast_render = lambda: calls.append(("render",))
+
+        layer.unlock_camera_view()
+
+        assert layer._camera_locked is False
+        assert calls == [("render",)]
+
+    def test_unlock_camera_view_resets_when_leaving_fixed_preset(self):
+        """Salir a RMB desde caballera/isométrica debe abandonar visualmente el preset fijo."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        calls = []
+
+        class _MockMotor3D:
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
+            def reset_camera(self):
+                calls.append(("reset_camera",))
+
+        layer.motor3d = _MockMotor3D()
+        layer.drawing = type("_Drawing", (), {"scale": 0.0})()
+        layer._camera_locked = True
+        layer._request_fast_render = lambda: calls.append(("render",))
+
+        layer.unlock_camera_view()
+
+        assert layer._camera_locked is False
+        assert calls == [("reset_camera",), ("render",)]
 
     def test_fixed_camera_presets_only_allow_zoom_interaction(self):
         """Caballera e isométrica bloquean rotación y pan, pero permiten zoom."""

@@ -2196,46 +2196,6 @@ class Arm3DControlPanel(tk.Frame):
                                         font=("Consolas", 10), command=self._on_reset_cam)
         self._btn_reset_cam.pack(fill=tk.X)
 
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
-
-        tk.Label(self, text="Movimiento de cámara",
-                 bg=DARK_BLUE, fg="#00E5CC",
-                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(0, 4))
-
-        self._mouse_drag_mode_var = tk.StringVar(value="none")
-        mouse_mode_frame = tk.Frame(self, bg=DARK_BLUE)
-        mouse_mode_frame.pack(fill=tk.X, padx=8)
-        for value, text in (
-            ("none", "Normal"),
-            ("rotate", "Rotar"),
-            ("pan", "Desplazar"),
-            ("zoom", "Zoom"),
-        ):
-            tk.Radiobutton(
-                mouse_mode_frame,
-                text=text,
-                value=value,
-                variable=self._mouse_drag_mode_var,
-                bg=DARK_BLUE,
-                fg="white",
-                selectcolor=DARK_BLUE,
-                activebackground=DARK_BLUE,
-                font=("Consolas", 9),
-                anchor="w",
-                command=self._on_mouse_drag_mode_change,
-            ).pack(anchor="w")
-
-        tk.Label(
-            self,
-            text="Normal: LMB rota, RMB desplaza y rueda o LMB+RMB hace zoom.\n"
-                 "Alternativo: LMB usa la opción elegida hasta pulsar una tecla.",
-            bg=DARK_BLUE,
-            fg="#AACCFF",
-            font=("Consolas", 8),
-            justify=tk.LEFT,
-            wraplength=240,
-        ).pack(anchor="w", padx=8, pady=(2, 0))
-
         self._lbl_ik_status = tk.Label(self, text="", bg=DARK_BLUE, fg="#aaffaa",
                                        font=("Consolas", 9), wraplength=240, justify=tk.LEFT)
         self._lbl_ik_status.pack(anchor="w", padx=8, pady=2)
@@ -2327,7 +2287,7 @@ class Arm3DControlPanel(tk.Frame):
         self.application.controller.reset_arm3d_camera()
 
     def _on_mouse_drag_mode_change(self):
-        if self.application is None:
+        if self.application is None or not hasattr(self, "_mouse_drag_mode_var"):
             return
         selected = self._mouse_drag_mode_var.get()
         mode = None if selected == "none" else selected
@@ -2627,12 +2587,16 @@ class DrawingFrame(tk.Frame):
         # Presets de cámara 3D visibles solo para Braccio.
         self.cam_buttons_frame = tk.Frame(self.canvas_frame, bg=DARK_BLUE,
                                           highlightthickness=1, highlightbackground=BLUE)
+        self._camera_view_buttons = {}
+        self._camera_drag_buttons = {}
+        self._selected_camera_view = None
+        self._selected_camera_drag_mode = None
         for _text, _view, _icon in [
             ("Libre", None, self.cam_free_icon),
             ("Caballera", "caballera", self.cam_caballera_icon),
             ("Isométrica", "isometrica", self.cam_isometrica_icon),
         ]:
-            tk.Button(
+            button = tk.Button(
                 self.cam_buttons_frame,
                 text=_text,
                 image=_icon,
@@ -2650,7 +2614,37 @@ class DrawingFrame(tk.Frame):
                 relief=tk.FLAT,
                 cursor="hand2",
                 command=lambda v=_view: self._on_cam_preset(v)
-            ).pack(side=tk.LEFT, padx=2, pady=2)
+            )
+            button.pack(side=tk.LEFT, padx=2, pady=2)
+            self._camera_view_buttons[_view] = button
+
+        for _text, _mode, _icon in [
+            ("Rotar", "rotate", self.cam_rotate_icon),
+            ("Desplazar", "pan", self.cam_pan_icon),
+            ("Zoom", "zoom", self.cam_zoom_icon),
+        ]:
+            button = tk.Button(
+                self.cam_buttons_frame,
+                text=_text,
+                image=_icon,
+                compound=tk.TOP,
+                justify=tk.CENTER,
+                bg=DARK_BLUE,
+                fg="white",
+                font=("Consolas", 8, "bold"),
+                bd=0,
+                padx=8,
+                pady=4,
+                activebackground=BLUE,
+                activeforeground="white",
+                highlightthickness=0,
+                relief=tk.FLAT,
+                cursor="hand2",
+                command=lambda m=_mode: self._on_cam_drag_mode(m)
+            )
+            button.pack(side=tk.LEFT, padx=2, pady=2)
+            self._camera_drag_buttons[_mode] = button
+        self._refresh_camera_button_selection()
 
         self.bottom_frame = tk.Frame(self, bg=BLUE)
         self.key_movement = tk.Checkbutton(self.bottom_frame, text="Movimiento con el teclado", fg="white",
@@ -2736,6 +2730,8 @@ class DrawingFrame(tk.Frame):
     def set_arm3d_mouse_mode(self, mode):
         valid_modes = {None, "rotate", "pan", "zoom"}
         self._arm3d_mouse_mode = mode if mode in valid_modes else None
+        self._selected_camera_drag_mode = self._arm3d_mouse_mode
+        self._refresh_camera_button_selection()
         self._update_arm3d_mouse_mode_hint()
 
     def handle_global_key_press(self, event):
@@ -2888,16 +2884,95 @@ class DrawingFrame(tk.Frame):
         self.hud_canvas.grid_remove()
 
     def show_arm3d_camera_buttons(self):
-        """Muestra los botones de preset de cámara 3D en la esquina inferior derecha del canvas."""
+        """Muestra los botones de navegación de cámara 3D en el canvas."""
         self.cam_buttons_frame.place(relx=1.0, rely=1.0, anchor="se", x=-5, y=-5)
 
     def hide_arm3d_camera_buttons(self):
-        """Oculta los botones de preset de cámara 3D."""
+        """Oculta los botones de navegación de cámara 3D."""
         self.cam_buttons_frame.place_forget()
 
     def _on_cam_preset(self, view_name):
         """Callback de los botones de preset de cámara."""
+        self._selected_camera_view = view_name
+        self._selected_camera_drag_mode = None
+        self.set_arm3d_mouse_mode(None)
+        self.application.set_arm3d_mouse_drag_mode(None)
         self.application.controller.set_arm3d_camera_view(view_name)
+
+    def _on_cam_drag_mode(self, mode):
+        """Callback de los botones de modo de arrastre de cámara."""
+        self._selected_camera_view = None
+        self._selected_camera_drag_mode = mode
+        self.set_arm3d_mouse_mode(mode)
+        if hasattr(self.application.controller, "unlock_arm3d_camera_view"):
+            self.application.controller.unlock_arm3d_camera_view()
+        else:
+            self.application.controller.set_arm3d_camera_view(None)
+        self.application.set_arm3d_mouse_drag_mode(mode)
+
+    def _refresh_camera_button_selection(self):
+        selected_bg = BLUE
+        normal_bg = DARK_BLUE
+        for view_name, button in getattr(self, "_camera_view_buttons", {}).items():
+            bg = selected_bg if view_name == self._selected_camera_view else normal_bg
+            button.configure(bg=bg, activebackground=selected_bg)
+        for mode_name, button in getattr(self, "_camera_drag_buttons", {}).items():
+            bg = selected_bg if mode_name == self._selected_camera_drag_mode else normal_bg
+            button.configure(bg=bg, activebackground=selected_bg)
+
+    def _build_camera_drag_icon(self, mode_name):
+        icon_size = 26
+        image = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        color = "#D9F0F1"
+        accent = "#00E5CC"
+
+        def _round_point(point):
+            return (int(round(point[0])), int(round(point[1])))
+
+        def _draw_arrow(start, end, line_color=color):
+            draw.line([_round_point(start), _round_point(end)], fill=line_color, width=2)
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length < 1e-6:
+                return
+            ux = dx / length
+            uy = dy / length
+            px = -uy
+            py = ux
+            head = 3.4
+            spread = 2.0
+            back = (end[0] - ux * head, end[1] - uy * head)
+            left = (back[0] + px * spread, back[1] + py * spread)
+            right = (back[0] - px * spread, back[1] - py * spread)
+            draw.polygon(
+                [_round_point(end), _round_point(left), _round_point(right)],
+                fill=line_color
+            )
+
+        if mode_name == "rotate":
+            draw.arc((5, 5, 21, 21), start=25, end=315, fill=color, width=2)
+            _draw_arrow((18, 6), (21, 9), color)
+            draw.ellipse((11, 11, 15, 15), fill=accent)
+            return ImageTk.PhotoImage(image)
+
+        if mode_name == "pan":
+            _draw_arrow((13, 13), (13, 4), color)
+            _draw_arrow((13, 13), (22, 13), color)
+            _draw_arrow((13, 13), (13, 22), color)
+            _draw_arrow((13, 13), (4, 13), color)
+            draw.ellipse((11, 11, 15, 15), fill=accent)
+            return ImageTk.PhotoImage(image)
+
+        if mode_name == "zoom":
+            draw.ellipse((5, 5, 17, 17), outline=color, width=2)
+            draw.line([(15, 15), (22, 22)], fill=color, width=2)
+            draw.line([(8, 11), (14, 11)], fill=accent, width=2)
+            draw.line([(11, 8), (11, 14)], fill=accent, width=2)
+            return ImageTk.PhotoImage(image)
+
+        return ImageTk.PhotoImage(image)
 
     def _build_camera_preset_icon(self, preset_name):
         icon_size = 26
@@ -3001,6 +3076,9 @@ class DrawingFrame(tk.Frame):
         self.cam_free_icon = self._build_camera_preset_icon("free")
         self.cam_caballera_icon = self._build_camera_preset_icon("caballera")
         self.cam_isometrica_icon = self._build_camera_preset_icon("isometrica")
+        self.cam_rotate_icon = self._build_camera_drag_icon("rotate")
+        self.cam_pan_icon = self._build_camera_drag_icon("pan")
+        self.cam_zoom_icon = self._build_camera_drag_icon("zoom")
 
 
 class ButtonsGamification(tk.Frame):
