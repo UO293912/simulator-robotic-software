@@ -2483,3 +2483,212 @@ void loop() {
         gui_mod.DrawingFrame.move(frame, SimpleNamespace(x=44, y=42))
 
         assert drag_calls == [("dolly", -18)]
+
+
+# ---------------------------------------------------------------------------
+# Tests adicionales: casos de borde del modulo motor3d
+# ---------------------------------------------------------------------------
+
+class TestMotor3DEdgeCases:
+    """Cubre rutas de borde de FK, safety, API y persistencia 3D."""
+
+    def test_workspace_fallback_geometry_handles_empty_zero_and_collinear_paths(self):
+        from motor3d.safety.workspace_singularity import in_workspace, near_singularity
+
+        assert in_workspace([], max_reach=0.0) is True
+        assert near_singularity([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) is False
+
+        zero_segment_then_bend = [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]
+        assert near_singularity(zero_segment_then_bend, threshold=1.0) is False
+
+        collinear = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ]
+        assert near_singularity(collinear, threshold=5.0) is True
+
+    def test_workspace_jacobian_edge_cases_and_prismatic_axis(self, monkeypatch):
+        import numpy as np
+        import motor3d.safety.workspace_singularity as ws
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+
+        model = SimpleNamespace(dof=2)
+
+        with monkeypatch.context() as mp:
+            mp.setattr(ws, "forward_kinematics_chain", lambda _model: {})
+            mp.setattr(ws, "_position_jacobian", lambda _model, _chain: [])
+            assert ws.near_singularity([], model=model) is False
+
+            model.dof = 0
+            mp.setattr(ws, "_position_jacobian", lambda _model, _chain: [[1.0, 0.0, 0.0]])
+            assert ws.near_singularity([], model=model) is False
+
+            model.dof = 3
+            assert ws.near_singularity([], model=model) is True
+
+        arm = ArmKinematicState()
+        arm.configure(
+            dof=1,
+            joint_limits=[(0.0, 120.0)],
+            joint_types=["P"],
+            joints=[30.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}],
+        )
+        chain = forward_kinematics_chain(arm)
+        jacobian = ws._position_jacobian(arm, chain)
+
+        np.testing.assert_allclose(jacobian, [[0.0, 0.0, 1.0]], atol=1e-9)
+
+    def test_fk_legacy_rpy_tool_offset_and_invalid_vector_fallback(self):
+        import numpy as np
+        import motor3d.kinematics.kinematics_fk as fk
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+
+        model_with_rpy = SimpleNamespace(base_rpy=[0.0, 90.0, 0.0])
+        transform = fk.get_base_transform(model_with_rpy)
+        np.testing.assert_allclose(transform[:3, 2], [1.0, 0.0, 0.0], atol=1e-9)
+
+        arm = ArmKinematicState()
+        arm.configure(
+            dof=1,
+            link_lengths=[10.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=["R"],
+            joints=[0.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 10.0, "alpha": 0.0}],
+            tool={"parent_joint": 0, "offset": [1.0, 2.0, 3.0]},
+        )
+        chain = fk.forward_kinematics_chain(arm)
+        np.testing.assert_allclose(chain["end_effector"], [11.0, 2.0, 3.0], atol=1e-9)
+
+        assert fk.get_prismatic_pre_rotation(
+            SimpleNamespace(prismatic_pre_rotations=["bad"]), 0
+        ) == {"yaw": 0.0, "pitch": 0.0}
+        assert fk._normalize_vector([None, "bad"], fallback=[1.0, 2.0, 3.0]) == [
+            1.0, 2.0, 3.0
+        ]
+
+    def test_repository_load_errors_listing_and_migration(self, tmp_path, capsys):
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.persistence.arm_config_repository import ArmConfigRepository
+
+        missing_presets = tmp_path / "missing_presets"
+        repo = ArmConfigRepository(
+            default_path=tmp_path / "missing.json",
+            presets_dir=missing_presets,
+        )
+        model = ArmKinematicState()
+
+        assert repo.load_model(model) is False
+        assert "Archivo no encontrado" in capsys.readouterr().out
+
+        broken = tmp_path / "broken.json"
+        broken.write_text("{invalid", encoding="utf-8")
+        assert repo.load_model(model, path=broken) is False
+        assert "Error al cargar" in capsys.readouterr().out
+
+        assert repo.list_builtin_presets() == {}
+        assert ArmConfigRepository._migrate({"dof": 1}) == {"dof": 1}
+
+        presets = tmp_path / "presets"
+        presets.mkdir()
+        alpha = presets / "alpha.json"
+        alpha.write_text('{"dof": 1}', encoding="utf-8")
+        (presets / "ignored.txt").write_text("nope", encoding="utf-8")
+
+        repo = ArmConfigRepository(default_path=tmp_path / "config.json", presets_dir=presets)
+        assert repo.get_builtin_preset_path("alpha.json") == alpha
+        assert repo.list_builtin_presets() == {"alpha": alpha}
+
+    def test_motor3d_api_fallback_config_when_no_repository_data(self, monkeypatch):
+        import motor3d.api as api_mod
+
+        class EmptyRepository:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def load_model(self, *args, **kwargs):
+                return False
+
+            def load_builtin_preset(self, *args, **kwargs):
+                return False
+
+        monkeypatch.setattr(api_mod, "ArmConfigRepository", EmptyRepository)
+
+        api = api_mod.Motor3DApi()
+
+        assert api.model.dof == 3
+        assert api.active_preset_name is None
+        assert api.model.preset_name is None
+
+    def test_motor3d_api_configuration_toggles_persistence_and_camera_edges(
+            self, tmp_path, monkeypatch):
+        import motor3d.api as api_mod
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        api.pan_camera(3.0, -2.0)
+        assert api.camera.screen_offset_x == 1.5
+        assert api.camera.screen_offset_y == -1.0
+
+        api.set_show_joint_ranges(True)
+        api.set_show_joint_ranges(False)
+        assert "show_joint_ranges" not in api.model.visual
+
+        api.set_show_fps_counter(True)
+        assert api.model.visual["show_fps_counter"] is True
+        api.set_show_fps_counter(False)
+        assert api.model.visual["show_fps_counter"] is False
+
+        config_path = tmp_path / "arm.json"
+        assert api.save_model_config(path=config_path) is True
+
+        api.model.configure(
+            dof=1,
+            link_lengths=[50.0],
+            joint_limits=[(-30.0, 30.0)],
+            joint_types=["R"],
+            joints=[30.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 50.0, "alpha": 0.0}],
+        )
+        assert api.load_model_config(path=config_path) is True
+
+        api.model.configure(
+            dof=1,
+            link_lengths=[0.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=["R"],
+            joints=[0.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}],
+            visual={"mode": "auto_generic"},
+        )
+        assert math.isclose(api._recommended_camera_distance(), api.camera.DEFAULT_DISTANCE)
+
+        api.model.configure(
+            dof=1,
+            link_lengths=[100.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=["R"],
+            joints=[0.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 100.0, "alpha": 0.0}],
+            tool={"parent_joint": 0, "offset": [3.0, 4.0, 0.0]},
+            visual={"mode": "auto_generic"},
+        )
+
+        def _raise_base_transform(_model):
+            raise RuntimeError("bad base")
+
+        monkeypatch.setattr(api_mod, "get_base_transform", _raise_base_transform)
+
+        expected = max(
+            api.camera.DEFAULT_DISTANCE,
+            (100.0 + 5.0) * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
+        )
+        assert math.isclose(api._recommended_camera_distance(), expected)
