@@ -904,6 +904,20 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         )
         self._vis_combo.pack(fill=tk.X)
         self._vis_combo.bind("<<ComboboxSelected>>", self._on_visual_mode_selected)
+        self._fps_counter_var = tk.BooleanVar(
+            value=self.motor3d.model.visual.get('show_fps_counter', True)
+        )
+        tk.Checkbutton(
+            visual_block,
+            text="Mostrar FPS",
+            variable=self._fps_counter_var,
+            bg=SURFACE_BG,
+            fg=TEXT_PRIMARY,
+            selectcolor=INPUT_BG,
+            activebackground=SURFACE_BG,
+            activeforeground=TEXT_PRIMARY,
+            font=self._font(9),
+        ).pack(anchor="w", pady=(self._s(6), 0))
 
         self._base_row_widgets = []
         self._base_row_controls = []
@@ -1562,6 +1576,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _apply_preset_display(self, name):
         """Actualiza el modo visual y el estado de bloqueo según el perfil indicado."""
         is_tinkerkit = (name == "braccio_tinkerkit")
+        if hasattr(self, "_fps_counter_var"):
+            self._fps_counter_var.set(
+                self.motor3d.model.visual.get('show_fps_counter', True)
+            )
         if is_tinkerkit:
             # braccio_exact es el modo propio del tinkerkit; mostrarlo aunque no sea seleccionable
             self._vis_combo.configure(values=["braccio_exact"] + self._MODES_SELECTABLE)
@@ -1648,6 +1666,18 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         except Exception:
             _clear()
 
+    def _fps_counter_enabled(self):
+        var = getattr(self, "_fps_counter_var", None)
+        if var is not None:
+            try:
+                return bool(var.get())
+            except Exception:
+                pass
+        try:
+            return bool(self.motor3d.model.visual.get('show_fps_counter', True))
+        except Exception:
+            return True
+
     def _snapshot_config_from_inputs(self, target_dof=None):
         """Construye una configuración desde la GUI actual sin invalidar el flujo por errores parciales."""
         current = self.motor3d.get_model_config()
@@ -1721,6 +1751,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['base'] = base_row
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
+        current['visual']['show_fps_counter'] = self._fps_counter_enabled()
         return current
 
     def _on_dof_change(self):
@@ -1924,6 +1955,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['base'] = dict(base_row)
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
+        current['visual']['show_fps_counter'] = self._fps_counter_enabled()
 
         return current, None
 
@@ -1950,6 +1982,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             ok = self.motor3d.load_model_config(path=path)
             if ok:
                 self._dof_var.set(self.motor3d.model.dof)
+                if hasattr(self, "_fps_counter_var"):
+                    self._fps_counter_var.set(
+                        self.motor3d.model.visual.get('show_fps_counter', True)
+                    )
                 self._build_dh_rows(self._table_frame)
                 self._refresh_base_row_entries()
             else:
@@ -2073,6 +2109,9 @@ class Arm3DControlPanel(tk.Frame):
     def __init__(self, parent, application: 'MainApplication' = None, *args, **kwargs):
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.application = application
+        self._syncing_sliders = False
+        self._sliders_locked = False
+        self._slider_sync_cache = []
 
         # --- Cinemática Directa: sliders verticales ---
         tk.Label(self, text="Cinemática Directa",
@@ -2099,20 +2138,26 @@ class Arm3DControlPanel(tk.Frame):
                 orient=tk.HORIZONTAL,
                 bg=DARK_BLUE, fg="white",
                 sliderrelief=tk.FLAT, highlightthickness=0,
-                width=12, showvalue=False,
+                width=12, showvalue=False, resolution=0.1,
                 command=lambda val, idx=i: self._on_slider(idx, val)
             )
             slider.set(90)
             slider.grid(row=i, column=1, padx=2, pady=1, sticky="ew")
 
-            val_lbl = tk.Label(sliders_container, text=" 90°",
+            val_lbl = tk.Label(sliders_container, text=f"90{chr(176)}",
                                bg=DARK_BLUE, fg="white",
-                               font=("Consolas", 9), width=6, anchor="w")
+                               font=("Consolas", 9), width=6, anchor="e")
             val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="w")
 
             self._sliders.append(slider)
             self._val_labels.append(val_lbl)
             self._jlabels.append(jlbl)
+            self._slider_sync_cache.append({
+                "visible": True,
+                "range_state": None,
+                "value": 90.0,
+                "label": f"90{chr(176)}",
+            })
 
         # --- Separador ---
         tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
@@ -2151,46 +2196,6 @@ class Arm3DControlPanel(tk.Frame):
                                         font=("Consolas", 10), command=self._on_reset_cam)
         self._btn_reset_cam.pack(fill=tk.X)
 
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
-
-        tk.Label(self, text="Movimiento de cámara",
-                 bg=DARK_BLUE, fg="#00E5CC",
-                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(0, 4))
-
-        self._mouse_drag_mode_var = tk.StringVar(value="none")
-        mouse_mode_frame = tk.Frame(self, bg=DARK_BLUE)
-        mouse_mode_frame.pack(fill=tk.X, padx=8)
-        for value, text in (
-            ("none", "Normal"),
-            ("rotate", "Rotar"),
-            ("pan", "Desplazar"),
-            ("zoom", "Zoom"),
-        ):
-            tk.Radiobutton(
-                mouse_mode_frame,
-                text=text,
-                value=value,
-                variable=self._mouse_drag_mode_var,
-                bg=DARK_BLUE,
-                fg="white",
-                selectcolor=DARK_BLUE,
-                activebackground=DARK_BLUE,
-                font=("Consolas", 9),
-                anchor="w",
-                command=self._on_mouse_drag_mode_change,
-            ).pack(anchor="w")
-
-        tk.Label(
-            self,
-            text="Normal: LMB rota, RMB desplaza y rueda o LMB+RMB hace zoom.\n"
-                 "Alternativo: LMB usa la opción elegida hasta pulsar una tecla.",
-            bg=DARK_BLUE,
-            fg="#AACCFF",
-            font=("Consolas", 8),
-            justify=tk.LEFT,
-            wraplength=240,
-        ).pack(anchor="w", padx=8, pady=(2, 0))
-
         self._lbl_ik_status = tk.Label(self, text="", bg=DARK_BLUE, fg="#aaffaa",
                                        font=("Consolas", 9), wraplength=240, justify=tk.LEFT)
         self._lbl_ik_status.pack(anchor="w", padx=8, pady=2)
@@ -2202,20 +2207,25 @@ class Arm3DControlPanel(tk.Frame):
     # ------------------------------------------------------------------ helpers
 
     def _get_model(self):
+        layer = self._get_layer()
+        if layer is not None:
+            return layer.motor3d.model
+        return None
+
+    def _get_layer(self):
         try:
             import graphics.layers as _layers
             layer = self.application.controller.robot_layer
             if isinstance(layer, _layers.Arm3DLayer):
-                return layer.motor3d.model
+                return layer
         except Exception:
             pass
         return None
 
     def _get_motor3d(self):
         try:
-            import graphics.layers as _layers
-            layer = self.application.controller.robot_layer
-            if isinstance(layer, _layers.Arm3DLayer):
+            layer = self._get_layer()
+            if layer is not None:
                 return layer.motor3d
         except Exception:
             pass
@@ -2227,6 +2237,8 @@ class Arm3DControlPanel(tk.Frame):
         return True
 
     def _on_slider(self, joint_idx, val):
+        if getattr(self, "_syncing_sliders", False) or getattr(self, "_sliders_locked", False):
+            return
         try:
             float_val = float(val)
             model = self._get_model()
@@ -2235,13 +2247,13 @@ class Arm3DControlPanel(tk.Frame):
             servo = self._is_servo_mode()
             if jtype == 'P':
                 dh_val = float_val
-                self._val_labels[joint_idx].config(text=f"{int(float_val):>4}mm")
+                self._val_labels[joint_idx].config(text=f"{int(round(float_val))}mm")
             elif servo:
                 dh_val = float_val
-                self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
             else:
                 dh_val = float_val
-                self._val_labels[joint_idx].config(text=f"{int(float_val):>3}°")
+            unit = "mm" if jtype == 'P' else chr(176)
+            self._val_labels[joint_idx].config(text=f"{int(round(float_val))}{unit}")
             self.application.controller.update_arm3d_joint(joint_idx, dh_val)
         except Exception:
             pass
@@ -2275,7 +2287,7 @@ class Arm3DControlPanel(tk.Frame):
         self.application.controller.reset_arm3d_camera()
 
     def _on_mouse_drag_mode_change(self):
-        if self.application is None:
+        if self.application is None or not hasattr(self, "_mouse_drag_mode_var"):
             return
         selected = self._mouse_drag_mode_var.get()
         mode = None if selected == "none" else selected
@@ -2291,20 +2303,43 @@ class Arm3DControlPanel(tk.Frame):
     def update_joint_limits(self):
         self.refresh_from_model()
 
+    def _ensure_slider_sync_cache(self):
+        if not hasattr(self, "_slider_sync_cache"):
+            self._slider_sync_cache = []
+        while len(self._slider_sync_cache) < len(getattr(self, "_sliders", [])):
+            self._slider_sync_cache.append({
+                "visible": None,
+                "range_state": None,
+                "value": None,
+                "label": None,
+            })
+        return self._slider_sync_cache
+
     def refresh_from_model(self):
         """Sincroniza todo el panel con el modelo actual: DOF, tipos, rangos y valores."""
         try:
-            model = self._get_model()
+            layer = self._get_layer()
+            model = layer.motor3d.model if layer is not None else self._get_model()
             if model is None:
                 return
             dof = model.dof
             servo = self._is_servo_mode()
+            motion_locked = bool(
+                layer is not None
+                and getattr(layer, "is_motion_active", lambda: False)()
+            )
+            self._sliders_locked = motion_locked
+            self._syncing_sliders = True
+            cache = self._ensure_slider_sync_cache()
             for i, (slider, val_lbl, jlbl) in enumerate(
                     zip(self._sliders, self._val_labels, self._jlabels)):
+                item_cache = cache[i]
                 if i < dof:
-                    jlbl.grid()
-                    slider.grid()
-                    val_lbl.grid()
+                    if item_cache.get("visible") is not True:
+                        jlbl.grid()
+                        slider.grid()
+                        val_lbl.grid()
+                        item_cache["visible"] = True
 
                     jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
                     mn, mx = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
@@ -2315,22 +2350,50 @@ class Arm3DControlPanel(tk.Frame):
                         disp_val = raw_dh
                         unit = "mm"
                     elif servo:
-                        lim_min, lim_max = mn + 90.0, mx + 90.0
-                        disp_val = raw_dh + 90.0
-                        unit = "°"
+                        if layer is not None and hasattr(layer, "_to_control_value"):
+                            lim_a = layer._to_control_value(i, mn)
+                            lim_b = layer._to_control_value(i, mx)
+                            lim_min, lim_max = min(lim_a, lim_b), max(lim_a, lim_b)
+                            disp_val = layer._to_control_value(i, raw_dh)
+                        else:
+                            lim_min, lim_max = mn + 90.0, mx + 90.0
+                            disp_val = raw_dh + 90.0
+                        unit = chr(176)
                     else:
                         lim_min, lim_max = mn, mx
                         disp_val = raw_dh
-                        unit = "°"
+                        unit = chr(176)
 
-                    slider.configure(from_=lim_min, to=lim_max)
-                    slider.set(disp_val)
-                    val_lbl.config(text=f"{int(disp_val):>4}{unit}")
+                    state = "disabled" if motion_locked else "normal"
+                    range_state = (round(lim_min, 4), round(lim_max, 4), state)
+                    if item_cache.get("range_state") != range_state:
+                        slider.configure(from_=lim_min, to=lim_max, state=state)
+                        item_cache["range_state"] = range_state
+
+                    prev_value = item_cache.get("value")
+                    if prev_value is None or abs(float(prev_value) - float(disp_val)) >= 0.05:
+                        if motion_locked:
+                            slider.configure(state="normal")
+                        slider.set(disp_val)
+                        if motion_locked:
+                            slider.configure(state="disabled")
+                        item_cache["value"] = float(disp_val)
+
+                    label_text = f"{int(round(disp_val))}{unit}"
+                    if item_cache.get("label") != label_text:
+                        val_lbl.config(text=label_text)
+                        item_cache["label"] = label_text
                 else:
-                    jlbl.grid_remove()
-                    slider.grid_remove()
-                    val_lbl.grid_remove()
+                    if item_cache.get("visible") is not False:
+                        jlbl.grid_remove()
+                        slider.grid_remove()
+                        val_lbl.grid_remove()
+                        slider.configure(state="normal")
+                        item_cache["visible"] = False
+                        item_cache["range_state"] = None
+            self._syncing_sliders = False
         except Exception:
+            self._syncing_sliders = False
             pass
 
 
@@ -2524,12 +2587,16 @@ class DrawingFrame(tk.Frame):
         # Presets de cámara 3D visibles solo para Braccio.
         self.cam_buttons_frame = tk.Frame(self.canvas_frame, bg=DARK_BLUE,
                                           highlightthickness=1, highlightbackground=BLUE)
+        self._camera_view_buttons = {}
+        self._camera_drag_buttons = {}
+        self._selected_camera_view = None
+        self._selected_camera_drag_mode = None
         for _text, _view, _icon in [
             ("Libre", None, self.cam_free_icon),
             ("Caballera", "caballera", self.cam_caballera_icon),
             ("Isométrica", "isometrica", self.cam_isometrica_icon),
         ]:
-            tk.Button(
+            button = tk.Button(
                 self.cam_buttons_frame,
                 text=_text,
                 image=_icon,
@@ -2547,7 +2614,37 @@ class DrawingFrame(tk.Frame):
                 relief=tk.FLAT,
                 cursor="hand2",
                 command=lambda v=_view: self._on_cam_preset(v)
-            ).pack(side=tk.LEFT, padx=2, pady=2)
+            )
+            button.pack(side=tk.LEFT, padx=2, pady=2)
+            self._camera_view_buttons[_view] = button
+
+        for _text, _mode, _icon in [
+            ("Rotar", "rotate", self.cam_rotate_icon),
+            ("Desplazar", "pan", self.cam_pan_icon),
+            ("Zoom", "zoom", self.cam_zoom_icon),
+        ]:
+            button = tk.Button(
+                self.cam_buttons_frame,
+                text=_text,
+                image=_icon,
+                compound=tk.TOP,
+                justify=tk.CENTER,
+                bg=DARK_BLUE,
+                fg="white",
+                font=("Consolas", 8, "bold"),
+                bd=0,
+                padx=8,
+                pady=4,
+                activebackground=BLUE,
+                activeforeground="white",
+                highlightthickness=0,
+                relief=tk.FLAT,
+                cursor="hand2",
+                command=lambda m=_mode: self._on_cam_drag_mode(m)
+            )
+            button.pack(side=tk.LEFT, padx=2, pady=2)
+            self._camera_drag_buttons[_mode] = button
+        self._refresh_camera_button_selection()
 
         self.bottom_frame = tk.Frame(self, bg=BLUE)
         self.key_movement = tk.Checkbutton(self.bottom_frame, text="Movimiento con el teclado", fg="white",
@@ -2633,6 +2730,8 @@ class DrawingFrame(tk.Frame):
     def set_arm3d_mouse_mode(self, mode):
         valid_modes = {None, "rotate", "pan", "zoom"}
         self._arm3d_mouse_mode = mode if mode in valid_modes else None
+        self._selected_camera_drag_mode = self._arm3d_mouse_mode
+        self._refresh_camera_button_selection()
         self._update_arm3d_mouse_mode_hint()
 
     def handle_global_key_press(self, event):
@@ -2785,16 +2884,95 @@ class DrawingFrame(tk.Frame):
         self.hud_canvas.grid_remove()
 
     def show_arm3d_camera_buttons(self):
-        """Muestra los botones de preset de cámara 3D en la esquina inferior derecha del canvas."""
+        """Muestra los botones de navegación de cámara 3D en el canvas."""
         self.cam_buttons_frame.place(relx=1.0, rely=1.0, anchor="se", x=-5, y=-5)
 
     def hide_arm3d_camera_buttons(self):
-        """Oculta los botones de preset de cámara 3D."""
+        """Oculta los botones de navegación de cámara 3D."""
         self.cam_buttons_frame.place_forget()
 
     def _on_cam_preset(self, view_name):
         """Callback de los botones de preset de cámara."""
+        self._selected_camera_view = view_name
+        self._selected_camera_drag_mode = None
+        self.set_arm3d_mouse_mode(None)
+        self.application.set_arm3d_mouse_drag_mode(None)
         self.application.controller.set_arm3d_camera_view(view_name)
+
+    def _on_cam_drag_mode(self, mode):
+        """Callback de los botones de modo de arrastre de cámara."""
+        self._selected_camera_view = None
+        self._selected_camera_drag_mode = mode
+        self.set_arm3d_mouse_mode(mode)
+        if hasattr(self.application.controller, "unlock_arm3d_camera_view"):
+            self.application.controller.unlock_arm3d_camera_view()
+        else:
+            self.application.controller.set_arm3d_camera_view(None)
+        self.application.set_arm3d_mouse_drag_mode(mode)
+
+    def _refresh_camera_button_selection(self):
+        selected_bg = BLUE
+        normal_bg = DARK_BLUE
+        for view_name, button in getattr(self, "_camera_view_buttons", {}).items():
+            bg = selected_bg if view_name == self._selected_camera_view else normal_bg
+            button.configure(bg=bg, activebackground=selected_bg)
+        for mode_name, button in getattr(self, "_camera_drag_buttons", {}).items():
+            bg = selected_bg if mode_name == self._selected_camera_drag_mode else normal_bg
+            button.configure(bg=bg, activebackground=selected_bg)
+
+    def _build_camera_drag_icon(self, mode_name):
+        icon_size = 26
+        image = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        color = "#D9F0F1"
+        accent = "#00E5CC"
+
+        def _round_point(point):
+            return (int(round(point[0])), int(round(point[1])))
+
+        def _draw_arrow(start, end, line_color=color):
+            draw.line([_round_point(start), _round_point(end)], fill=line_color, width=2)
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = math.hypot(dx, dy)
+            if length < 1e-6:
+                return
+            ux = dx / length
+            uy = dy / length
+            px = -uy
+            py = ux
+            head = 3.4
+            spread = 2.0
+            back = (end[0] - ux * head, end[1] - uy * head)
+            left = (back[0] + px * spread, back[1] + py * spread)
+            right = (back[0] - px * spread, back[1] - py * spread)
+            draw.polygon(
+                [_round_point(end), _round_point(left), _round_point(right)],
+                fill=line_color
+            )
+
+        if mode_name == "rotate":
+            draw.arc((5, 5, 21, 21), start=25, end=315, fill=color, width=2)
+            _draw_arrow((18, 6), (21, 9), color)
+            draw.ellipse((11, 11, 15, 15), fill=accent)
+            return ImageTk.PhotoImage(image)
+
+        if mode_name == "pan":
+            _draw_arrow((13, 13), (13, 4), color)
+            _draw_arrow((13, 13), (22, 13), color)
+            _draw_arrow((13, 13), (13, 22), color)
+            _draw_arrow((13, 13), (4, 13), color)
+            draw.ellipse((11, 11, 15, 15), fill=accent)
+            return ImageTk.PhotoImage(image)
+
+        if mode_name == "zoom":
+            draw.ellipse((5, 5, 17, 17), outline=color, width=2)
+            draw.line([(15, 15), (22, 22)], fill=color, width=2)
+            draw.line([(8, 11), (14, 11)], fill=accent, width=2)
+            draw.line([(11, 8), (11, 14)], fill=accent, width=2)
+            return ImageTk.PhotoImage(image)
+
+        return ImageTk.PhotoImage(image)
 
     def _build_camera_preset_icon(self, preset_name):
         icon_size = 26
@@ -2898,6 +3076,9 @@ class DrawingFrame(tk.Frame):
         self.cam_free_icon = self._build_camera_preset_icon("free")
         self.cam_caballera_icon = self._build_camera_preset_icon("caballera")
         self.cam_isometrica_icon = self._build_camera_preset_icon("isometrica")
+        self.cam_rotate_icon = self._build_camera_drag_icon("rotate")
+        self.cam_pan_icon = self._build_camera_drag_icon("pan")
+        self.cam_zoom_icon = self._build_camera_drag_icon("zoom")
 
 
 class ButtonsGamification(tk.Frame):
@@ -3402,6 +3583,7 @@ class ConsoleFrame(tk.Frame):
         self.application.bind("<Alt-w>", self.change_warning)
         self.application.bind("<Alt-o>", self.change_error)
         self.application.bind("<Alt-e>", lambda event: self.__send_input())
+        self.input_entry.bind("<Return>", lambda event: self.__send_input())
 
     def change_output(self, event=None):
         self.check_out.toggle()
@@ -3420,6 +3602,7 @@ class ConsoleFrame(tk.Frame):
 
     def __send_input(self):
         self.application.controller.send_input(self.input_entry.get())
+        self.input_entry.delete(0, tk.END)
 
 
 class ButtonBar(tk.Frame):

@@ -536,21 +536,32 @@ class Arm3DLayer(Layer):
     """
     CAMERA_PRESETS = {
         'caballera': {
-            'yaw': 30.0,
-            'pitch': 15.0,
-            'projection_mode': 'caballera',
+            # Use the free camera projection, but start from a flatter
+            # side-oblique angle, pulled back to frame the whole arm cleanly.
+            'yaw': 240.0,
+            'pitch': 18.0,
+            'distance': 950.0,
+            'projection_mode': 'perspective',
         },
         'isometrica': {
             'yaw': 45.0,
-            'pitch': 35.26438968,
+            'pitch': 32.0,
             'projection_mode': 'isometrica',
         },
         'iso': {
             'yaw': 45.0,
-            'pitch': 35.26438968,
+            'pitch': 32.0,
             'projection_mode': 'isometrica',
         },
     }
+    BRACCIO_SERVO_CALIBRATION = (
+        ((0.0, -7.0), (7.0, 0.0), (180.0, 173.0)),
+        ((15.0, 15.0), (90.0, 90.0), (165.0, 165.0)),
+        ((15.0, 205.0), (130.0, 90.0), (180.0, 40.0)),
+        ((0.0, 15.0), (75.0, 90.0), (180.0, 195.0)),
+        ((0.0, 0.0), (90.0, 90.0), (180.0, 180.0)),
+        ((10.0, 10.0), (40.0, 40.0), (73.0, 73.0)),
+    )
 
     def __init__(self):
         # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
@@ -570,6 +581,9 @@ class Arm3DLayer(Layer):
         self._current_joints = None  # ángulos animados actuales (interpolados)
         self._last_sync_time = None
         self._interactive_render_until = 0.0
+        self._camera_locked = False
+        self._fps_last_frame_time = None
+        self._fps_display_value = 0.0
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
         self._sync_servos_from_model(reset_animation=True)
@@ -592,6 +606,8 @@ class Arm3DLayer(Layer):
         self._current_joints = None  # resetear animación
         self._last_sync_time = None
         self._interactive_render_until = 0.0
+        self._fps_last_frame_time = None
+        self._fps_display_value = 0.0
         if self._canvas is not None:
             try:
                 self._canvas.delete("all")
@@ -611,7 +627,8 @@ class Arm3DLayer(Layer):
             return
 
         # Mover cámara con teclado
-        self.motor3d.keyboard_camera(move_WASD)
+        if not getattr(self, "_camera_locked", False):
+            self.motor3d.keyboard_camera(move_WASD)
 
         # Sincronizar valores de servo → ángulos DH
         self.__sync_from_servos()
@@ -619,6 +636,7 @@ class Arm3DLayer(Layer):
         # Renderizar
         if self._canvas:
             self.motor3d.draw(self._canvas)
+            self._draw_fps_counter()
 
         # Evaluar seguridad y actualizar HUD
         safety = self.motor3d.evaluate_safety()
@@ -691,6 +709,8 @@ class Arm3DLayer(Layer):
         return result
 
     def drag_camera(self, dx, dy, pan=False):
+        if getattr(self, "_camera_locked", False):
+            return
         self.motor3d.drag_camera(dx, dy, pan=pan)
         self._request_fast_render()
 
@@ -700,24 +720,42 @@ class Arm3DLayer(Layer):
         self._request_fast_render()
 
     def set_camera_yaw(self, yaw):
+        if getattr(self, "_camera_locked", False):
+            return
         self.motor3d.set_camera(yaw=yaw)
         self._request_fast_render()
 
     def set_camera_pitch(self, pitch):
+        if getattr(self, "_camera_locked", False):
+            return
         self.motor3d.set_camera(pitch=pitch)
         self._request_fast_render()
 
     def reset_camera(self):
         self.motor3d.reset_camera()
+        self._camera_locked = False
+        self._request_fast_render()
+
+    def unlock_camera_view(self):
+        """Vuelve a libre; solo reencuadra si se sale de un preset fijo."""
+        if getattr(self, "_camera_locked", False):
+            self.motor3d.reset_camera()
+            self.drawing.scale = self.motor3d.camera.zoom
+        self._camera_locked = False
         self._request_fast_render()
 
     def set_camera_view(self, view_name):
         """Aplica un preset de cámara: 'caballera', 'isometrica' o libre."""
         preset = self.CAMERA_PRESETS.get(view_name)
         if preset is not None:
+            self.motor3d.reset_camera()
             self.motor3d.set_camera(**preset)
+            self.drawing.scale = self.motor3d.camera.zoom
+            self._camera_locked = view_name in ('caballera', 'isometrica', 'iso')
         else:
             self.motor3d.reset_camera()
+            self.drawing.scale = self.motor3d.camera.zoom
+            self._camera_locked = False
         self._request_fast_render()
 
     def set_trail(self, enabled):
@@ -726,6 +764,15 @@ class Arm3DLayer(Layer):
 
     def clear_trail(self):
         self.motor3d.scene.clear_trail()
+        self._request_fast_render()
+
+    def set_fps_counter(self, enabled):
+        self.motor3d.set_show_fps_counter(enabled)
+        if not enabled and self._canvas is not None:
+            try:
+                self._canvas.delete("arm3d_fps_counter")
+            except Exception:
+                pass
         self._request_fast_render()
 
     def get_model_config(self):
@@ -743,16 +790,107 @@ class Arm3DLayer(Layer):
     _FAST_RENDER_WINDOW_S = 0.25
     _FAST_RENDER_EPS = 1e-3
 
+    def _draw_fps_counter(self):
+        if self._canvas is None:
+            return
+
+        show = self.motor3d.model.visual.get('show_fps_counter', True)
+        try:
+            self._canvas.delete("arm3d_fps_counter")
+        except Exception:
+            return
+        if not show:
+            self._fps_last_frame_time = time.monotonic()
+            return
+
+        now = time.monotonic()
+        if self._fps_last_frame_time is not None:
+            dt = now - self._fps_last_frame_time
+            if dt > 1e-6:
+                instant_fps = 1.0 / dt
+                if self._fps_display_value <= 0.0:
+                    self._fps_display_value = instant_fps
+                else:
+                    self._fps_display_value = (
+                        self._fps_display_value * 0.85 + instant_fps * 0.15
+                    )
+        self._fps_last_frame_time = now
+
+        text = "FPS: {:.0f}".format(self._fps_display_value)
+        try:
+            width = self._canvas.winfo_width()
+        except Exception:
+            width = 800
+        x = max(72, width - 12)
+        y = 12
+        try:
+            text_id = self._canvas.create_text(
+                x, y, text=text, anchor="ne",
+                font=("Consolas", 11, "bold"),
+                fill="#E8FFFB",
+                tags="arm3d_fps_counter",
+            )
+            bbox = self._canvas.bbox(text_id)
+            if bbox:
+                pad = 5
+                rect_id = self._canvas.create_rectangle(
+                    bbox[0] - pad, bbox[1] - pad,
+                    bbox[2] + pad, bbox[3] + pad,
+                    fill="#102729",
+                    outline="#00D8C0",
+                    width=1,
+                    tags="arm3d_fps_counter",
+                )
+                self._canvas.tag_lower(rect_id, text_id)
+        except Exception:
+            pass
+
+    def _uses_braccio_calibration(self):
+        return bool(
+            getattr(self.motor3d, "uses_legacy_servo_degrees", lambda: False)()
+        )
+
+    @staticmethod
+    def _interpolate_calibration(points, value):
+        value = float(value)
+        ordered = sorted((float(x), float(y)) for x, y in points)
+        if value <= ordered[0][0]:
+            return ordered[0][1]
+        if value >= ordered[-1][0]:
+            return ordered[-1][1]
+        for (x0, y0), (x1, y1) in zip(ordered, ordered[1:]):
+            if x0 <= value <= x1:
+                if x1 == x0:
+                    return y1
+                ratio = (value - x0) / (x1 - x0)
+                return y0 + (y1 - y0) * ratio
+        return ordered[-1][1]
+
+    def _braccio_digital_to_real(self, joint_idx, value):
+        points = self.BRACCIO_SERVO_CALIBRATION[joint_idx]
+        return self._interpolate_calibration(points, value)
+
+    def _braccio_real_to_digital(self, joint_idx, value):
+        points = (
+            (real_value, digital_value)
+            for digital_value, real_value in self.BRACCIO_SERVO_CALIBRATION[joint_idx]
+        )
+        return self._interpolate_calibration(points, value)
+
     def _to_control_value(self, joint_idx, value):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
+        if self._uses_braccio_calibration() and joint_idx < len(self.BRACCIO_SERVO_CALIBRATION):
+            return self._braccio_real_to_digital(joint_idx, float(value) + 90.0)
         return float(value) + 90.0
 
     def _to_model_value(self, joint_idx, value):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
+        if self._uses_braccio_calibration() and joint_idx < len(self.BRACCIO_SERVO_CALIBRATION):
+            return self._braccio_digital_to_real(joint_idx, value) - 90.0
         return float(value) - 90.0
 
     def _request_fast_render(self, duration_s=None):
@@ -783,6 +921,42 @@ class Arm3DLayer(Layer):
                     return True
         return False
 
+    def is_motion_active(self):
+        """Indica si el brazo todavia esta animando hacia los servos objetivo."""
+        model = self.motor3d.model
+        if self._current_joints is None or model.dof == 0:
+            return False
+
+        servo_values = self.robot.get_servo_values()
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+            if i < len(self._current_joints):
+                if abs(target - self._current_joints[i]) > self._FAST_RENDER_EPS:
+                    return True
+        return False
+
+    def snap_to_servo_targets(self):
+        """Aplica inmediatamente al modelo los valores actuales de los servos."""
+        servo_values = self.robot.get_servo_values()
+        model = self.motor3d.model
+        targets = []
+        for i, sv in enumerate(servo_values[:model.dof]):
+            target = self._to_model_value(i, sv)
+            if i < len(model.joint_limits):
+                mn, mx = model.joint_limits[i]
+                target = max(mn, min(mx, target))
+            targets.append(target)
+
+        for i, target in enumerate(targets):
+            model.set_joint(i, target)
+        self._current_joints = list(targets)
+        self._last_sync_time = time.monotonic()
+        self.motor3d.scene.update()
+        self._request_fast_render()
+
     def _sync_servos_from_model(self, reset_animation=False):
         """Sincroniza los servos virtuales con el estado actual del modelo."""
         model = self.motor3d.model
@@ -802,7 +976,7 @@ class Arm3DLayer(Layer):
             if i < len(model.joint_limits):
                 mn, mx = model.joint_limits[i]
                 target = max(mn, min(mx, target))
-                if i < len(self.robot._joint_servos):
+                if not self._uses_braccio_calibration() and i < len(self.robot._joint_servos):
                     self.robot._joint_servos[i].value = self._to_control_value(i, target)
             targets.append(target)
         now = time.monotonic()
@@ -846,7 +1020,9 @@ class Arm3DLayer(Layer):
         def _jlim(i, mn, mx):
             if i < len(jtypes) and jtypes[i] == 'P':
                 return mn, mx
-            return self._to_control_value(i, mn), self._to_control_value(i, mx)
+            lo = self._to_control_value(i, mn)
+            hi = self._to_control_value(i, mx)
+            return min(lo, hi), max(lo, hi)
 
         joints_display = [_jval(i, j) for i, j in enumerate(model.joints)]
         limits_display = [_jlim(i, mn, mx) for i, (mn, mx) in enumerate(model.joint_limits)]

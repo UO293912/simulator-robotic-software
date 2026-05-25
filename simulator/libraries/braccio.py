@@ -23,6 +23,7 @@ Uso en sketch Arduino (simulador):
 """
 
 import time
+import threading
 
 # Pines estándar del Braccio
 BRACCIO_PINS = {
@@ -62,9 +63,22 @@ def _delay_ms(ms):
     try:
         import libraries.standard as _standard
         if getattr(_standard, "state", None) is not None:
-            _standard.delay(ms)
+            try:
+                if threading.current_thread() is threading.main_thread():
+                    import graphics.screen_updater as _screen_updater
+                    remaining = max(0, int(ms))
+                    while remaining > 0:
+                        _screen_updater.refresh()
+                        chunk = min(remaining, 16)
+                        _standard.delay(chunk)
+                        remaining -= chunk
+                    _screen_updater.refresh()
+                else:
+                    _standard.delay(ms)
+            except _standard.ExecutionInterrupted:
+                raise
             return
-    except Exception:
+    except ImportError:
         pass
     time.sleep(ms / 1000.0)
 
@@ -168,7 +182,10 @@ class Braccio:
         """
         self._resolve_servos()
         # Posición de reposo estándar
-        self.servo_movement(20, 90, 45, 180, 180, 90, 10)
+        self._step_positions = dict(_DEFAULT_STEP_POSITIONS)
+        for name, value in self._step_positions.items():
+            self._write_servo(name, value)
+        self._refresh_screen_if_main_thread()
         return self.OK
 
     def servo_movement(self, step_delay, v_base, v_shoulder, v_elbow,
@@ -216,6 +233,7 @@ class Braccio:
             _delay_ms(step_delay)
 
         self._step_positions = step_positions
+        self._refresh_screen_if_main_thread()
 
         return self.OK
 
@@ -250,6 +268,18 @@ class Braccio:
             elem.set_value(pin, int(value))
         elif self.board is not None:
             self.board.write_value(pin, int(value))
+
+    def _refresh_screen_if_main_thread(self):
+        if threading.current_thread() is not threading.main_thread():
+            return
+        try:
+            import graphics.screen_updater as _screen_updater
+            layer = getattr(_screen_updater, "layer", None)
+            if hasattr(layer, "snap_to_servo_targets"):
+                layer.snap_to_servo_targets()
+            _screen_updater.refresh(force=True)
+        except Exception:
+            pass
 
     def _validate_values(self, values):
         """Emite advertencias en consola si algún valor está fuera del rango hardware."""

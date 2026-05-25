@@ -1,4 +1,5 @@
 import threading
+import time
 import graphics.layers as layers
 import output.console as console
 import output.console_gamification as console_gamification
@@ -11,6 +12,7 @@ class RobotsController:
     _ARM3D_RENDER_ACTIVE_MS = 16
     _ARM3D_RENDER_IDLE_MS = 33
     _ARM3D_RENDER_WAIT_MS = 50
+    _ARM3D_PANEL_REFRESH_S = 1.0 / 30.0
 
     def __init__(self, view):
         self.view = view
@@ -29,6 +31,7 @@ class RobotsController:
         self.board = False
         self.arm3d = False
         self.new = True
+        self._last_arm3d_panel_refresh = 0.0
         self._arm3d_loop_running = False  # evita múltiples instancias del render loop
 
     def execute(self, option_gamification):
@@ -59,6 +62,7 @@ class RobotsController:
         if generation != current_generation or not getattr(self, "executing", False):
             return  # iteración huérfana: otra ejecución tomó el control o se detuvo
         screen_updater.refresh()
+        self._refresh_arm3d_control_panel()
         view = getattr(self, "view", None)
         if view is None:
             return
@@ -75,7 +79,7 @@ class RobotsController:
                 if loop_command is not None:
                     loop_command.execute()
         if hasattr(view, "after"):
-            view.identifier = view.after(10, lambda: self.drawing_loop(generation))
+            view.identifier = view.after(16, lambda: self.drawing_loop(generation))
 
     def arm3d_render_loop(self):
         """Bucle de renderizado pasivo para el brazo 3D cuando no hay código ejecutándose."""
@@ -92,11 +96,29 @@ class RobotsController:
             layer = self.robot_layer
             move_wasd = getattr(self.view, "move_WASD", {})
             layer.move(False, move_wasd)
+            self._refresh_arm3d_control_panel()
             if any(move_wasd.values()) or layer.wants_fast_render():
                 interval_ms = self._ARM3D_RENDER_ACTIVE_MS
         except Exception:
             pass
         self.view.after(interval_ms, self.arm3d_render_loop)
+
+    def _refresh_arm3d_control_panel(self):
+        view = getattr(self, "view", None)
+        panel = getattr(view, "arm3d_control_panel", None)
+        if panel is None:
+            return
+        if not self.arm3d or not isinstance(self.robot_layer, layers.Arm3DLayer):
+            return
+        now = time.monotonic()
+        last_refresh = getattr(self, "_last_arm3d_panel_refresh", 0.0)
+        if now - last_refresh < self._ARM3D_PANEL_REFRESH_S:
+            return
+        try:
+            panel.refresh_from_model()
+            self._last_arm3d_panel_refresh = now
+        except Exception:
+            pass
 
     def stop(self):
         self.executing = False
@@ -332,10 +354,21 @@ class RobotsController:
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.motor3d.set_show_joint_axes(show)
 
+    def toggle_arm3d_fps_counter(self, show):
+        """Activa o desactiva el contador FPS del visor 3D."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.set_fps_counter(show)
+
     def set_arm3d_camera_view(self, view_name):
         """Aplica un preset de cámara 3D: 'caballera', 'isometrica' o libre."""
         if isinstance(self.robot_layer, layers.Arm3DLayer):
             self.robot_layer.set_camera_view(view_name)
+
+    def unlock_arm3d_camera_view(self):
+        """Vuelve a vista libre sin reiniciar la cámara actual."""
+        if isinstance(self.robot_layer, layers.Arm3DLayer):
+            self.robot_layer.unlock_camera_view()
+            self.view.change_zoom_label(self.robot_layer.drawing.zoom_percentage())
 
     def open_arm3d_config(self):
         """Abre la ventana de configuración del brazo 3D (delegado a la vista)."""

@@ -784,7 +784,7 @@ def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
 
     layer = Arm3DLayer()
     layer.set_joint_angle(0, 45.0)
-    assert layer.motor3d.model.joints[0] == -45.0
+    assert layer.motor3d.model.joints[0] == -52.0
     assert layer.robot.servo_base.value == 45.0
 
 
@@ -806,7 +806,7 @@ def test_arm3d_layer_ik_uses_animation_instead_of_pose_jump():
     converged, _ = layer.solve_ik(100.0, 200.0, 300.0)
 
     assert converged
-    assert layer.robot.servo_base.value == 150.0
+    assert layer.robot.servo_base.value == 157.0
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
     assert layer._current_joints[0] == layer.motor3d.model.joints[0]
@@ -856,7 +856,7 @@ def test_arm3d_layer_best_effort_ik_moves_on_first_unreachable_attempt():
 
     assert converged is False
     assert "Mejor aproximacion" in message
-    assert layer.robot.servo_base.value == 135.0
+    assert layer.robot.servo_base.value == 142.0
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
 
@@ -1319,6 +1319,14 @@ class TestCameraNavigation:
         assert motor3d_api.camera.zoom < initial_zoom * 1.5
         assert motor3d_api.camera.distance > initial_distance
 
+    def test_set_camera_can_apply_distance(self, motor3d_api):
+        """Los presets de cámara pueden fijar una distancia orbital inicial."""
+        motor3d_api.set_camera(yaw=120.0, pitch=18.0, distance=950.0)
+
+        assert motor3d_api.camera.yaw == pytest.approx(120.0)
+        assert motor3d_api.camera.pitch == pytest.approx(18.0)
+        assert motor3d_api.camera.distance == pytest.approx(950.0)
+
     def test_camera_dolly_drag_changes_distance(self, motor3d_api):
         """El dolly por arrastre vertical debe acercar o alejar la cámara orbital."""
         initial_distance = motor3d_api.camera.distance
@@ -1335,6 +1343,7 @@ class TestCameraNavigation:
 
         motor3d_api.set_camera(yaw=0.0, pitch=0.0, projection_mode="caballera")
         caballera = motor3d_api.camera.project(point, 800, 600)
+        assert motor3d_api.camera.projection_mode == "perspective"
 
         motor3d_api.set_camera(yaw=45.0, pitch=35.26438968, projection_mode="isometrica")
         isometrica = motor3d_api.camera.project(point, 800, 600)
@@ -1350,6 +1359,7 @@ class TestCameraNavigation:
         camera = Camera()
         camera.set_orientation(yaw=30.0, pitch=15.0)
         camera.set_projection_mode("caballera")
+        assert camera.projection_mode == "perspective"
 
         projected = camera.project([0.0, 0.0, 0.0], 800, 600)
 
@@ -1690,6 +1700,35 @@ class TestBraccioCompiler:
             standard.board = original_board
             braccio._singleton = original_singleton
 
+    def test_braccio_begin_snaps_visible_arm_to_initial_pose(self, monkeypatch):
+        """Braccio.begin debe colocar el modelo 3D en la pose inicial sin esperar a la animacion."""
+        import graphics.screen_updater as screen_updater
+        import libraries.standard as standard
+        import libraries.braccio as braccio
+        from graphics.layers import Arm3DLayer
+
+        original_board = standard.board
+        original_singleton = braccio._singleton
+        original_layer = screen_updater.layer
+        original_view = screen_updater.view
+        try:
+            layer = Arm3DLayer()
+            standard.board = layer.robot.board
+            braccio._singleton = None
+            screen_updater.layer = layer
+            screen_updater.view = None
+
+            assert braccio.begin() == 1
+
+            expected = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+            assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
+            assert layer._current_joints == pytest.approx(expected)
+        finally:
+            standard.board = original_board
+            braccio._singleton = original_singleton
+            screen_updater.layer = original_layer
+            screen_updater.view = original_view
+
     def test_arm3d_assigns_joints_by_attach_order(self):
         """Servo.attach/write debe asignar J1..J6 por orden de attach, no por nombre."""
         from graphics.layers import Arm3DLayer
@@ -1707,11 +1746,11 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] == -60.0
+        assert layer.motor3d.model.joints[0] == -67.0
         assert layer.motor3d.model.joints[1] == 30.0
 
-    def test_servo_write_clamps_to_official_range(self):
-        """Servo.write debe usar la convención oficial y clampear a [0, 180]."""
+    def test_braccio_preset_saturates_servo_values_to_real_limits(self):
+        """El preset Braccio debe saturar la pose visual a los limites reales."""
         from graphics.layers import Arm3DLayer
         from libraries.servo import Servo
 
@@ -1722,12 +1761,30 @@ class TestBraccioCompiler:
         servo.write(-60)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == -90.0
+        assert layer.motor3d.model.joints[0] == -97.0
 
         servo.write(250)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == 90.0
+        assert layer.motor3d.model.joints[0] == 83.0
+
+    def test_braccio_preset_uses_real_calibration_points(self):
+        """Los puntos medidos digital-real deben aplicarse en el preset Braccio."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer()
+        layer.robot.servo_base.value = 7
+        layer.robot.servo_shoulder.value = 90
+        layer.robot.servo_elbow.value = 130
+        layer.robot.servo_wrist_vertical.value = 75
+        layer.robot.servo_wrist.value = 90
+        layer.robot.servo_gripper.value = 40
+
+        layer._current_joints = None
+        layer._Arm3DLayer__sync_from_servos()
+
+        expected = [-90.0, 0.0, 0.0, 0.0, 0.0, -50.0]
+        assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
     def test_transpiler_initializes_servo_instances_with_board(self):
         """Las declaraciones Servo deben crear instancias enlazadas a la placa activa."""
@@ -1795,6 +1852,26 @@ class TestSafetyAndConstraints:
         missing = required - result.keys()
         assert not missing, f"Faltan claves en el resultado: {missing}"
 
+    def test_safety_does_not_warn_singularity_for_braccio_rest_pose(self, motor3d_api):
+        """La pose inicial real del Braccio no debe aparecer como singularidad espuria."""
+        motor3d_api.model.joints = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+        motor3d_api.scene.update()
+
+        result = motor3d_api.evaluate_safety()
+
+        assert result['singular'] is False
+        assert result['message'] == ""
+
+    def test_safety_warns_for_true_jacobian_singularity(self, motor3d_api):
+        """Una pose extendida con perdida de rango del Jacobiano mantiene el aviso."""
+        motor3d_api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -80.0]
+        motor3d_api.scene.update()
+
+        result = motor3d_api.evaluate_safety()
+
+        assert result['singular'] is True
+        assert "singularidad" in result['message']
+
     def test_set_joint_within_limits(self, motor3d_api):
         """set_joint con valor fuera de límite debe aplicar clamping."""
         # J1 tiene límite [-90, 90]
@@ -1842,6 +1919,14 @@ class TestPersistence:
         assert ok
         assert model.dof == 6
         assert len(model.joint_limits) == 6
+        assert model.joint_limits == [
+            (-97.0, 83.0),
+            (-75.0, 75.0),
+            (-50.0, 115.0),
+            (-75.0, 105.0),
+            (-90.0, 90.0),
+            (-80.0, -17.0),
+        ]
 
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""
@@ -2173,6 +2258,8 @@ void loop() {
         render_calls = []
 
         class _MockMotor3D:
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
             def set_camera(self, **kwargs):
                 camera_calls.append(("set", kwargs))
 
@@ -2180,16 +2267,122 @@ void loop() {
                 camera_calls.append(("reset", None))
 
         layer.motor3d = _MockMotor3D()
+        layer.drawing = type("_Drawing", (), {"scale": 0.0})()
         layer._request_fast_render = lambda: render_calls.append(True)
 
         layer.set_camera_view("caballera")
         layer.set_camera_view("isometrica")
         layer.set_camera_view(None)
 
-        assert camera_calls[0] == ("set", Arm3DLayer.CAMERA_PRESETS["caballera"])
-        assert camera_calls[1] == ("set", Arm3DLayer.CAMERA_PRESETS["isometrica"])
+        assert camera_calls[0] == ("reset", None)
+        assert camera_calls[1] == ("set", Arm3DLayer.CAMERA_PRESETS["caballera"])
+        assert camera_calls[1][1]["projection_mode"] == "perspective"
+        assert camera_calls[1][1]["yaw"] == 240.0
+        assert camera_calls[1][1]["pitch"] != 30.0
+        assert camera_calls[1][1]["distance"] > 700.0
         assert camera_calls[2] == ("reset", None)
+        assert camera_calls[3] == ("set", Arm3DLayer.CAMERA_PRESETS["isometrica"])
+        assert camera_calls[3][1]["projection_mode"] == "isometrica"
+        assert camera_calls[4] == ("reset", None)
         assert render_calls == [True, True, True]
+
+    def test_unlock_camera_view_keeps_current_camera_state(self):
+        """Salir del preset fijo para RMB no debe resetear orientación ni zoom."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        calls = []
+
+        class _MockMotor3D:
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
+            def reset_camera(self):
+                calls.append(("reset_camera",))
+
+            def set_camera(self, **kwargs):
+                calls.append(("set_camera", kwargs))
+
+        layer.motor3d = _MockMotor3D()
+        layer.drawing = type("_Drawing", (), {"scale": 0.0})()
+        layer._camera_locked = False
+        layer._request_fast_render = lambda: calls.append(("render",))
+
+        layer.unlock_camera_view()
+
+        assert layer._camera_locked is False
+        assert calls == [("render",)]
+
+    def test_unlock_camera_view_resets_when_leaving_fixed_preset(self):
+        """Salir a RMB desde caballera/isométrica debe abandonar visualmente el preset fijo."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        calls = []
+
+        class _MockMotor3D:
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
+            def reset_camera(self):
+                calls.append(("reset_camera",))
+
+        layer.motor3d = _MockMotor3D()
+        layer.drawing = type("_Drawing", (), {"scale": 0.0})()
+        layer._camera_locked = True
+        layer._request_fast_render = lambda: calls.append(("render",))
+
+        layer.unlock_camera_view()
+
+        assert layer._camera_locked is False
+        assert calls == [("reset_camera",), ("render",)]
+
+    def test_fixed_camera_presets_only_allow_zoom_interaction(self):
+        """Caballera e isométrica bloquean rotación y pan, pero permiten zoom."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer.__new__(Arm3DLayer)
+        calls = []
+        layer.drawing = type(
+            "_Drawing",
+            (),
+            {"scale": 1.0, "zoom_percentage": lambda self: 100},
+        )()
+        layer._request_fast_render = lambda: calls.append(("render",))
+
+        class _MockMotor3D:
+            def set_camera(self, **kwargs):
+                calls.append(("set_camera", kwargs))
+
+            def reset_camera(self):
+                calls.append(("reset_camera",))
+
+            def drag_camera(self, dx, dy, pan=False):
+                calls.append(("drag_camera", dx, dy, pan))
+
+            def dolly_camera(self, dy):
+                calls.append(("dolly_camera", dy))
+
+            camera = type("_Camera", (), {"zoom": 1.0})()
+
+        layer.motor3d = _MockMotor3D()
+
+        layer.set_camera_view("caballera")
+        layer.drag_camera(20, 10)
+        layer.drag_camera(20, 10, pan=True)
+        layer.set_camera_yaw(90)
+        layer.set_camera_pitch(25)
+        layer.dolly_camera(12)
+
+        assert ("drag_camera", 20, 10, False) not in calls
+        assert ("drag_camera", 20, 10, True) not in calls
+        assert not any(call[0] == "set_camera" and call[1] == {"yaw": 90} for call in calls)
+        assert not any(call[0] == "set_camera" and call[1] == {"pitch": 25} for call in calls)
+        assert ("dolly_camera", 12) in calls
+
+        layer.set_camera_view(None)
+        layer.drag_camera(5, 6)
+
+        assert ("reset_camera",) in calls
+        assert ("drag_camera", 5, 6, False) in calls
 
     def test_arm3d_alternative_mouse_mode_uses_left_drag_until_key_exit(self):
         """El modo alternativo debe aplicar la acción elegida con LMB hasta salir por teclado."""

@@ -45,6 +45,19 @@ class ExecutionInterrupted(Exception):
     pass
 
 
+class Ref:
+    """Contenedor mutable para simular parametros C/C++ pasados por referencia."""
+
+    def __init__(self, value=None):
+        self.value = value
+
+    def __repr__(self):
+        return repr(self.value)
+
+    def __str__(self):
+        return str(self.value)
+
+
 def reset_runtime_watchdog():
     """Reinicia el estado local del watchdog para el hilo actual."""
     _watchdog_local.spin_count = 0
@@ -133,11 +146,14 @@ def get_methods():
     methods["abs"] = ("double", "abs", ["int"], -1)
     methods["constrain"] = ("double", "constrain", [
                             "double", "double", "double"], -1)
+    methods["F"] = ("string", "F", ["string"], -1)
     methods["map"] = ("int", "map", ["int", "int", "int", "int", "int"], -1)
     methods["max"] = ("double", "max", ["double", "double"], -1)
     methods["min"] = ("double", "min", ["double", "double"], -1)
     methods["pow"] = ("double", "pow", ["float", "float"], -1)
+    methods["sizeof"] = ("int", "sizeof", ["any"], -1)
     methods["sq"] = ("double", "sq", ["double"], -1)
+    methods["strtol"] = ("long", "strtol", ["any", "ref", "int"], -1)
     methods["sqrt"] = ("double", "sqrt", ["double"], -1)
 
     # Trigonometry
@@ -370,10 +386,24 @@ def delay(ms):
     Arguments:
         ms: the number of milliseconds to pause
     """
-    state.exec_time_ms = int(time.time_ns() / 1000000) + ms
-    # _stop_event.wait() duerme el tiempo pedido pero despierta inmediatamente
-    # si se activa el evento (stop/reset), haciendo el delay() interrumpible.
-    _stop_event.wait(ms / 1000.0)
+    ms = max(0, int(ms))
+    if state is not None:
+        state.exec_time_ms = int(time.time_ns() / 1000000) + ms
+
+    seconds = ms / 1000.0
+    if threading.current_thread() is threading.main_thread():
+        deadline = time.monotonic() + seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if _stop_event.wait(min(remaining, 0.016)):
+                break
+            screen_updater.refresh()
+    else:
+        # _stop_event.wait() duerme el tiempo pedido pero despierta inmediatamente
+        # si se activa el evento (stop/reset), haciendo el delay() interrumpible.
+        _stop_event.wait(seconds)
     note_runtime_blocking()
 
 
@@ -434,6 +464,33 @@ def constrain(x, a, b):
         return a
     else:
         return b
+
+
+def F(value):
+    return value
+
+
+def sizeof(value):
+    try:
+        return len(value)
+    except TypeError:
+        return 1
+
+
+def strtol(value, end=None, base=10):
+    try:
+        if hasattr(value, "string"):
+            value = value.string
+        if isinstance(value, list):
+            value = "".join(str(item) for item in value).split("\0", 1)[0]
+        parsed = int(str(value).strip(), int(base))
+        if isinstance(end, Ref):
+            end.value = "\0"
+        return parsed
+    except (TypeError, ValueError):
+        if isinstance(end, Ref):
+            end.value = value
+        return 0
 
 
 def map(value, from_low, from_high, to_low, to_high):

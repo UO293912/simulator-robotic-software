@@ -57,6 +57,7 @@ class DeclarationAnalyzer(ast_visitor.ASTVisitor):
         if function.sentences is not None:
             for sent in function.sentences:
                 sent.set_function(function)
+                setattr(sent, "scope_depth", 0)
                 sent.accept(self, param)
         if function.name not in self.functions:
             self.functions[function.name] = [function]
@@ -72,13 +73,56 @@ class DeclarationAnalyzer(ast_visitor.ASTVisitor):
                                "La función ya ha sido declarada")
         return None
 
+    def __visit_scoped_sentences(self, parent, sentences, param):
+        function = getattr(parent, "function", None)
+        depth = getattr(parent, "scope_depth", 0) + 1
+        if sentences is not None:
+            for sent in sentences:
+                sent.set_function(function)
+                setattr(sent, "scope_depth", depth)
+                sent.accept(self, param)
+
+    def visit_conditional_sentence(self, conditional_sentence: ast.ConditionalSentenceNode, param):
+        self.__visit_scoped_sentences(conditional_sentence, conditional_sentence.if_expr, param)
+        self.__visit_scoped_sentences(conditional_sentence, conditional_sentence.else_expr, param)
+        return None
+
+    def visit_switch_sentence(self, switch_sentence: ast.SwitchSentenceNode, param):
+        self.__visit_scoped_sentences(switch_sentence, switch_sentence.cases, param)
+        return None
+
+    def visit_case(self, case: ast.CaseNode, param):
+        self.__visit_scoped_sentences(case, case.sentences, param)
+        return None
+
+    def visit_block(self, block: ast.BlockNode, param):
+        self.__visit_scoped_sentences(block, block.sentences, param)
+        return None
+
+    def visit_while(self, while_p: ast.WhileNode, param):
+        self.__visit_scoped_sentences(while_p, while_p.sentences, param)
+        return None
+
+    def visit_do_while(self, do_while: ast.DoWhileNode, param):
+        self.__visit_scoped_sentences(do_while, do_while.sentences, param)
+        return None
+
+    def visit_for(self, for_p: ast.ForNode, param):
+        if for_p.assignment is not None:
+            for_p.assignment.set_function(getattr(for_p, "function", None))
+            setattr(for_p.assignment, "scope_depth", getattr(for_p, "scope_depth", 0) + 1)
+            for_p.assignment.accept(self, param)
+        self.__visit_scoped_sentences(for_p, for_p.sentences, param)
+        return None
+
     def visit_declaration(self, declaration: ast.DeclarationNode, param):
         if declaration.type is not None:
             declaration.type.accept(self, param)
         if declaration.expr is not None:
             declaration.expr.accept(self, param)
         dec = self.__lookfor_var(declaration.var_name, declaration.function)
-        if dec is not None:
+        if dec is not None and not (
+                declaration.function is not None and getattr(declaration, "scope_depth", 0) > 0):
             self.add_error("Declaración", declaration,
                            "La variable ya ha sido declarada")
         else:
@@ -217,6 +261,11 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
         boolean_node.set_modifiable(False)
         return None
 
+    def visit_null_ptr(self, null_ptr_node: ast.NullPtrNode, param):
+        null_ptr_node.set_type(ast.IDTypeNode("any"))
+        null_ptr_node.set_modifiable(False)
+        return None
+
     def visit_id(self, id_node: ast.IDNode, param):
         definition = self.__get_declaration(id_node.value, id_node.function)
         id_node.set_definition(definition)
@@ -275,9 +324,11 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
         if declaration.expr is not None:
             declaration.expr.set_function(declaration.function)
             declaration.expr.accept(self, param)
-            if self.check_type(declaration.type, type(declaration.expr.type)):
+            expr_type = getattr(declaration.expr, "type", None)
+            is_any = isinstance(expr_type, ast.IDTypeNode) and expr_type.type_name == "any"
+            if not is_any and self.check_type(declaration.type, type(expr_type)):
                 self.manage_types(declaration.type,
-                                  declaration.expr.type, declaration, "El tipo de la variable")
+                                  expr_type, declaration, "El tipo de la variable")
         # Modifiability not checked, it should be always modifiable
         return None
 
@@ -484,6 +535,8 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
         if definition is not None and function_call.parameters is not None:
             if implemented:
                 self.__check_parameters(function_call, definition, param)
+        if user_defined and definition is not None and len(definition) > 0:
+            function_call.set_type(definition[0].type)
         return None
 
     def __check_implemented(self, method, lib):
@@ -518,7 +571,7 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
                     type_to_check = definition.opts_args[i - len(definition.args)].type
                 not_any = True
                 if type(type_to_check) == ast.IDTypeNode:
-                    if type_to_check.type_name == 'any':
+                    if type_to_check.type_name in ('any', 'ref'):
                         is_wrong_type = False
                         not_any = False
                 if not_any:
@@ -643,7 +696,9 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
             if type(definition) == ast.ArrayDeclarationNode:
                 definition_size = len(definition.size)
             elif type(definition.type) == ast.StringTypeNode:
-                definition_size = len(definition.expr.value)
+                array_access.set_type(ast.CharTypeNode())
+                if getattr(definition, "expr", None) is not None:
+                    definition_size = len(definition.expr.value)
             if definition_size == len(array_access.indexes):
                 for i in range(0, definition_size):
                     if self.check_in_types(array_access.indexes[i].type, self.integer_types) and self.check_type(
@@ -788,6 +843,22 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
                                   compound_assignment, "El tipo de la variable")
         return None
 
+    def visit_conditional_expression(self, conditional_expression: ast.ConditionalExpressionNode, param):
+        if conditional_expression.condition is not None:
+            conditional_expression.condition.set_function(conditional_expression.function)
+            conditional_expression.condition.accept(self, param)
+        if conditional_expression.true_expr is not None:
+            conditional_expression.true_expr.set_function(conditional_expression.function)
+            conditional_expression.true_expr.accept(self, param)
+        if conditional_expression.false_expr is not None:
+            conditional_expression.false_expr.set_function(conditional_expression.function)
+            conditional_expression.false_expr.accept(self, param)
+        true_type = getattr(conditional_expression.true_expr, "type", None)
+        false_type = getattr(conditional_expression.false_expr, "type", None)
+        conditional_expression.set_type(true_type or false_type)
+        conditional_expression.set_modifiable(False)
+        return None
+
     def manage_types(self, type_1, type_2, node, encabezado):
         if type(type_1) is ast.CharTypeNode:
             if self.check_in_types(type_2, self.integer_types):
@@ -879,5 +950,3 @@ class SemanticAnalyzer(ast_visitor.ASTVisitor):
             if ty not in types:
                 return True
         return False
-
-

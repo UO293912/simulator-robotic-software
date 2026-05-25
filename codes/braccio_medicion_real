@@ -11,10 +11,11 @@ Servo wrist_rot;
 Servo gripper;
 
 const int STEP_DELAY_MS = 20;
-const int FIXED_M2_ANGLE = 45;
+const int SAFE_M2_ANGLE = 45;
 const unsigned long SERIAL_BAUD_RATE = 9600;
 
 int currentM1 = 90;
+int currentM2 = SAFE_M2_ANGLE;
 int currentM3 = 180;
 int currentM4 = 180;
 int currentM5 = 90;
@@ -25,6 +26,7 @@ int angleStep = 1;
 unsigned long movementCounter = 0;
 
 int lastDirectionM1 = 0;
+int lastDirectionM2 = 0;
 int lastDirectionM3 = 0;
 int lastDirectionM4 = 0;
 int lastDirectionM5 = 0;
@@ -34,7 +36,7 @@ void applyPose() {
   Braccio.ServoMovement(
     STEP_DELAY_MS,
     currentM1,
-    FIXED_M2_ANGLE,
+    currentM2,
     currentM3,
     currentM4,
     currentM5,
@@ -46,6 +48,8 @@ const char* labelForMotor(int motor) {
   switch (motor) {
     case 1:
       return "base";
+    case 2:
+      return "shoulder";
     case 3:
       return "elbow";
     case 4:
@@ -63,6 +67,8 @@ int angleForMotor(int motor) {
   switch (motor) {
     case 1:
       return currentM1;
+    case 2:
+      return currentM2;
     case 3:
       return currentM3;
     case 4:
@@ -80,6 +86,9 @@ void setAngleForMotor(int motor, int value) {
   switch (motor) {
     case 1:
       currentM1 = value;
+      break;
+    case 2:
+      currentM2 = value;
       break;
     case 3:
       currentM3 = value;
@@ -100,6 +109,8 @@ int lastDirectionForMotor(int motor) {
   switch (motor) {
     case 1:
       return lastDirectionM1;
+    case 2:
+      return lastDirectionM2;
     case 3:
       return lastDirectionM3;
     case 4:
@@ -117,6 +128,9 @@ void setLastDirectionForMotor(int motor, int value) {
   switch (motor) {
     case 1:
       lastDirectionM1 = value;
+      break;
+    case 2:
+      lastDirectionM2 = value;
       break;
     case 3:
       lastDirectionM3 = value;
@@ -171,8 +185,8 @@ void printPose() {
   Serial.println(angleStep);
   Serial.print(F("M1="));
   Serial.println(currentM1);
-  Serial.print(F("M2_fixed="));
-  Serial.println(FIXED_M2_ANGLE);
+  Serial.print(F("M2="));
+  Serial.println(currentM2);
   Serial.print(F("M3="));
   Serial.println(currentM3);
   Serial.print(F("M4="));
@@ -188,7 +202,7 @@ void printPose() {
 void printProtocol() {
   Serial.println();
   Serial.println(F("PROTOCOLO_LIMITES"));
-  Serial.println(F("1. Selecciona motor con m1/m3/m4/m5/m6."));
+  Serial.println(F("1. Selecciona motor con m1/m2/m3/m4/m5/m6."));
   Serial.println(F("2. Usa step 5 o step 10 para acercarte al limite."));
   Serial.println(F("3. Cuando estes cerca, cambia a step 1."));
   Serial.println(F("4. Avanza hasta el ultimo comando seguro."));
@@ -209,7 +223,7 @@ void printHelp() {
   Serial.println(F("protocol       -> mostrar protocolo de medicion"));
   Serial.println(F("pose           -> imprimir pose actual"));
   Serial.println(F("reset          -> volver a la pose base"));
-  Serial.println(F("m1 m3 m4 m5 m6 -> seleccionar motor"));
+  Serial.println(F("m1 m2 m3 m4 m5 m6 -> seleccionar motor"));
   Serial.println(F("step N         -> fijar paso incremental"));
   Serial.println(F("+              -> sumar el paso actual"));
   Serial.println(F("-              -> restar el paso actual"));
@@ -218,8 +232,6 @@ void printHelp() {
   Serial.println(F("N              -> enviar ese angulo absoluto al motor seleccionado"));
   Serial.println(F("go N           -> enviar angulo absoluto al motor seleccionado"));
   Serial.println(F("note texto     -> dejar una nota en el log serie"));
-  Serial.println();
-  Serial.println(F("M2 permanece fijo porque su articulacion no transmite movimiento ahora mismo."));
 }
 
 void printMovementLog(const char* mode, int motor, int previousAngle, int targetAngle, int delta, bool reversed) {
@@ -256,12 +268,14 @@ void selectMotor(int motor) {
 
 void resetPose() {
   currentM1 = 90;
+  currentM2 = SAFE_M2_ANGLE;
   currentM3 = 180;
   currentM4 = 180;
   currentM5 = 90;
   currentM6 = 10;
 
   lastDirectionM1 = 0;
+  lastDirectionM2 = 0;
   lastDirectionM3 = 0;
   lastDirectionM4 = 0;
   lastDirectionM5 = 0;
@@ -343,6 +357,11 @@ void handleLine(String line) {
 
   if (line.equalsIgnoreCase("m1") || line == "1") {
     selectMotor(1);
+    return;
+  }
+
+  if (line.equalsIgnoreCase("m2") || line == "2") {
+    selectMotor(2);
     return;
   }
 
@@ -445,7 +464,7 @@ void setup() {
   Braccio.begin();
   delay(2000);
 
-  Serial.println(F("Medicion real del Braccio sin usar M2."));
+  Serial.println(F("Medicion real del Braccio con control manual de todas las articulaciones."));
   Serial.println(F("Este sketch esta pensado para medir limites, holgura y referencias reales."));
   Serial.println(F("Configura el monitor serie a 9600 baudios."));
   printHelp();

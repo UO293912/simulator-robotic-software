@@ -13,6 +13,7 @@ import libraries.servo as servo
 import libraries.keyboard as keyboard
 import libraries.string as string
 import libraries.braccio as braccio
+import libraries.stdlib as stdlib
 
 
 class LibraryManager:
@@ -36,6 +37,7 @@ class LibraryManager:
             servo.get_name(): (servo.get_methods(), string.get_not_implemented()),
             keyboard.get_name(): (keyboard.get_methods(), string.get_not_implemented()),
             braccio.get_name(): (braccio.get_methods(), braccio.get_not_implemented()),
+            stdlib.get_name(): (stdlib.get_methods(), stdlib.get_not_implemented()),
         }
         self.library_not_impl = {
             std.get_name(): std.get_not_implemented(),

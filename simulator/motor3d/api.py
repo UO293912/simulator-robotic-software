@@ -79,8 +79,10 @@ class Motor3DApi:
     def drag_camera(self, dx, dy, pan=False):
         self.camera_controller.drag(dx, dy, pan=pan)
 
-    def set_camera(self, yaw=None, pitch=None, projection_mode=None):
+    def set_camera(self, yaw=None, pitch=None, projection_mode=None, distance=None):
         self.camera.set_orientation(yaw=yaw, pitch=pitch)
+        if distance is not None:
+            self.camera.set_distance(distance)
         if projection_mode is not None:
             self.camera.set_projection_mode(projection_mode)
 
@@ -115,6 +117,12 @@ class Motor3DApi:
             self.model.visual['show_joint_axes'] = True
         else:
             self.model.visual.pop('show_joint_axes', None)
+
+    def set_show_fps_counter(self, show):
+        if show:
+            self.model.visual['show_fps_counter'] = True
+        else:
+            self.model.visual['show_fps_counter'] = False
 
     # ------------------------------------------------------------------
     # Cinemática Inversa
@@ -191,7 +199,7 @@ class Motor3DApi:
         """Evalúa el estado de seguridad de la pose actual."""
         points = self.scene.last_points
         max_reach = self.model.max_reach()
-        return self.safety_manager.evaluate(points, max_reach)
+        return self.safety_manager.evaluate(points, max_reach, model=self.model)
 
 
     # ------------------------------------------------------------------

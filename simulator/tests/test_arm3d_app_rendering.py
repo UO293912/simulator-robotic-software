@@ -954,8 +954,8 @@ def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
         CABALLERA_DEPTH_SCALE=0.5,
     )
     projection = drawing._build_projection_context(camera, 400, 300)
-    assert "oblique_dx" in projection
-    assert "oblique_dy" in projection
+    assert "oblique_dx" not in projection
+    assert "oblique_dy" not in projection
     assert drawing._project_camera_space(np.array([0.0, 0.0, 0.01]), projection) is None
 
     class DrawSpy:

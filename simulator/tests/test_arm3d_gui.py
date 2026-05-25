@@ -69,10 +69,14 @@ def tk_root():
     tcl_root = Path(sys.base_prefix) / "tcl"
     os.environ["TCL_LIBRARY"] = str(tcl_root / "tcl8.6")
     os.environ["TK_LIBRARY"] = str(tcl_root / "tk8.6")
-    root = tk.Tk()
-    root.withdraw()
+    root = getattr(tk, "_default_root", None)
+    owns_root = root is None
+    if owns_root:
+        root = tk.Tk()
+        root.withdraw()
     yield root
-    root.destroy()
+    if owns_root:
+        root.destroy()
 
 
 @pytest.fixture
@@ -122,6 +126,7 @@ def tk_app(tk_root):
         set_arm3d_camera_view=lambda view_name: calls.append(
             ("camera_view", view_name)
         ),
+        unlock_arm3d_camera_view=lambda: calls.append(("unlock_camera_view",)),
         show_tutorial=lambda: calls.append(("show_tutorial",)),
         show_results=lambda: calls.append(("show_results",)),
         show_help=lambda challenge: calls.append(("show_help", challenge)),
@@ -745,6 +750,9 @@ def test_drawing_editor_and_buttons_cover_widget_flows(monkeypatch, tk_app):
     frame.hide_arm3d_camera_buttons()
     frame.change_zoom_label("155.4")
     frame._on_cam_preset("caballera")
+    frame._on_cam_drag_mode("zoom")
+    assert frame._camera_view_buttons[None].cget("bg") == gui_mod.BLUE
+    assert frame._camera_drag_buttons["zoom"].cget("bg") == gui_mod.BLUE
     frame.press(SimpleNamespace(x=10, y=20))
     frame.move(SimpleNamespace(x=30, y=45))
     frame.press_right(SimpleNamespace(x=30, y=45))
@@ -801,8 +809,11 @@ def test_drawing_editor_and_buttons_cover_widget_flows(monkeypatch, tk_app):
     button_bar.update_state("paused")
 
     assert ("set_arm3d_mouse_drag_mode", None) in tk_app.calls
+    assert ("set_arm3d_mouse_drag_mode", "zoom") in tk_app.calls
     assert ("camera_view", "caballera") in tk_app.calls
-    assert ("drag_camera", 20, 25, False) in tk_app.calls
+    assert ("unlock_camera_view",) in tk_app.calls
+    assert ("camera_view", None) not in tk_app.calls
+    assert ("dolly_camera", 25) in tk_app.calls
     assert ("dolly_camera", 15) in tk_app.calls
     assert ("controller_zoom_in",) in tk_app.calls
     assert ("controller_zoom_out",) in tk_app.calls
@@ -893,6 +904,9 @@ def test_huds_controller_and_screen_updater_paths(monkeypatch, tk_app):
         def reset_camera(self):
             tk_app.calls.append(("reset_camera_layer",))
 
+        def unlock_camera_view(self):
+            tk_app.calls.append(("unlock_camera_view_layer",))
+
         def set_camera_view(self, view_name):
             tk_app.calls.append(("set_camera_view_layer", view_name))
 
@@ -956,6 +970,7 @@ def test_huds_controller_and_screen_updater_paths(monkeypatch, tk_app):
     controller.toggle_arm3d_joint_ranges(True)
     controller.toggle_arm3d_joint_axes(True)
     controller.set_arm3d_camera_view("isometrica")
+    controller.unlock_arm3d_camera_view()
     controller.open_arm3d_config()
     controller.change_circuit(5)
     controller.send_input("hello")

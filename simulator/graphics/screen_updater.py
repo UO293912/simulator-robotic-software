@@ -9,14 +9,14 @@ view = None
 controller = None  # Referencia al RobotsController, necesaria para debug_line()
 
 
-def refresh():
+def refresh(force=False):
     global layer
     global last_update
     global view
     if layer is None or view is None:
         return
     curr_time = time.time_ns() / 1000000
-    if last_update + 16 <= curr_time:
+    if force or last_update + 16 <= curr_time:
         layer.move(view.keys_used, view.move_WASD)
         view.update_idletasks()
         last_update = time.time_ns() / 1000000
