@@ -1,7 +1,7 @@
 """
 Shared pytest bootstrap for repository-wide test execution.
 
-This makes the legacy tests under simulator/ importable from the project root,
+This makes the consolidated tests under tests/ importable from the project root,
 which is the execution mode expected by SonarQube coverage collection in CI.
 """
 from pathlib import Path

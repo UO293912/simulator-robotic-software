@@ -378,7 +378,7 @@ def test_warning_analyzer_handles_member_access_and_missing_names():
 
 
 def test_main_script_bootstraps_gui_and_runs_mainloop(monkeypatch, tmp_path):
-    project_root = Path(__file__).resolve().parents[2]
+    project_root = Path(__file__).resolve().parents[1]
     script_path = project_root / "simulator" / "main.py"
     calls = []
 
