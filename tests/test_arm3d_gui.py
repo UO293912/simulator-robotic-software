@@ -31,6 +31,7 @@ class DummyMotor3D:
                 {"yaw": 0.0, "pitch": 0.0},
                 {"yaw": 30.0, "pitch": 45.0},
             ],
+            servo_pins=[11, 10],
             visual={"mode": "auto_generic"},
             preset_name=None,
         )
@@ -48,6 +49,7 @@ class DummyMotor3D:
             "prismatic_pre_rotations": list(
                 self.model.prismatic_pre_rotations[: self.model.dof]
             ),
+            "servo_pins": list(self.model.servo_pins[: self.model.dof]),
             "visual": dict(self.model.visual),
         }
 
@@ -57,6 +59,7 @@ class DummyMotor3D:
         self.model.joint_limits = list(config["joint_limits"])
         self.model.joint_types = list(config["joint_types"])
         self.model.prismatic_pre_rotations = list(config["prismatic_pre_rotations"])
+        self.model.servo_pins = list(config["servo_pins"])
         self.model.visual = dict(config["visual"])
 
     def save_model_config(self, path=None):
@@ -271,6 +274,7 @@ def test_arm3d_configuration_window_constructor_and_help_flow(tk_app):
     assert error is None
     assert config["dof"] == 2
     assert config["joint_types"] == ["R", "P"]
+    assert config["servo_pins"] == [11, 10]
 
     window._toggle_config_help()
     assert window._help_visible is True
@@ -293,7 +297,7 @@ def test_arm3d_configuration_window_swaps_near_zero_dh_values(tk_app):
 
     theta_entry, d_entry, a_entry = row[0], row[1], row[2]
     type_combo = row[4]
-    unit_label = row[9]
+    unit_label = row[10]
 
     a_entry.delete(0, tk.END)
     a_entry.insert(0, "25.0")
@@ -323,6 +327,47 @@ def test_arm3d_configuration_window_swaps_near_zero_dh_values(tk_app):
     assert unit_label.cget("text") == "deg"
     assert theta_entry.cget("state") == "normal"
     window.destroy()
+
+
+def test_arm3d_servo_pin_mapping_routes_attach_to_configured_joint():
+    from robot_components.robots import ArmHardwareRobot
+
+    robot = ArmHardwareRobot()
+    robot.set_servo_pin_mapping([2, 4, 7, 8, 12, 13])
+
+    attached = robot.attach_servo_to_pin(4)
+
+    assert attached is robot.servo_shoulder
+    assert robot.servo_shoulder.pin == 4
+    assert robot.board.get_pin_element(4) is robot.servo_shoulder
+
+
+def test_arm3d_servo_attach_ignores_unconfigured_pin():
+    from robot_components.robots import ArmHardwareRobot
+
+    robot = ArmHardwareRobot()
+    robot.set_servo_pin_mapping([2, 4, 7, 8, 12, 13])
+
+    attached = robot.attach_servo_to_pin(99)
+
+    assert attached is None
+    assert all(servo.pin == -1 for servo in robot._joint_servos)
+    assert robot.board.get_pin_element(99) is None
+
+
+def test_braccio_uses_configured_servo_pins():
+    from libraries.braccio import Braccio
+    from robot_components.robots import ArmHardwareRobot
+
+    robot = ArmHardwareRobot()
+    robot.set_servo_pin_mapping([2, 4, 7, 8, 12, 13])
+    braccio = Braccio(robot.board)
+
+    assert braccio.begin() == Braccio.OK
+
+    assert robot.servo_base.pin == 2
+    assert robot.servo_shoulder.pin == 4
+    assert robot.servo_elbow.pin == 7
 
 
 def test_arm3d_configuration_window_helper_fallback_paths(tmp_path, tk_app):

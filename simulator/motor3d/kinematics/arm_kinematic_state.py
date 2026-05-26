@@ -19,6 +19,7 @@ class ArmKinematicState:
         self.joint_types = []
         self.dh_rows = []
         self.prismatic_pre_rotations = []
+        self.servo_pins = []
         self.base_row = {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}
         self.preset_name = None
         self.tool_parent_joint = -1
@@ -27,7 +28,8 @@ class ArmKinematicState:
 
     def configure(self, dof, link_lengths=None, joint_limits=None,
                   joint_types=None, joints=None, dh_rows=None,
-                  tool=None, visual=None, base=None, prismatic_pre_rotations=None):
+                  tool=None, visual=None, base=None, prismatic_pre_rotations=None,
+                  servo_pins=None):
         self.dof = max(self.MIN_DOF, min(self.MAX_DOF, int(dof)))
         n = self.dof
 
@@ -74,6 +76,14 @@ class ArmKinematicState:
         ]
         while len(self.prismatic_pre_rotations) < n:
             self.prismatic_pre_rotations.append({'yaw': 0.0, 'pitch': 0.0})
+
+        raw_servo_pins = list(servo_pins) if servo_pins else []
+        self.servo_pins = [
+            self._normalize_servo_pin(pin)
+            for pin in raw_servo_pins[:n]
+        ]
+        while len(self.servo_pins) < n:
+            self.servo_pins.append(None)
 
         self.base_row = self._normalize_base_row(base)
 
@@ -142,6 +152,7 @@ class ArmKinematicState:
             'joint_types': list(self.joint_types),
             'dh_rows': [dict(row) for row in self.dh_rows],
             'prismatic_pre_rotations': [dict(item) for item in self.prismatic_pre_rotations],
+            'servo_pins': list(self.servo_pins),
             'base': dict(self.base_row),
             'preset_name': self.preset_name,
             'tool': {
@@ -165,6 +176,7 @@ class ArmKinematicState:
             tool=data.get('tool'),
             visual=data.get('visual'),
             prismatic_pre_rotations=data.get('prismatic_pre_rotations'),
+            servo_pins=data.get('servo_pins'),
         )
 
     def _sync_link_lengths_from_dh(self):
@@ -201,6 +213,15 @@ class ArmKinematicState:
             pitch = 0.0
 
         return {'yaw': yaw, 'pitch': pitch}
+
+    @staticmethod
+    def _normalize_servo_pin(pin):
+        if pin is None or pin == "":
+            return None
+        try:
+            return int(pin)
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _normalize_base_row(base):

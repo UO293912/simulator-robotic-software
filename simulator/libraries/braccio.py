@@ -83,6 +83,13 @@ def _delay_ms(ms):
     time.sleep(ms / 1000.0)
 
 
+def _get_board_braccio_pins(board):
+    arm_robot = getattr(board, "arm_robot", None) if board is not None else None
+    if arm_robot is not None and hasattr(arm_robot, "get_named_servo_pins"):
+        return arm_robot.get_named_servo_pins(BRACCIO_PINS)
+    return dict(BRACCIO_PINS)
+
+
 def get_name():
     return "Braccio"
 
@@ -166,7 +173,9 @@ class Braccio:
         self._servos = {}
         if self.board is None:
             return
-        for name, pin in BRACCIO_PINS.items():
+        for name, pin in _get_board_braccio_pins(self.board).items():
+            if pin is None:
+                continue
             elem = self.board.get_pin_element(pin)
             if elem is None:
                 arm_robot = getattr(self.board, "arm_robot", None)
@@ -244,7 +253,7 @@ class Braccio:
 
         step_positions = {}
         for name in _SERVO_ORDER:
-            pin = BRACCIO_PINS[name]
+            pin = self._pin_for(name)
             elem = self._servos.get(pin)
             if elem is not None and hasattr(elem, "value"):
                 step_positions[name] = int(elem.value)
@@ -262,12 +271,17 @@ class Braccio:
 
     def _write_servo(self, name, value):
         """Escribe un paso de un grado sobre el servo indicado."""
-        pin = BRACCIO_PINS[name]
+        pin = self._pin_for(name)
+        if pin is None:
+            return
         elem = self._servos.get(pin)
         if elem is not None:
             elem.set_value(pin, int(value))
         elif self.board is not None:
             self.board.write_value(pin, int(value))
+
+    def _pin_for(self, name):
+        return _get_board_braccio_pins(self.board).get(name, BRACCIO_PINS[name])
 
     def _refresh_screen_if_main_thread(self):
         if threading.current_thread() is not threading.main_thread():

@@ -562,6 +562,7 @@ class Arm3DLayer(Layer):
         ((0.0, 0.0), (90.0, 90.0), (180.0, 180.0)),
         ((10.0, 10.0), (40.0, 40.0), (73.0, 73.0)),
     )
+    DEFAULT_SERVO_PINS = [11, 10, 9, 6, 5, 3]
 
     def __init__(self):
         # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
@@ -586,6 +587,7 @@ class Arm3DLayer(Layer):
         self._fps_display_value = 0.0
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
+        self.apply_servo_pin_mapping()
         self._sync_servos_from_model(reset_animation=True)
 
     def set_canvas(self, canvas, hud_canvas):
@@ -597,6 +599,7 @@ class Arm3DLayer(Layer):
 
     def execute(self):
         self.is_drawing = True
+        self.apply_servo_pin_mapping()
         self.motor3d.scene.update()
 
     def stop(self):
@@ -777,6 +780,13 @@ class Arm3DLayer(Layer):
 
     def get_model_config(self):
         return self.motor3d.get_model_config()
+
+    def apply_servo_pin_mapping(self):
+        """Sincroniza los pines configurados del modelo con el robot virtual."""
+        pins = list(getattr(self.motor3d.model, 'servo_pins', []) or [])
+        if not any(pin is not None for pin in pins):
+            pins = list(self.DEFAULT_SERVO_PINS[:self.motor3d.model.dof])
+        self.robot.set_servo_pin_mapping(pins)
 
     # ------------------------------------------------------------------
     # Helpers privados
