@@ -53,9 +53,21 @@ class Scene3D:
 
     def get_end_effector(self):
         """Retorna la posición 3D del efector final en la pose actual."""
+        ee = self.get_effective_end_effector()
+        if ee:
+            return ee
         if self.last_chain:
             return self.last_chain.get('end_effector', [0.0, 0.0, 0.0])
         return [0.0, 0.0, 0.0]
+
+    def get_effective_end_effector(self):
+        """Retorna el TCP visual real cuando el modelo activo lo define."""
+        try:
+            return self.drawing.get_effective_end_effector(
+                self.model, self.last_points, self.last_chain
+            )
+        except Exception:
+            return None
 
     def set_show_trail(self, show):
         self.show_trail = bool(show)

@@ -247,12 +247,13 @@ class TestInverseKinematics:
         """La API de IK debe refinar en una sola llamada hasta ~1 mm."""
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 
-        converged, _ = motor3d_api.solve_ik(100.0, 300.0, 100.0)
+        target = [0.0, 300.0, 200.0]
+        converged, _ = motor3d_api.solve_ik(*target)
         ee = forward_kinematics_chain(motor3d_api.model)['end_effector']
         error = math.sqrt(
-            (ee[0] - 100.0) ** 2
-            + (ee[1] - 300.0) ** 2
-            + (ee[2] - 100.0) ** 2
+            (ee[0] - target[0]) ** 2
+            + (ee[1] - target[1]) ** 2
+            + (ee[2] - target[2]) ** 2
         )
 
         assert converged
@@ -746,7 +747,7 @@ class TestRendering:
         for _ in range(6):
             layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] == pytest.approx(-45.0, abs=1e-6), (
+        assert layer.motor3d.model.joints[0] == pytest.approx(45.0, abs=1e-6), (
             f"J1 debería alcanzar el objetivo por tiempo real, obtuvo {layer.motor3d.model.joints[0]:.1f}°")
 
 
@@ -784,7 +785,7 @@ def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
 
     layer = Arm3DLayer()
     layer.set_joint_angle(0, 45.0)
-    assert layer.motor3d.model.joints[0] == -52.0
+    assert layer.motor3d.model.joints[0] == 35.5
     assert layer.robot.servo_base.value == 45.0
 
 
@@ -806,7 +807,7 @@ def test_arm3d_layer_ik_uses_animation_instead_of_pose_jump():
     converged, _ = layer.solve_ik(100.0, 200.0, 300.0)
 
     assert converged
-    assert layer.robot.servo_base.value == 157.0
+    assert layer.robot.servo_base.value == pytest.approx(19.058823529411768)
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
     assert layer._current_joints[0] == layer.motor3d.model.joints[0]
@@ -856,7 +857,7 @@ def test_arm3d_layer_best_effort_ik_moves_on_first_unreachable_attempt():
 
     assert converged is False
     assert "Mejor aproximacion" in message
-    assert layer.robot.servo_base.value == 142.0
+    assert layer.robot.servo_base.value == pytest.approx(34.94117647058823)
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
 
@@ -1720,7 +1721,7 @@ class TestBraccioCompiler:
 
             assert braccio.begin() == 1
 
-            expected = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+            expected = [-7.0, -45.0, -50.0, 110.0, 81.0, -80.0]
             assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
             assert layer._current_joints == pytest.approx(expected)
         finally:
@@ -1729,8 +1730,8 @@ class TestBraccioCompiler:
             screen_updater.layer = original_layer
             screen_updater.view = original_view
 
-    def test_arm3d_assigns_joints_by_attach_order(self):
-        """Servo.attach/write debe asignar J1..J6 por orden de attach, no por nombre."""
+    def test_arm3d_servo_attach_routes_by_configured_pins(self):
+        """Servo.attach/write debe respetar el cableado configurado, no el orden de attach."""
         from graphics.layers import Arm3DLayer
         from libraries.servo import Servo
 
@@ -1746,8 +1747,8 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] == -67.0
-        assert layer.motor3d.model.joints[1] == 30.0
+        assert layer.motor3d.model.joints[0] == pytest.approx(-35.33333333333333)
+        assert layer.motor3d.model.joints[1] == pytest.approx(-60.0)
 
     def test_braccio_preset_saturates_servo_values_to_real_limits(self):
         """El preset Braccio debe saturar la pose visual a los limites reales."""
@@ -1761,12 +1762,12 @@ class TestBraccioCompiler:
         servo.write(-60)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == -97.0
+        assert layer.motor3d.model.joints[0] == 78.0
 
         servo.write(250)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == 83.0
+        assert layer.motor3d.model.joints[0] == -92.0
 
     def test_braccio_preset_uses_real_calibration_points(self):
         """Los puntos medidos digital-real deben aplicarse en el preset Braccio."""
@@ -1783,7 +1784,7 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        expected = [-90.0, 0.0, 0.0, 0.0, 0.0, -50.0]
+        expected = [71.38888888888889, 0.0, 0.0, 5.0, 81.0, -50.0]
         assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
     def test_transpiler_initializes_servo_instances_with_board(self):
@@ -1854,7 +1855,7 @@ class TestSafetyAndConstraints:
 
     def test_safety_does_not_warn_singularity_for_braccio_rest_pose(self, motor3d_api):
         """La pose inicial real del Braccio no debe aparecer como singularidad espuria."""
-        motor3d_api.model.joints = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+        motor3d_api.model.joints = [-7.0, -45.0, -50.0, 110.0, 0.0, -80.0]
         motor3d_api.scene.update()
 
         result = motor3d_api.evaluate_safety()
@@ -1920,13 +1921,56 @@ class TestPersistence:
         assert model.dof == 6
         assert len(model.joint_limits) == 6
         assert model.joint_limits == [
-            (-97.0, 83.0),
+            (-92.0, 78.0),
             (-75.0, 75.0),
             (-50.0, 115.0),
-            (-75.0, 105.0),
-            (-90.0, 90.0),
+            (-70.0, 110.0),
+            (0.0, 162.0),
             (-80.0, -17.0),
         ]
+        assert model.servo_pins == [11, 10, 9, 6, 5, 3]
+        assert model.servo_calibration[0] == [
+            (0.0, 168.0),
+            (90.0, 83.0),
+            (180.0, -2.0),
+        ]
+        assert model.servo_calibration[4] == [
+            (0.0, 90.0),
+            (100.0, 180.0),
+            (180.0, 252.0),
+        ]
+    def test_braccio_servo_calibration_comes_from_preset(self):
+        """Arm3DLayer debe leer la tabla de calibracion cargada en el modelo."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer()
+        layer.motor3d.model.servo_calibration[0] = [
+            (0.0, 0.0),
+            (90.0, 100.0),
+            (180.0, 180.0),
+        ]
+
+        layer.robot.servo_base.value = 90
+        layer._current_joints = None
+        layer._Arm3DLayer__sync_from_servos()
+
+        assert layer.motor3d.model.joints[0] == pytest.approx(10.0)
+
+    def test_braccio_scene_reports_visual_tcp_as_end_effector(self):
+        """El HUD y seguridad deben usar el TCP real de las garras, no el extremo DH generico."""
+        import math
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -17.0]
+        api.scene.update()
+
+        fk_ee = api.scene.last_chain["end_effector"]
+        visual_tcp = api.scene.get_end_effector()
+        distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
+
+        assert distance > 100.0
+        assert visual_tcp[2] <= api.model.max_reach() + 30.0
 
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""
