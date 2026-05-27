@@ -39,6 +39,9 @@ class _FakeWidget:
     def focus_force(self):
         return None
 
+    def update_config_menu_label(self, *_args, **_kwargs):
+        return None
+
 
 class _FakeNotebook(_FakeWidget):
     def __init__(self, *args, **kwargs):

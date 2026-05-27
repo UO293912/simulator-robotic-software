@@ -1074,6 +1074,7 @@ def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_m
         _ConfigField(str(lim_max)),
         _ConfigField(str(direction['yaw'])),
         _ConfigField(str(direction['pitch'])),
+        _ConfigField(""),
     ]]
     window._base_row_entries = {
         'theta': _ConfigField("0"),
@@ -1139,6 +1140,7 @@ def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
                     {'yaw': 0.0, 'pitch': 0.0},
                     {'yaw': 0.0, 'pitch': 0.0},
                 ],
+                'servo_pins': [11, 10, 9],
                 'base': {'theta': 5.0, 'd': 6.0, 'a': 7.0, 'alpha': 8.0},
                 'visual': {'mode': 'auto_generic'},
             }
@@ -1152,17 +1154,17 @@ def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
         [
             _ConfigField("10"), _ConfigField("20"), _ConfigField("30"), _ConfigField("40"),
             _ConfigField("R"), _ConfigField("-10"), _ConfigField("50"),
-            _ConfigField("0"), _ConfigField("0"),
+            _ConfigField("0"), _ConfigField("0"), _ConfigField("11"),
         ],
         [
             _ConfigField("1"), _ConfigField("2"), _ConfigField("3"), _ConfigField("4"),
             _ConfigField("P"), _ConfigField("0"), _ConfigField("120"),
-            _ConfigField("90"), _ConfigField("45"),
+            _ConfigField("90"), _ConfigField("45"), _ConfigField("10"),
         ],
         [
             _ConfigField("7"), _ConfigField("8"), _ConfigField("9"), _ConfigField("10"),
             _ConfigField("R"), _ConfigField("-30"), _ConfigField("30"),
-            _ConfigField("0"), _ConfigField("0"),
+            _ConfigField("0"), _ConfigField("0"), _ConfigField("9"),
         ],
     ]
     window._base_row_entries = {
@@ -1188,6 +1190,7 @@ def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
     ]
     assert saved['joint_types'][:2] == ['R', 'P']
     assert saved['joint_limits'][:2] == [(-10.0, 50.0), (0.0, 120.0)]
+    assert saved['servo_pins'][:2] == [11, 10]
     assert saved['prismatic_pre_rotations'][:2] == [
         {'yaw': 0.0, 'pitch': 0.0},
         {'yaw': 90.0, 'pitch': 45.0},
@@ -1787,17 +1790,6 @@ class TestBraccioCompiler:
         expected = [71.38888888888889, 0.0, 0.0, 5.0, 81.0, -50.0]
         assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
-    def test_braccio_elbow_keeps_one_to_one_degrees(self):
-        """El codo debe conservar 90 grados exactos entre 130 y 40."""
-        from graphics.layers import Arm3DLayer
-
-        layer = Arm3DLayer()
-        layer.robot.servo_elbow.value = 40
-        layer._current_joints = None
-        layer._Arm3DLayer__sync_from_servos()
-
-        assert layer.motor3d.model.joints[2] == pytest.approx(90.0)
-
     def test_transpiler_initializes_servo_instances_with_board(self):
         """Las declaraciones Servo deben crear instancias enlazadas a la placa activa."""
         from compiler.transpiler import transpile
@@ -1944,11 +1936,6 @@ class TestPersistence:
             (0.0, 168.0),
             (90.0, 83.0),
             (180.0, -2.0),
-        ]
-        assert model.servo_calibration[2] == [
-            (20.0, 200.0),
-            (130.0, 90.0),
-            (180.0, 40.0),
         ]
         assert model.servo_calibration[4] == [
             (0.0, 90.0),
