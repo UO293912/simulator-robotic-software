@@ -1787,6 +1787,17 @@ class TestBraccioCompiler:
         expected = [71.38888888888889, 0.0, 0.0, 5.0, 81.0, -50.0]
         assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
+    def test_braccio_elbow_keeps_one_to_one_degrees(self):
+        """El codo debe conservar 90 grados exactos entre 130 y 40."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer()
+        layer.robot.servo_elbow.value = 40
+        layer._current_joints = None
+        layer._Arm3DLayer__sync_from_servos()
+
+        assert layer.motor3d.model.joints[2] == pytest.approx(90.0)
+
     def test_transpiler_initializes_servo_instances_with_board(self):
         """Las declaraciones Servo deben crear instancias enlazadas a la placa activa."""
         from compiler.transpiler import transpile
@@ -1923,7 +1934,7 @@ class TestPersistence:
         assert model.joint_limits == [
             (-92.0, 78.0),
             (-75.0, 75.0),
-            (-50.0, 115.0),
+            (-50.0, 110.0),
             (-70.0, 110.0),
             (0.0, 162.0),
             (-80.0, -17.0),
@@ -1933,6 +1944,11 @@ class TestPersistence:
             (0.0, 168.0),
             (90.0, 83.0),
             (180.0, -2.0),
+        ]
+        assert model.servo_calibration[2] == [
+            (20.0, 200.0),
+            (130.0, 90.0),
+            (180.0, 40.0),
         ]
         assert model.servo_calibration[4] == [
             (0.0, 90.0),
