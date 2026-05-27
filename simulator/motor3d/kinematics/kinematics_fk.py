@@ -1,7 +1,7 @@
 """
 Cinemática Directa (Forward Kinematics) mediante parametrización Denavit-Hartenberg.
 
-Convención modificada DH:
+Convención clásica DH:
     Articulación R: T_i = Rz(theta_i + q_i) * Tz(d_i)   * Tx(a_i) * Rx(alpha_i)
     Articulación P: T_i = Rz(theta_i)       * Tz(d_i+qi) * Tx(a_i) * Rx(alpha_i)
 """
