@@ -11,6 +11,7 @@ class Camera:
     DEFAULT_PITCH = 30.0
     DEFAULT_DISTANCE = 700.0
     DEFAULT_FOCAL = 300.0
+    FOV_DEGREES = 60.0  # ángulo de visión vertical de la proyección en perspectiva
     DEFAULT_ZOOM = 1.0
     PITCH_MIN = -89.0
     PITCH_MAX = 89.0
@@ -166,8 +167,22 @@ class Camera:
         p_cs = self.camera_space(point)
         return self.project_camera_space(p_cs, width, height)
 
-    def get_projection_scale(self):
-        return self.focal_length / max(self.distance, 1e-9)
+    def get_focal(self, viewport_height=None):
+        """Focal en píxeles derivada del FOV vertical fijo y la altura del viewport.
+
+        Con una focal constante el ángulo de visión dependía del tamaño del
+        canvas (en ventanas grandes superaba los 130°, un gran angular extremo)
+        y al acercar la cámara las piezas del brazo se estiraban hacia los
+        bordes. Fijar el FOV mantiene la perspectiva natural con cualquier
+        tamaño de ventana y nivel de zoom.
+        """
+        if not viewport_height or viewport_height <= 0:
+            return self.focal_length
+        half_fov = math.radians(self.FOV_DEGREES) / 2.0
+        return (float(viewport_height) / 2.0) / math.tan(half_fov)
+
+    def get_projection_scale(self, viewport_height=None):
+        return self.get_focal(viewport_height) / max(self.distance, 1e-9)
 
     def project_camera_space(self, p_cs, width, height):
         """Proyecta coordenadas ya expresadas en el espacio de cámara."""
@@ -178,12 +193,12 @@ class Camera:
         cy = height / 2.0 + self.screen_offset_y
 
         if self.projection_mode == self.PROJECTION_ISOMETRICA:
-            scale = self.get_projection_scale()
+            scale = self.get_projection_scale(height)
             sx = p_cs[0] * scale + cx
             sy = -p_cs[1] * scale + cy
             return sx, sy
 
-        f = self.focal_length
+        f = self.get_focal(height)
         sx = (p_cs[0] / z) * f + cx
         sy = (-p_cs[1] / z) * f + cy
         return sx, sy

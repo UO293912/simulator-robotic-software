@@ -1107,11 +1107,11 @@ class Robot3DDrawing:
         projection = {
             'R_view': R_view,
             'cam_pos': cam_pos,
-            'f': camera.focal_length,
+            'f': camera.get_focal(h),
             'cx': w / 2.0 + camera.screen_offset_x,
             'cy': h / 2.0 + camera.screen_offset_y,
             'mode': camera.projection_mode,
-            'ortho_scale': camera.get_projection_scale(),
+            'ortho_scale': camera.get_projection_scale(h),
             'target_depth': camera.distance,
         }
         return projection
