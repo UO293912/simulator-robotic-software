@@ -873,6 +873,33 @@ def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
     assert canvas.created == 2
     assert canvas.itemconfigs == 1
 
+    worker_draw = DrawSpy()
+    worker_drawing = drawing_mod.Robot3DDrawing()
+    worker_drawing._mesh_worker_count = 2
+    worker_drawing._mesh_worker_min_tris = 1
+    tri = np.array([
+        [[0.0, 0.0, 100.0], [0.0, 10.0, 100.0], [10.0, 0.0, 100.0]],
+        [[0.0, 0.0, 120.0], [0.0, 10.0, 120.0], [10.0, 0.0, 120.0]],
+        [[0.0, 0.0, 140.0], [0.0, 10.0, 140.0], [10.0, 0.0, 140.0]],
+        [[0.0, 0.0, 160.0], [0.0, 10.0, 160.0], [10.0, 0.0, 160.0]],
+    ])
+    worker_drawing._render_mesh_vectorized(
+        worker_draw,
+        {
+            "R_view": np.eye(3),
+            "cam_pos": np.zeros(3),
+            "f": 800.0,
+            "cx": 400.0,
+            "cy": 300.0,
+            "mode": "perspective",
+            "ortho_scale": 1.0,
+            "target_depth": 500.0,
+        },
+        [(tri, (120, 160, 200), True)],
+    )
+    assert worker_draw.polygons
+    assert worker_drawing._mesh_executor is not None
+
     layer = layers_mod.Arm3DLayer()
     hud_calls = []
     layer.hud = SimpleNamespace(
