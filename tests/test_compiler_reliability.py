@@ -102,6 +102,19 @@ def test_arduino_string_supports_index_access():
     assert line[99] == "\0"
 
 
+def test_stdlib_strtol_parses_values_and_updates_end_reference():
+    import libraries.standard as standard
+    import libraries.stdlib as stdlib
+
+    end = standard.Ref()
+
+    assert stdlib.strtol("ff", end, 16) == 255
+    assert end.value == "\0"
+
+    assert stdlib.strtol("not-a-number", end, 10) == 0
+    assert end.value == "not-a-number"
+
+
 def test_console_writes_main_thread_output_immediately():
     from output.console import Console
 
