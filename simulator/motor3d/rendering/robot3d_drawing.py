@@ -9,6 +9,7 @@ MeshAsset           — Contenedor de triángulos + color base.
 import math
 import os
 import struct
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from motor3d.kinematics.kinematics_fk import get_base_transform, get_joint_axis_world
 
@@ -969,6 +970,98 @@ def _tint_color(color, factor):
     )
 
 
+def _resolve_render_worker_count():
+    """Devuelve el numero de workers para preparar mallas 3D."""
+    raw = os.environ.get('S4R_ARM3D_RENDER_WORKERS', 'auto').strip().lower()
+    if raw in ('0', '1', 'off', 'false', 'no'):
+        return 1
+    if raw and raw != 'auto':
+        try:
+            return max(1, min(32, int(raw)))
+        except ValueError:
+            pass
+    cpu_count = os.cpu_count() or 1
+    if cpu_count <= 2:
+        return 1
+    return max(1, min(2, cpu_count - 1))
+
+
+def _resolve_min_worker_triangles():
+    raw = os.environ.get('S4R_ARM3D_RENDER_MIN_TRIS', '').strip()
+    if not raw:
+        return 1500
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1500
+
+
+def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
+    """Proyecta, filtra e ilumina un bloque de triangulos."""
+    if all_tris.size == 0:
+        return None
+
+    n_tris = all_tris.shape[0]
+    r_view = projection['R_view']
+    cam_pos = projection['cam_pos']
+    f = projection['f']
+    cx = projection['cx']
+    cy = projection['cy']
+
+    verts = all_tris.reshape(n_tris * 3, 3)
+    verts_cam = (verts - cam_pos) @ r_view.T
+
+    z_cam = verts_cam[:, 2]
+    behind = (z_cam <= 0.01).reshape(n_tris, 3).any(axis=1)
+
+    mode = projection.get('mode')
+    if mode == 'isometrica':
+        scale = projection['ortho_scale']
+        sx = verts_cam[:, 0] * scale + cx
+        sy = -verts_cam[:, 1] * scale + cy
+    else:
+        z_safe = np.where(z_cam > 0.01, z_cam, 1.0)
+        sx = (verts_cam[:, 0] / z_safe) * f + cx
+        sy = (-verts_cam[:, 1] / z_safe) * f + cy
+    pts2d = np.stack([sx, sy], axis=1).reshape(n_tris, 3, 2)
+
+    v0 = all_tris[:, 0, :]
+    v1 = all_tris[:, 1, :]
+    v2 = all_tris[:, 2, :]
+    e1 = v1 - v0
+    e2 = v2 - v0
+    normals = np.cross(e1, e2)
+    n_norms = np.linalg.norm(normals, axis=1)
+    degen = n_norms < 1e-9
+    n_norms_safe = np.where(degen, 1.0, n_norms)
+    normals = normals / n_norms_safe[:, np.newaxis]
+
+    view_dirs = cam_pos - v0
+    vd_norms = np.linalg.norm(view_dirs, axis=1)
+    vd_safe = np.where(vd_norms < 1e-9, 1.0, vd_norms)
+    view_dirs = view_dirs / vd_safe[:, np.newaxis]
+    facing = np.einsum('ij,ij->i', normals, view_dirs) > 0
+
+    centroids_cam = ((v0 + v1 + v2) / 3.0 - cam_pos) @ r_view.T
+    depths = centroids_cam[:, 2]
+
+    mask = ~behind & ~degen & facing
+    visible = np.where(mask)[0]
+    if visible.size == 0:
+        return None
+
+    light_dot = np.einsum('ij,j->i', normals[visible], _LIGHT_DIR)
+    shade = _AMBIENT + (1.0 - _AMBIENT) * np.maximum(0.0, light_dot)
+    shade = np.where(shaded_flags[visible], shade, 1.0)
+
+    rgb = np.minimum(
+        255,
+        (colors[visible].astype(float) * shade[:, np.newaxis]).astype(np.int16),
+    ).astype(np.uint8)
+
+    return pts2d[visible], depths[visible], rgb
+
+
 # ---------------------------------------------------------------------------
 # Robot3DDrawing
 # ---------------------------------------------------------------------------
@@ -1005,6 +1098,19 @@ class Robot3DDrawing:
         self._last_draw_key = None
         self._photo = None
         self._canvas_image_id = None
+        self._mesh_worker_count = _resolve_render_worker_count()
+        self._mesh_worker_min_tris = _resolve_min_worker_triangles()
+        self._mesh_executor = None
+
+    def __del__(self):
+        executor = getattr(self, '_mesh_executor', None)
+        if executor is not None:
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                executor.shutdown(wait=False)
+            except Exception:
+                pass
 
     def resolve_visual_model(self, model):
         """Selecciona el modelo visual según la configuración (Patrón Estrategia)."""
@@ -1107,11 +1213,11 @@ class Robot3DDrawing:
         projection = {
             'R_view': R_view,
             'cam_pos': cam_pos,
-            'f': camera.focal_length,
+            'f': camera.get_focal(h),
             'cx': w / 2.0 + camera.screen_offset_x,
             'cy': h / 2.0 + camera.screen_offset_y,
             'mode': camera.projection_mode,
-            'ortho_scale': camera.get_projection_scale(),
+            'ortho_scale': camera.get_projection_scale(h),
             'target_depth': camera.distance,
         }
         return projection
@@ -1137,6 +1243,99 @@ class Robot3DDrawing:
         p_cs = projection['R_view'] @ p_world
         return self._project_camera_space(p_cs, projection)
 
+    def _mesh_groups_to_arrays(self, mesh_groups):
+        """Convierte grupos de malla en arrays contiguos para el pipeline."""
+        valid_groups = [entry for entry in mesh_groups if entry[0].size != 0]
+        if not valid_groups:
+            return None
+
+        total = sum(entry[0].shape[0] for entry in valid_groups)
+        if total == 0:
+            return None
+
+        all_tris = np.empty((total, 3, 3), dtype=float)
+        colors = np.empty((total, 3), dtype=np.uint8)
+        shaded_flags = np.empty(total, dtype=bool)
+
+        offset = 0
+        for entry in valid_groups:
+            tris, color = entry[0], entry[1]
+            shaded = entry[2] if len(entry) >= 3 else True
+            n_tris = tris.shape[0]
+            end = offset + n_tris
+            all_tris[offset:end] = tris
+            colors[offset:end] = color
+            shaded_flags[offset:end] = bool(shaded)
+            offset = end
+
+        return all_tris, colors, shaded_flags
+
+    def _get_mesh_executor(self):
+        if self._mesh_executor is None:
+            self._mesh_executor = ThreadPoolExecutor(
+                max_workers=self._mesh_worker_count,
+                thread_name_prefix='arm3d-render',
+            )
+        return self._mesh_executor
+
+    def _prepare_mesh_draw_items(self, all_tris, colors, shaded_flags, projection):
+        """Prepara triangulos visibles, usando workers cuando compensa."""
+        n_tris = all_tris.shape[0]
+        if (
+                self._mesh_worker_count <= 1
+                or n_tris < self._mesh_worker_min_tris
+        ):
+            result = _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection)
+            return [] if result is None else [result]
+
+        chunk_count = min(self._mesh_worker_count, n_tris)
+        chunk_size = int(math.ceil(n_tris / chunk_count))
+        executor = self._get_mesh_executor()
+        futures = []
+        for start in range(0, n_tris, chunk_size):
+            end = min(n_tris, start + chunk_size)
+            futures.append(executor.submit(
+                _prepare_mesh_draw_chunk,
+                all_tris[start:end],
+                colors[start:end],
+                shaded_flags[start:end],
+                projection,
+            ))
+
+        results = []
+        try:
+            for future in futures:
+                item = future.result()
+                if item is not None:
+                    results.append(item)
+        except Exception:
+            for future in futures:
+                future.cancel()
+            result = _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection)
+            return [] if result is None else [result]
+        return results
+
+    def _draw_prepared_mesh(self, draw, prepared_chunks):
+        """Dibuja en PIL los triangulos ya proyectados y ordenados globalmente."""
+        if not prepared_chunks:
+            return
+
+        pts2d = np.concatenate([chunk[0] for chunk in prepared_chunks], axis=0)
+        depths = np.concatenate([chunk[1] for chunk in prepared_chunks], axis=0)
+        rgb = np.concatenate([chunk[2] for chunk in prepared_chunks], axis=0)
+
+        sort_order = np.argsort(-depths)
+        for i in sort_order:
+            pts = pts2d[i]
+            c = rgb[i]
+            try:
+                draw.polygon(
+                    [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
+                    fill=(int(c[0]), int(c[1]), int(c[2]))
+                )
+            except Exception:
+                pass
+
     def _render_mesh_vectorized(self, draw, projection, mesh_groups):
         """
         Pipeline de renderizado vectorizado con NumPy.
@@ -1149,101 +1348,15 @@ class Robot3DDrawing:
         if not mesh_groups:
             return
 
-        # ------------------------------------------------------------------ 1. Concatenar
-        group_tris = [entry[0] for entry in mesh_groups]    # lista de (Ni,3,3)
-        group_colors = []
-        group_shaded = []
-        for entry in mesh_groups:
-            tris, color = entry[0], entry[1]
-            shaded = entry[2] if len(entry) >= 3 else True
-            group_colors.extend([color] * tris.shape[0])     # un color por triángulo
-            group_shaded.extend([shaded] * tris.shape[0])
-
-        all_tris = np.vstack(group_tris)  # (N, 3, 3)
-        N = all_tris.shape[0]
-        if N == 0:
+        arrays = self._mesh_groups_to_arrays(mesh_groups)
+        if arrays is None:
             return
 
-        # ------------------------------------------------------------------ 2. View matrix (UNA VEZ)
-        R_view = projection['R_view']
-        cam_pos = projection['cam_pos']
-        f = projection['f']
-        cx = projection['cx']
-        cy = projection['cy']
-
-        # ------------------------------------------------------------------ 3. Proyectar TODOS los vértices
-        verts = all_tris.reshape(N * 3, 3)               # (N*3, 3)
-        verts_cam = (verts - cam_pos) @ R_view.T          # (N*3, 3)
-
-        z_cam = verts_cam[:, 2]                           # (N*3,)
-        behind = (z_cam <= 0.01).reshape(N, 3).any(axis=1)  # triángulos con vértice detrás
-
-        mode = projection.get('mode')
-        if mode == 'isometrica':
-            scale = projection['ortho_scale']
-            sx = verts_cam[:, 0] * scale + cx
-            sy = -verts_cam[:, 1] * scale + cy
-        else:
-            z_safe = np.where(z_cam > 0.01, z_cam, 1.0)
-            sx = (verts_cam[:, 0] / z_safe) * f + cx     # (N*3,)
-            sy = (-verts_cam[:, 1] / z_safe) * f + cy    # (N*3,)
-        pts2d = np.stack([sx, sy], axis=1).reshape(N, 3, 2)  # (N, 3, 2)
-
-        # ------------------------------------------------------------------ 4. Normales (vectorizado)
-        v0 = all_tris[:, 0, :]    # (N, 3)
-        v1 = all_tris[:, 1, :]
-        v2 = all_tris[:, 2, :]
-        e1 = v1 - v0
-        e2 = v2 - v0
-        normals = np.cross(e1, e2)                        # (N, 3)
-        n_norms = np.linalg.norm(normals, axis=1)         # (N,)
-        degen = n_norms < 1e-9
-        n_norms_safe = np.where(degen, 1.0, n_norms)
-        normals = normals / n_norms_safe[:, np.newaxis]   # (N, 3)
-
-        # ------------------------------------------------------------------ 5. Back-face culling (vectorizado)
-        view_dirs = cam_pos - v0                          # (N, 3)
-        vd_norms = np.linalg.norm(view_dirs, axis=1)
-        vd_safe = np.where(vd_norms < 1e-9, 1.0, vd_norms)
-        view_dirs = view_dirs / vd_safe[:, np.newaxis]    # (N, 3)
-        facing = np.einsum('ij,ij->i', normals, view_dirs) > 0  # (N,)
-
-        # ------------------------------------------------------------------ 6. Profundidad (centroide)
-        centroids_cam = ((v0 + v1 + v2) / 3.0 - cam_pos) @ R_view.T  # (N, 3)
-        depths = centroids_cam[:, 2]                      # (N,)
-
-        # ------------------------------------------------------------------ 7. Máscara final
-        mask = ~behind & ~degen & facing                  # (N,)
-        visible = np.where(mask)[0]
-        if visible.size == 0:
-            return
-
-        # ------------------------------------------------------------------ 8. Iluminación Lambertiana (vectorizado)
-        light_dot = np.einsum('ij,j->i', normals[visible], _LIGHT_DIR)
-        shade = _AMBIENT + (1.0 - _AMBIENT) * np.maximum(0.0, light_dot)  # (|visible|,)
-        shaded_flags = np.asarray(group_shaded, dtype=bool)[visible]
-        shade = np.where(shaded_flags, shade, 1.0)
-
-        # ------------------------------------------------------------------ 9. Ordenar de lejos a cerca
-        sort_order = np.argsort(-depths[visible])
-        draw_idx = visible[sort_order]
-        shade_sorted = shade[sort_order]
-
-        # ------------------------------------------------------------------ 10. Dibujar
-        for k, i in enumerate(draw_idx):
-            pts = pts2d[i]           # (3, 2)
-            s = float(shade_sorted[k])
-            c = group_colors[i]
-            r = min(255, int(c[0] * s))
-            g = min(255, int(c[1] * s))
-            b = min(255, int(c[2] * s))
-            try:
-                draw.polygon(
-                    [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
-                    fill=(r, g, b)
-                )
-            except Exception:
-                pass
+        all_tris, colors, shaded_flags = arrays
+        prepared = self._prepare_mesh_draw_items(
+            all_tris, colors, shaded_flags, projection
+        )
+        self._draw_prepared_mesh(draw, prepared)
 
     def _render_mesh(self, draw, camera, all_tris, w, h):
         """Wrapper de compatibilidad — redirige al pipeline vectorizado."""

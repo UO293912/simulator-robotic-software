@@ -554,14 +554,15 @@ class Arm3DLayer(Layer):
             'projection_mode': 'isometrica',
         },
     }
-    BRACCIO_SERVO_CALIBRATION = (
+    DEFAULT_BRACCIO_SERVO_CALIBRATION = (
         ((0.0, -7.0), (7.0, 0.0), (180.0, 173.0)),
         ((15.0, 15.0), (90.0, 90.0), (165.0, 165.0)),
-        ((15.0, 205.0), (130.0, 90.0), (180.0, 40.0)),
+        ((20.0, 200.0), (130.0, 90.0), (180.0, 40.0)),
         ((0.0, 15.0), (75.0, 90.0), (180.0, 195.0)),
         ((0.0, 0.0), (90.0, 90.0), (180.0, 180.0)),
         ((10.0, 10.0), (40.0, 40.0), (73.0, 73.0)),
     )
+    DEFAULT_SERVO_PINS = [11, 10, 9, 6, 5, 3]
 
     def __init__(self):
         # No llamamos a super().__init__() porque no usamos Drawing ni RobotDrawing
@@ -586,6 +587,7 @@ class Arm3DLayer(Layer):
         self._fps_display_value = 0.0
         # Sincronizar la escala del Drawing con el zoom inicial de la cámara
         self.drawing.scale = self.motor3d.camera.zoom
+        self.apply_servo_pin_mapping()
         self._sync_servos_from_model(reset_animation=True)
 
     def set_canvas(self, canvas, hud_canvas):
@@ -597,6 +599,7 @@ class Arm3DLayer(Layer):
 
     def execute(self):
         self.is_drawing = True
+        self.apply_servo_pin_mapping()
         self.motor3d.scene.update()
 
     def stop(self):
@@ -778,6 +781,13 @@ class Arm3DLayer(Layer):
     def get_model_config(self):
         return self.motor3d.get_model_config()
 
+    def apply_servo_pin_mapping(self):
+        """Sincroniza los pines configurados del modelo con el robot virtual."""
+        pins = list(getattr(self.motor3d.model, 'servo_pins', []) or [])
+        if not any(pin is not None for pin in pins):
+            pins = list(self.DEFAULT_SERVO_PINS[:self.motor3d.model.dof])
+        self.robot.set_servo_pin_mapping(pins)
+
     # ------------------------------------------------------------------
     # Helpers privados
     # ------------------------------------------------------------------
@@ -850,6 +860,14 @@ class Arm3DLayer(Layer):
             getattr(self.motor3d, "uses_legacy_servo_degrees", lambda: False)()
         )
 
+    def _servo_calibration_points(self, joint_idx):
+        model_points = getattr(self.motor3d.model, 'servo_calibration', None) or []
+        if 0 <= joint_idx < len(model_points) and len(model_points[joint_idx]) >= 2:
+            return model_points[joint_idx]
+        if 0 <= joint_idx < len(self.DEFAULT_BRACCIO_SERVO_CALIBRATION):
+            return self.DEFAULT_BRACCIO_SERVO_CALIBRATION[joint_idx]
+        return ()
+
     @staticmethod
     def _interpolate_calibration(points, value):
         value = float(value)
@@ -867,13 +885,13 @@ class Arm3DLayer(Layer):
         return ordered[-1][1]
 
     def _braccio_digital_to_real(self, joint_idx, value):
-        points = self.BRACCIO_SERVO_CALIBRATION[joint_idx]
+        points = self._servo_calibration_points(joint_idx)
         return self._interpolate_calibration(points, value)
 
     def _braccio_real_to_digital(self, joint_idx, value):
         points = (
             (real_value, digital_value)
-            for digital_value, real_value in self.BRACCIO_SERVO_CALIBRATION[joint_idx]
+            for digital_value, real_value in self._servo_calibration_points(joint_idx)
         )
         return self._interpolate_calibration(points, value)
 
@@ -881,7 +899,7 @@ class Arm3DLayer(Layer):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
-        if self._uses_braccio_calibration() and joint_idx < len(self.BRACCIO_SERVO_CALIBRATION):
+        if self._uses_braccio_calibration() and self._servo_calibration_points(joint_idx):
             return self._braccio_real_to_digital(joint_idx, float(value) + 90.0)
         return float(value) + 90.0
 
@@ -889,7 +907,7 @@ class Arm3DLayer(Layer):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
-        if self._uses_braccio_calibration() and joint_idx < len(self.BRACCIO_SERVO_CALIBRATION):
+        if self._uses_braccio_calibration() and self._servo_calibration_points(joint_idx):
             return self._braccio_digital_to_real(joint_idx, value) - 90.0
         return float(value) - 90.0
 

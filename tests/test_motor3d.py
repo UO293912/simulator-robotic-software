@@ -247,12 +247,13 @@ class TestInverseKinematics:
         """La API de IK debe refinar en una sola llamada hasta ~1 mm."""
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 
-        converged, _ = motor3d_api.solve_ik(100.0, 300.0, 100.0)
+        target = [0.0, 300.0, 200.0]
+        converged, _ = motor3d_api.solve_ik(*target)
         ee = forward_kinematics_chain(motor3d_api.model)['end_effector']
         error = math.sqrt(
-            (ee[0] - 100.0) ** 2
-            + (ee[1] - 300.0) ** 2
-            + (ee[2] - 100.0) ** 2
+            (ee[0] - target[0]) ** 2
+            + (ee[1] - target[1]) ** 2
+            + (ee[2] - target[2]) ** 2
         )
 
         assert converged
@@ -746,7 +747,7 @@ class TestRendering:
         for _ in range(6):
             layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] == pytest.approx(-45.0, abs=1e-6), (
+        assert layer.motor3d.model.joints[0] == pytest.approx(45.0, abs=1e-6), (
             f"J1 debería alcanzar el objetivo por tiempo real, obtuvo {layer.motor3d.model.joints[0]:.1f}°")
 
 
@@ -784,7 +785,7 @@ def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
 
     layer = Arm3DLayer()
     layer.set_joint_angle(0, 45.0)
-    assert layer.motor3d.model.joints[0] == -52.0
+    assert layer.motor3d.model.joints[0] == 35.5
     assert layer.robot.servo_base.value == 45.0
 
 
@@ -806,7 +807,7 @@ def test_arm3d_layer_ik_uses_animation_instead_of_pose_jump():
     converged, _ = layer.solve_ik(100.0, 200.0, 300.0)
 
     assert converged
-    assert layer.robot.servo_base.value == 157.0
+    assert layer.robot.servo_base.value == pytest.approx(19.058823529411768)
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
     assert layer._current_joints[0] == layer.motor3d.model.joints[0]
@@ -856,7 +857,7 @@ def test_arm3d_layer_best_effort_ik_moves_on_first_unreachable_attempt():
 
     assert converged is False
     assert "Mejor aproximacion" in message
-    assert layer.robot.servo_base.value == 142.0
+    assert layer.robot.servo_base.value == pytest.approx(34.94117647058823)
     assert layer.motor3d.model.joints[0] != start_joints[0]
     assert layer.motor3d.model.joints[0] != target_joints[0]
 
@@ -1073,6 +1074,7 @@ def _make_arm3d_config_window_for_collect(config_row, joint_type, lim_min, lim_m
         _ConfigField(str(lim_max)),
         _ConfigField(str(direction['yaw'])),
         _ConfigField(str(direction['pitch'])),
+        _ConfigField(""),
     ]]
     window._base_row_entries = {
         'theta': _ConfigField("0"),
@@ -1138,6 +1140,7 @@ def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
                     {'yaw': 0.0, 'pitch': 0.0},
                     {'yaw': 0.0, 'pitch': 0.0},
                 ],
+                'servo_pins': [11, 10, 9],
                 'base': {'theta': 5.0, 'd': 6.0, 'a': 7.0, 'alpha': 8.0},
                 'visual': {'mode': 'auto_generic'},
             }
@@ -1151,17 +1154,17 @@ def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
         [
             _ConfigField("10"), _ConfigField("20"), _ConfigField("30"), _ConfigField("40"),
             _ConfigField("R"), _ConfigField("-10"), _ConfigField("50"),
-            _ConfigField("0"), _ConfigField("0"),
+            _ConfigField("0"), _ConfigField("0"), _ConfigField("11"),
         ],
         [
             _ConfigField("1"), _ConfigField("2"), _ConfigField("3"), _ConfigField("4"),
             _ConfigField("P"), _ConfigField("0"), _ConfigField("120"),
-            _ConfigField("90"), _ConfigField("45"),
+            _ConfigField("90"), _ConfigField("45"), _ConfigField("10"),
         ],
         [
             _ConfigField("7"), _ConfigField("8"), _ConfigField("9"), _ConfigField("10"),
             _ConfigField("R"), _ConfigField("-30"), _ConfigField("30"),
-            _ConfigField("0"), _ConfigField("0"),
+            _ConfigField("0"), _ConfigField("0"), _ConfigField("9"),
         ],
     ]
     window._base_row_entries = {
@@ -1187,6 +1190,7 @@ def test_arm3d_dof_change_preserves_existing_rows_before_rebuild():
     ]
     assert saved['joint_types'][:2] == ['R', 'P']
     assert saved['joint_limits'][:2] == [(-10.0, 50.0), (0.0, 120.0)]
+    assert saved['servo_pins'][:2] == [11, 10]
     assert saved['prismatic_pre_rotations'][:2] == [
         {'yaw': 0.0, 'pitch': 0.0},
         {'yaw': 90.0, 'pitch': 45.0},
@@ -1720,7 +1724,7 @@ class TestBraccioCompiler:
 
             assert braccio.begin() == 1
 
-            expected = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+            expected = [-7.0, -45.0, -50.0, 110.0, 81.0, -80.0]
             assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
             assert layer._current_joints == pytest.approx(expected)
         finally:
@@ -1729,8 +1733,8 @@ class TestBraccioCompiler:
             screen_updater.layer = original_layer
             screen_updater.view = original_view
 
-    def test_arm3d_assigns_joints_by_attach_order(self):
-        """Servo.attach/write debe asignar J1..J6 por orden de attach, no por nombre."""
+    def test_arm3d_servo_attach_routes_by_configured_pins(self):
+        """Servo.attach/write debe respetar el cableado configurado, no el orden de attach."""
         from graphics.layers import Arm3DLayer
         from libraries.servo import Servo
 
@@ -1746,8 +1750,8 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        assert layer.motor3d.model.joints[0] == -67.0
-        assert layer.motor3d.model.joints[1] == 30.0
+        assert layer.motor3d.model.joints[0] == pytest.approx(-35.33333333333333)
+        assert layer.motor3d.model.joints[1] == pytest.approx(-60.0)
 
     def test_braccio_preset_saturates_servo_values_to_real_limits(self):
         """El preset Braccio debe saturar la pose visual a los limites reales."""
@@ -1761,12 +1765,12 @@ class TestBraccioCompiler:
         servo.write(-60)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == -97.0
+        assert layer.motor3d.model.joints[0] == 78.0
 
         servo.write(250)
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
-        assert layer.motor3d.model.joints[0] == 83.0
+        assert layer.motor3d.model.joints[0] == -92.0
 
     def test_braccio_preset_uses_real_calibration_points(self):
         """Los puntos medidos digital-real deben aplicarse en el preset Braccio."""
@@ -1783,7 +1787,7 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        expected = [-90.0, 0.0, 0.0, 0.0, 0.0, -50.0]
+        expected = [71.38888888888889, 0.0, 0.0, 5.0, 81.0, -50.0]
         assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
     def test_transpiler_initializes_servo_instances_with_board(self):
@@ -1854,7 +1858,7 @@ class TestSafetyAndConstraints:
 
     def test_safety_does_not_warn_singularity_for_braccio_rest_pose(self, motor3d_api):
         """La pose inicial real del Braccio no debe aparecer como singularidad espuria."""
-        motor3d_api.model.joints = [-7.0, -45.0, -50.0, 105.0, 0.0, -80.0]
+        motor3d_api.model.joints = [-7.0, -45.0, -50.0, 110.0, 0.0, -80.0]
         motor3d_api.scene.update()
 
         result = motor3d_api.evaluate_safety()
@@ -1920,13 +1924,56 @@ class TestPersistence:
         assert model.dof == 6
         assert len(model.joint_limits) == 6
         assert model.joint_limits == [
-            (-97.0, 83.0),
+            (-92.0, 78.0),
             (-75.0, 75.0),
-            (-50.0, 115.0),
-            (-75.0, 105.0),
-            (-90.0, 90.0),
+            (-50.0, 110.0),
+            (-70.0, 110.0),
+            (0.0, 162.0),
             (-80.0, -17.0),
         ]
+        assert model.servo_pins == [11, 10, 9, 6, 5, 3]
+        assert model.servo_calibration[0] == [
+            (0.0, 168.0),
+            (90.0, 83.0),
+            (180.0, -2.0),
+        ]
+        assert model.servo_calibration[4] == [
+            (0.0, 90.0),
+            (100.0, 180.0),
+            (180.0, 252.0),
+        ]
+    def test_braccio_servo_calibration_comes_from_preset(self):
+        """Arm3DLayer debe leer la tabla de calibracion cargada en el modelo."""
+        from graphics.layers import Arm3DLayer
+
+        layer = Arm3DLayer()
+        layer.motor3d.model.servo_calibration[0] = [
+            (0.0, 0.0),
+            (90.0, 100.0),
+            (180.0, 180.0),
+        ]
+
+        layer.robot.servo_base.value = 90
+        layer._current_joints = None
+        layer._Arm3DLayer__sync_from_servos()
+
+        assert layer.motor3d.model.joints[0] == pytest.approx(10.0)
+
+    def test_braccio_scene_reports_visual_tcp_as_end_effector(self):
+        """El HUD y seguridad deben usar el TCP real de las garras, no el extremo DH generico."""
+        import math
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -17.0]
+        api.scene.update()
+
+        fk_ee = api.scene.last_chain["end_effector"]
+        visual_tcp = api.scene.get_end_effector()
+        distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
+
+        assert distance > 100.0
+        assert visual_tcp[2] <= api.model.max_reach() + 30.0
 
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""
@@ -2483,3 +2530,212 @@ void loop() {
         gui_mod.DrawingFrame.move(frame, SimpleNamespace(x=44, y=42))
 
         assert drag_calls == [("dolly", -18)]
+
+
+# ---------------------------------------------------------------------------
+# Tests adicionales: casos de borde del modulo motor3d
+# ---------------------------------------------------------------------------
+
+class TestMotor3DEdgeCases:
+    """Cubre rutas de borde de FK, safety, API y persistencia 3D."""
+
+    def test_workspace_fallback_geometry_handles_empty_zero_and_collinear_paths(self):
+        from motor3d.safety.workspace_singularity import in_workspace, near_singularity
+
+        assert in_workspace([], max_reach=0.0) is True
+        assert near_singularity([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]) is False
+
+        zero_segment_then_bend = [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ]
+        assert near_singularity(zero_segment_then_bend, threshold=1.0) is False
+
+        collinear = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0],
+        ]
+        assert near_singularity(collinear, threshold=5.0) is True
+
+    def test_workspace_jacobian_edge_cases_and_prismatic_axis(self, monkeypatch):
+        import numpy as np
+        import motor3d.safety.workspace_singularity as ws
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+
+        model = SimpleNamespace(dof=2)
+
+        with monkeypatch.context() as mp:
+            mp.setattr(ws, "forward_kinematics_chain", lambda _model: {})
+            mp.setattr(ws, "_position_jacobian", lambda _model, _chain: [])
+            assert ws.near_singularity([], model=model) is False
+
+            model.dof = 0
+            mp.setattr(ws, "_position_jacobian", lambda _model, _chain: [[1.0, 0.0, 0.0]])
+            assert ws.near_singularity([], model=model) is False
+
+            model.dof = 3
+            assert ws.near_singularity([], model=model) is True
+
+        arm = ArmKinematicState()
+        arm.configure(
+            dof=1,
+            joint_limits=[(0.0, 120.0)],
+            joint_types=["P"],
+            joints=[30.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}],
+        )
+        chain = forward_kinematics_chain(arm)
+        jacobian = ws._position_jacobian(arm, chain)
+
+        np.testing.assert_allclose(jacobian, [[0.0, 0.0, 1.0]], atol=1e-9)
+
+    def test_fk_legacy_rpy_tool_offset_and_invalid_vector_fallback(self):
+        import numpy as np
+        import motor3d.kinematics.kinematics_fk as fk
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+
+        model_with_rpy = SimpleNamespace(base_rpy=[0.0, 90.0, 0.0])
+        transform = fk.get_base_transform(model_with_rpy)
+        np.testing.assert_allclose(transform[:3, 2], [1.0, 0.0, 0.0], atol=1e-9)
+
+        arm = ArmKinematicState()
+        arm.configure(
+            dof=1,
+            link_lengths=[10.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=["R"],
+            joints=[0.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 10.0, "alpha": 0.0}],
+            tool={"parent_joint": 0, "offset": [1.0, 2.0, 3.0]},
+        )
+        chain = fk.forward_kinematics_chain(arm)
+        np.testing.assert_allclose(chain["end_effector"], [11.0, 2.0, 3.0], atol=1e-9)
+
+        assert fk.get_prismatic_pre_rotation(
+            SimpleNamespace(prismatic_pre_rotations=["bad"]), 0
+        ) == {"yaw": 0.0, "pitch": 0.0}
+        assert fk._normalize_vector([None, "bad"], fallback=[1.0, 2.0, 3.0]) == [
+            1.0, 2.0, 3.0
+        ]
+
+    def test_repository_load_errors_listing_and_migration(self, tmp_path, capsys):
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.persistence.arm_config_repository import ArmConfigRepository
+
+        missing_presets = tmp_path / "missing_presets"
+        repo = ArmConfigRepository(
+            default_path=tmp_path / "missing.json",
+            presets_dir=missing_presets,
+        )
+        model = ArmKinematicState()
+
+        assert repo.load_model(model) is False
+        assert "Archivo no encontrado" in capsys.readouterr().out
+
+        broken = tmp_path / "broken.json"
+        broken.write_text("{invalid", encoding="utf-8")
+        assert repo.load_model(model, path=broken) is False
+        assert "Error al cargar" in capsys.readouterr().out
+
+        assert repo.list_builtin_presets() == {}
+        assert ArmConfigRepository._migrate({"dof": 1}) == {"dof": 1}
+
+        presets = tmp_path / "presets"
+        presets.mkdir()
+        alpha = presets / "alpha.json"
+        alpha.write_text('{"dof": 1}', encoding="utf-8")
+        (presets / "ignored.txt").write_text("nope", encoding="utf-8")
+
+        repo = ArmConfigRepository(default_path=tmp_path / "config.json", presets_dir=presets)
+        assert repo.get_builtin_preset_path("alpha.json") == alpha
+        assert repo.list_builtin_presets() == {"alpha": alpha}
+
+    def test_motor3d_api_fallback_config_when_no_repository_data(self, monkeypatch):
+        import motor3d.api as api_mod
+
+        class EmptyRepository:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def load_model(self, *args, **kwargs):
+                return False
+
+            def load_builtin_preset(self, *args, **kwargs):
+                return False
+
+        monkeypatch.setattr(api_mod, "ArmConfigRepository", EmptyRepository)
+
+        api = api_mod.Motor3DApi()
+
+        assert api.model.dof == 3
+        assert api.active_preset_name is None
+        assert api.model.preset_name is None
+
+    def test_motor3d_api_configuration_toggles_persistence_and_camera_edges(
+            self, tmp_path, monkeypatch):
+        import motor3d.api as api_mod
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        api.pan_camera(3.0, -2.0)
+        assert api.camera.screen_offset_x == 1.5
+        assert api.camera.screen_offset_y == -1.0
+
+        api.set_show_joint_ranges(True)
+        api.set_show_joint_ranges(False)
+        assert "show_joint_ranges" not in api.model.visual
+
+        api.set_show_fps_counter(True)
+        assert api.model.visual["show_fps_counter"] is True
+        api.set_show_fps_counter(False)
+        assert api.model.visual["show_fps_counter"] is False
+
+        config_path = tmp_path / "arm.json"
+        assert api.save_model_config(path=config_path) is True
+
+        api.model.configure(
+            dof=1,
+            link_lengths=[50.0],
+            joint_limits=[(-30.0, 30.0)],
+            joint_types=["R"],
+            joints=[30.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 50.0, "alpha": 0.0}],
+        )
+        assert api.load_model_config(path=config_path) is True
+
+        api.model.configure(
+            dof=1,
+            link_lengths=[0.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=["R"],
+            joints=[0.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}],
+            visual={"mode": "auto_generic"},
+        )
+        assert math.isclose(api._recommended_camera_distance(), api.camera.DEFAULT_DISTANCE)
+
+        api.model.configure(
+            dof=1,
+            link_lengths=[100.0],
+            joint_limits=[(-90.0, 90.0)],
+            joint_types=["R"],
+            joints=[0.0],
+            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 100.0, "alpha": 0.0}],
+            tool={"parent_joint": 0, "offset": [3.0, 4.0, 0.0]},
+            visual={"mode": "auto_generic"},
+        )
+
+        def _raise_base_transform(_model):
+            raise RuntimeError("bad base")
+
+        monkeypatch.setattr(api_mod, "get_base_transform", _raise_base_transform)
+
+        expected = max(
+            api.camera.DEFAULT_DISTANCE,
+            (100.0 + 5.0) * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
+        )
+        assert math.isclose(api._recommended_camera_distance(), expected)

@@ -85,7 +85,7 @@ class MainApplication(tk.Tk):
         self.keys_used = True
         self.file_manager = files.FileManager()
 
-        self.config(menu=self.menu_bar)
+        self.menu_bar.pack(fill=tk.X)
         self.button_bar.pack(fill=tk.X, side="left", expand=True)
         self.selector_bar.pack(fill=tk.X, side="right")
         # These keys are the accepted ones for move the application. If you need more keys, added them here
@@ -222,6 +222,7 @@ class MainApplication(tk.Tk):
     def __update_robot(self):
         robot = self.selector_bar.robot_selector.current()
         self.controller.change_robot(robot)
+        self.menu_bar.update_config_menu_label(robot)
         self.controller.configure_layer(
             self.drawing_frame.canvas, self.drawing_frame.hud_canvas)
 
@@ -794,6 +795,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         {"theta": 0.0, "d": 0.0, "a": math.sqrt(10.0 ** 2 + 30.0 ** 2), "alpha": 90.0},
         {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
     ]
+    BRACCIO_SERVO_PINS = [11, 10, 9, 6, 5, 3]
 
     @classmethod
     def _braccio_table_defaults(cls):
@@ -801,6 +803,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         return {
             "base": dict(cls.BRACCIO_TABLE_BASE_ROW),
             "dh_rows": [dict(row) for row in cls.BRACCIO_TABLE_DH_ROWS],
+            "servo_pins": list(cls.BRACCIO_SERVO_PINS),
         }
 
     def _table_source_config(self):
@@ -812,6 +815,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             current = dict(current)
             current["base"] = table_defaults["base"]
             current["dh_rows"] = table_defaults["dh_rows"]
+            current["servo_pins"] = table_defaults["servo_pins"]
         return current
 
     def __init__(self, parent, motor3d_api, application: MainApplication = None, *args, **kwargs):
@@ -987,6 +991,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             "Como usar la tabla:\n"
             "  J0 mueve la base completa. Usala para recolocar o reorientar todo el robot.\n"
             "  J1, J2... son las articulaciones reales del brazo.\n"
+            "  Pin indica el pin del sketch que controla esa joint con Servo.attach o Braccio.\n"
             "  Theta gira la joint. Si es una R, normalmente es el valor que define su movimiento.\n"
             "  d adelanta o retrasa el siguiente tramo en la direccion de la propia joint. Si es una P, normalmente es el valor que define su movimiento.\n"
             "  a separa la siguiente pieza del centro de giro: cuanto mayor sea, mas brazo o palanca aparece.\n"
@@ -1038,7 +1043,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
         headers = [
             "J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)",
-            "Tipo", "Lim min", "Lim max", "Dir yaw", "Dir pitch"
+            "Tipo", "Lim min", "Lim max", "Dir yaw", "Dir pitch", "Pin"
         ]
         for col, h in enumerate(headers):
             tk.Label(table_frame, text=h, font=self._font(11, "bold"), bg=SURFACE_HEADER_BG,
@@ -1168,6 +1173,29 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _base_metadata_entry_behavior():
         """Campos no aplicables en J0: tipo, límites y dirección, siempre bloqueados."""
         return ("disabled", True)
+
+    def _servo_pins_for_table(self, config, dof):
+        pins = list(config.get('servo_pins', []) or [])
+        if not any(pin is not None for pin in pins):
+            pins = list(self.BRACCIO_SERVO_PINS)
+        normalized = [self._parse_pin_value(pin, allow_empty=True) for pin in pins[:dof]]
+        while len(normalized) < dof:
+            normalized.append(None)
+        return normalized
+
+    @staticmethod
+    def _parse_pin_value(value, allow_empty=False):
+        text = "" if value is None else str(value).strip()
+        if not text:
+            if allow_empty:
+                return None
+            raise ValueError
+        if text.lower().startswith("a") and len(text) > 1:
+            return int(text[1:]) + 14
+        pin = int(text)
+        if pin < 0:
+            raise ValueError
+        return pin
 
     @staticmethod
     def _joint_dh_entry_behavior(jtype, key):
@@ -1372,6 +1400,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         n = self._dof_var.get()
         base = dict(table_config.get('base', {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}))
         dh_rows = list(table_config.get('dh_rows', []))
+        servo_pins = self._servo_pins_for_table(table_config, n)
 
         base_lbl = tk.Label(
             table_frame, text="0", font=self._font(11, "bold"),
@@ -1407,7 +1436,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         type_entry.grid(row=1, column=5, sticky="nsew", padx=2, pady=2)
         self._base_row_widgets.append(type_entry)
 
-        for col in (6, 7, 8, 9):
+        for col in (6, 7, 8, 9, 10):
             meta_variant, meta_disabled = self._base_metadata_entry_behavior()
             lim_entry = tk.Entry(
                 table_frame, font=self._font(11), width=self._s(7), justify="center",
@@ -1422,7 +1451,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
         note = tk.Label(table_frame, text="fija", font=self._font(9),
                         bg=SURFACE_BG, fg=TEXT_MUTED)
-        note.grid(row=1, column=10, padx=2, pady=2)
+        note.grid(row=1, column=11, padx=2, pady=2)
         self._base_row_widgets.append(note)
 
         for i in range(n):
@@ -1433,6 +1462,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
             raw_pre_rotations = getattr(model, 'prismatic_pre_rotations', []) or []
             direction = raw_pre_rotations[i] if i < len(raw_pre_rotations) else {'yaw': 0.0, 'pitch': 0.0}
+            servo_pin = servo_pins[i] if i < len(servo_pins) else None
 
             joint_lbl = tk.Label(
                 table_frame, text=str(i + 1), font=self._font(11, "bold"),
@@ -1551,11 +1581,20 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             e_max.insert(0, str(round(float(lims[1]), 1)))
             e_max.grid(row=grid_row, column=7, sticky="nsew", padx=2, pady=2)
 
+            pin_entry = tk.Entry(
+                table_frame, font=self._font(11), width=self._s(6),
+                justify="center", **self._entry_options("standard")
+            )
+            if servo_pin is not None:
+                pin_entry.insert(0, str(servo_pin))
+            self._remember_semantic_state(pin_entry, "normal")
+            pin_entry.grid(row=grid_row, column=10, sticky="nsew", padx=2, pady=2)
+
             unit_lbl = tk.Label(
                 table_frame, text=lim_unit, font=self._font(9),
                 bg=SURFACE_BG, fg=TEXT_MUTED
             )
-            unit_lbl.grid(row=grid_row, column=10, padx=2, pady=2)
+            unit_lbl.grid(row=grid_row, column=11, padx=2, pady=2)
 
             type_combo.bind(
                 "<<ComboboxSelected>>",
@@ -1566,6 +1605,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
             row_entries.extend([e_min, e_max])
             row_entries.extend(direction_entries)
+            row_entries.append(pin_entry)
             row_entries.extend([unit_lbl, joint_lbl])
             self._rows.append(row_entries)
 
@@ -1638,6 +1678,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             dof = data.get('dof', self.motor3d.model.dof)
             self._dof_var.set(dof)
             self.motor3d.set_model_config(data)
+            self._sync_arm3d_servo_pin_mapping()
             self._build_dh_rows(self._table_frame)
             self._refresh_base_row_entries()
         self._apply_preset_display(name)
@@ -1647,6 +1688,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
     def _on_visual_mode_selected(self, _event=None):
         self._clear_combo_focus()
+
+    def _sync_arm3d_servo_pin_mapping(self):
+        controller = getattr(getattr(self, "application", None), "controller", None)
+        layer = getattr(controller, "robot_layer", None)
+        if hasattr(layer, "apply_servo_pin_mapping"):
+            layer.apply_servo_pin_mapping()
 
     def _clear_combo_focus(self):
         def _clear():
@@ -1687,18 +1734,21 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current_types = list(current.get('joint_types', []))
         current_limits = list(current.get('joint_limits', []))
         current_dirs = list(current.get('prismatic_pre_rotations', []))
+        current_pins = list(current.get('servo_pins', []))
         current_base = dict(current.get('base', {}))
 
         dh_rows = []
         joint_types = []
         joint_limits = []
         prismatic_pre_rotations = []
+        servo_pins = []
 
         for i, row in enumerate(self._rows):
             prev_dh = current_dh[i] if i < len(current_dh) else {'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0}
             prev_type = current_types[i] if i < len(current_types) else 'R'
             prev_limits = current_limits[i] if i < len(current_limits) else (-90.0, 90.0)
             prev_dir = current_dirs[i] if i < len(current_dirs) else {'yaw': 0.0, 'pitch': 0.0}
+            prev_pin = current_pins[i] if i < len(current_pins) else None
 
             parsed_dh = {}
             for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
@@ -1736,6 +1786,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                     direction['pitch'] = float(prev_dir.get('pitch', 0.0))
             prismatic_pre_rotations.append(direction)
 
+            try:
+                servo_pins.append(self._parse_pin_value(row[9].get(), allow_empty=True))
+            except (ValueError, TypeError):
+                servo_pins.append(self._parse_pin_value(prev_pin, allow_empty=True))
+
         base_row = {}
         for key, entry in self._base_row_entries.items():
             try:
@@ -1748,6 +1803,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['joint_types'] = joint_types
         current['joint_limits'] = joint_limits
         current['prismatic_pre_rotations'] = prismatic_pre_rotations
+        current['servo_pins'] = servo_pins
         current['base'] = base_row
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
@@ -1757,6 +1813,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _on_dof_change(self):
         config = self._snapshot_config_from_inputs(target_dof=self._dof_var.get())
         self.motor3d.set_model_config(config)
+        self._sync_arm3d_servo_pin_mapping()
         self._build_dh_rows(self._table_frame)
         self._refresh_base_row_entries()
         self._fit_window_to_content()
@@ -1819,12 +1876,13 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         joint_types = []
         joint_limits = []
         prismatic_pre_rotations = []
+        servo_pins = []
         base_row = {}
         errors = []
 
         # Limpiar resaltados previos
         for row in self._rows:
-            for idx in (0, 1, 2, 3, 5, 6, 7, 8):
+            for idx in (0, 1, 2, 3, 5, 6, 7, 8, 9):
                 if idx >= len(row):
                     continue
                 widget = row[idx]
@@ -1897,6 +1955,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
             prismatic_pre_rotations.append(direction)
 
+            try:
+                servo_pins.append(self._parse_pin_value(row[9].get(), allow_empty=True))
+            except ValueError:
+                _mark_invalid(row[9], f"J{joint_n}: pin no es valido.")
+                servo_pins.append(None)
+
             lim_ok = True
             try:
                 lim_min = float(row[5].get())
@@ -1943,6 +2007,17 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                         f"J{joint_n} (R): limites ({lim_min:.0f}deg..{lim_max:.0f}deg) "
                         f"superan +/-360deg - se introdujeron valores en mm por error?")
 
+        seen_pins = {}
+        for i, pin in enumerate(servo_pins):
+            if pin is None:
+                continue
+            if pin in seen_pins:
+                first_idx = seen_pins[pin]
+                _mark_invalid(self._rows[i][9], f"J{i + 1}: el pin {pin} ya esta asignado a J{first_idx + 1}.")
+                _mark_invalid(self._rows[first_idx][9], f"J{first_idx + 1}: pin duplicado.")
+            else:
+                seen_pins[pin] = i
+
         if errors:
             return None, "\n".join(errors)
 
@@ -1952,6 +2027,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         current['joint_types'] = joint_types
         current['joint_limits'] = joint_limits
         current['prismatic_pre_rotations'] = prismatic_pre_rotations
+        current['servo_pins'] = servo_pins
         current['base'] = dict(base_row)
         current['visual'] = dict(current.get('visual', {}))
         current['visual']['mode'] = self._visual_var.get()
@@ -1965,6 +2041,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             tk.messagebox.showerror("Error de configuración", error, parent=self)
             return
         self.motor3d.set_model_config(config)
+        self._sync_arm3d_servo_pin_mapping()
         # Actualizar active_preset_name para que la próxima apertura de config muestre el perfil correcto
         selected = self._preset_var.get()
         all_presets = self.motor3d.repository.list_builtin_presets()
@@ -1981,6 +2058,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         if path:
             ok = self.motor3d.load_model_config(path=path)
             if ok:
+                self._sync_arm3d_servo_pin_mapping()
                 self._dof_var.set(self.motor3d.model.dof)
                 if hasattr(self, "_fps_counter_var"):
                     self._fps_counter_var.set(
@@ -2001,16 +2079,21 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 tk.messagebox.showerror("Error de configuración", error, parent=self)
                 return
             self.motor3d.set_model_config(config)
+            self._sync_arm3d_servo_pin_mapping()
             ok = self.motor3d.save_model_config(path=path)
             if not ok:
                 tk.messagebox.showerror("Error", "No se pudo guardar el archivo.", parent=self)
 
 
-class MenuBar(tk.Menu):
+class MenuBar(tk.Frame):
 
     def __init__(self, parent, application: MainApplication = None, *args, **kwargs):
-        tk.Menu.__init__(self, parent, *args, **kwargs)
+        kwargs.setdefault("bg", "#f0f0f0")
+        tk.Frame.__init__(self, parent, *args, **kwargs)
         self.application = application
+        self._menu_buttons = []
+        self._active_menu_button = None
+        self._open_menu_button = None
 
         file_menu = tk.Menu(self, tearoff=0)
         file_menu.add_command(label="Nuevo archivo",
@@ -2023,19 +2106,21 @@ class MenuBar(tk.Menu):
         file_menu.add_separator()
         file_menu.add_command(
             label="Salir", command=self.check_if_exit, accelerator="Alt+F4")
-        self.add_cascade(label="Archivo", menu=file_menu)
+        self._add_menu_button("Archivo", file_menu)
 
         edit_menu = tk.Menu(self, tearoff=0)
         edit_menu.add_command(
             label="Deshacer", command=application.editor_undo, accelerator="Ctrl+Z")
         edit_menu.add_command(
             label="Rehacer", command=application.editor_redo, accelerator="Ctrl+Y")
-        self.add_cascade(label="Editar", menu=edit_menu)
+        self._add_menu_button("Editar", edit_menu)
 
         conf_menu = tk.Menu(self, tearoff=0)
         conf_menu.add_command(label="Configurar pines", command=application.open_pin_configuration,
                               accelerator="Ctrl+P")
-        self.add_cascade(label="Configurar", menu=conf_menu)
+        self._config_menu = conf_menu
+        self._config_pins_menu_index = 0
+        self._add_menu_button("Configurar", conf_menu)
 
         exec_menu = tk.Menu(self, tearoff=0)
         exec_menu.add_command(
@@ -2052,14 +2137,14 @@ class MenuBar(tk.Menu):
             label="Ampliar", command=lambda event: application.zoom_in(), accelerator="Ctrl++")
         exec_menu.add_command(
             label="Reducir", command=lambda event: application.zoom_out(), accelerator="Ctrl+-")
-        self.add_cascade(label="Ejecutar", menu=exec_menu)
+        self._add_menu_button("Ejecutar", exec_menu)
 
         help_menu = tk.Menu(self, tearoff=0)
         help_menu.add_command(label="Manual de ayuda",
                               command=self.__launch_help, accelerator="Ctrl+H")
         help_menu.add_command(
             label="Acerca de", command=self.show_about, accelerator="Ctrl+A")
-        self.add_cascade(label="Ayuda", menu=help_menu)
+        self._add_menu_button("Ayuda", help_menu)
 
         self.bind_all("<Control-p>", application.open_pin_configuration)
         self.bind_all("<Control-n>", self.create_file)
@@ -2073,6 +2158,102 @@ class MenuBar(tk.Menu):
         self.bind_all("<F10>", lambda e: application.step_once())
         self.bind_all("<Control-plus>", lambda event: application.zoom_in())
         self.bind_all("<Control-minus>", lambda event: application.zoom_out())
+        self.bind("<Leave>", self._clear_menu_hover)
+
+    def update_config_menu_label(self, robot_option=None):
+        if robot_option is None:
+            try:
+                robot_option = self.application.selector_bar.robot_selector.current()
+            except Exception:
+                robot_option = None
+        label = "Configurar brazo" if robot_option == 5 else "Configurar pines"
+        try:
+            self._config_menu.entryconfigure(self._config_pins_menu_index, label=label)
+        except Exception:
+            pass
+
+    def _add_menu_button(self, label, menu):
+        def activate(_event=None):
+            self._highlight_menu_button(button)
+
+        def deactivate(_event=None):
+            if self._open_menu_button is not button:
+                self._reset_menu_button(button)
+                if self._active_menu_button is button:
+                    self._active_menu_button = None
+
+        def open_menu(_event=None):
+            self._open_menu_button = button
+            self._highlight_menu_button(button)
+            x = button.winfo_rootx()
+            y = button.winfo_rooty() + button.winfo_height()
+            menu.tk_popup(x, y)
+            self.after(50, lambda: self._watch_menu_closed(button, menu))
+
+        def mark_closed(_event=None):
+            if self._open_menu_button is button:
+                self._open_menu_button = None
+            self._reset_menu_button(button)
+            if self._active_menu_button is button:
+                self._active_menu_button = None
+
+        def leave_menu(_event=None):
+            if not self._is_pointer_over(button):
+                self._open_menu_button = None
+                self._reset_menu_button(button)
+                if self._active_menu_button is button:
+                    self._active_menu_button = None
+
+        button = tk.Label(
+            self,
+            text=label,
+            bg="#f0f0f0",
+            fg="#000000",
+            bd=0,
+            padx=5,
+            pady=1,
+            highlightthickness=0,
+        )
+        button.bind("<Enter>", activate)
+        button.bind("<Leave>", deactivate)
+        button.bind("<ButtonPress-1>", open_menu)
+        menu.bind("<Unmap>", mark_closed, add="+")
+        menu.bind("<Leave>", leave_menu, add="+")
+        button.pack(side=tk.LEFT)
+        self._menu_buttons.append(button)
+
+    def _highlight_menu_button(self, active_button):
+        for button in self._menu_buttons:
+            if button is active_button:
+                button.configure(bg="#D9EAF7", fg="black")
+            elif button is not self._open_menu_button:
+                self._reset_menu_button(button)
+        self._active_menu_button = active_button
+
+    def _reset_menu_button(self, button):
+        button.configure(bg="#f0f0f0", fg="#000000")
+
+    def _clear_menu_hover(self, _event=None):
+        if self._open_menu_button is not None:
+            return
+        for button in self._menu_buttons:
+            self._reset_menu_button(button)
+        self._active_menu_button = None
+
+    def _watch_menu_closed(self, button, menu):
+        if self._open_menu_button is not button:
+            return
+        if menu.winfo_ismapped():
+            self.after(50, lambda: self._watch_menu_closed(button, menu))
+            return
+        self._open_menu_button = None
+        self._reset_menu_button(button)
+        if self._active_menu_button is button:
+            self._active_menu_button = None
+
+    def _is_pointer_over(self, target):
+        widget = self.winfo_containing(self.winfo_pointerx(), self.winfo_pointery())
+        return widget is target
 
     def __launch_help(self, event=None):
         subprocess.Popen('manual-usuario.pdf', shell=True)

@@ -197,9 +197,8 @@ class Motor3DApi:
 
     def evaluate_safety(self):
         """Evalúa el estado de seguridad de la pose actual."""
-        points = self.scene.last_points
-        max_reach = self.model.max_reach()
-        return self.safety_manager.evaluate(points, max_reach, model=self.model)
+        points = self._points_with_effective_tcp()
+        return self.safety_manager.evaluate(points, self.model.max_reach(), model=self.model)
 
 
     # ------------------------------------------------------------------
@@ -265,3 +264,14 @@ class Motor3DApi:
             self.camera.DEFAULT_DISTANCE,
             extent * self.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
         )
+
+    def _points_with_effective_tcp(self):
+        points = [list(p) for p in (self.scene.last_points or [])]
+        tcp = self.scene.get_effective_end_effector()
+        if tcp is None:
+            return points
+        if points:
+            points[-1] = list(tcp)
+        else:
+            points = [list(tcp)]
+        return points

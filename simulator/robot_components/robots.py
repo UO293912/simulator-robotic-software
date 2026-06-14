@@ -447,6 +447,8 @@ class ArmHardwareRobot(Robot):
     # Pines estándar del Braccio (coinciden con libraries/braccio.py)
     # Los joints se asignan secuencialmente segun el orden de attach().
 
+    JOINT_NAMES = ['base', 'shoulder', 'elbow', 'wrist_ver', 'wrist_rot', 'gripper']
+
     def __init__(self):
         super().__init__(boards.BQzumBT328())
         self.board.arm_robot = self
@@ -459,19 +461,46 @@ class ArmHardwareRobot(Robot):
         self.servo_wrist = self._joint_servos[4]
         self.servo_gripper = self._joint_servos[5]
         self.robot_elements = list(self._joint_servos)
+        self._servo_pins = [None] * len(self._joint_servos)
 
     def attach_servo_to_pin(self, pin, joint_name=None):
-        """Asocia un servo virtual del brazo al primer joint libre."""
+        """Asocia un servo virtual solo si el pin coincide con la configuracion."""
         for servo in self._joint_servos:
             if servo.pin == pin and self.board.get_pin_element(pin) is servo:
                 return servo
 
-        for joint_idx, servo in enumerate(self._joint_servos):
-            if servo.pin == -1:
-                attached = self._attach_joint_servo(joint_idx, pin)
-                if attached is not None:
-                    return attached
+        mapped_idx = self._joint_index_for_pin(pin)
+        if mapped_idx is None and joint_name:
+            mapped_idx = self._joint_index_for_name(joint_name)
+        if mapped_idx is not None:
+            return self._attach_joint_servo(mapped_idx, pin)
+
         return None
+
+    def set_servo_pin_mapping(self, pins):
+        """Actualiza la tabla pin -> joint usada por Servo.attach y Braccio."""
+        normalized = []
+        for pin in list(pins or [])[:len(self._joint_servos)]:
+            try:
+                normalized.append(None if pin is None else int(pin))
+            except (TypeError, ValueError):
+                normalized.append(None)
+        while len(normalized) < len(self._joint_servos):
+            normalized.append(None)
+        self._servo_pins = normalized
+
+    def get_servo_pin_mapping(self):
+        return list(self._servo_pins)
+
+    def get_named_servo_pins(self, fallback=None):
+        fallback = fallback or {}
+        if not any(pin is not None for pin in self._servo_pins):
+            return dict(fallback)
+        result = {}
+        for idx, name in enumerate(self.JOINT_NAMES):
+            pin = self._servo_pins[idx] if idx < len(self._servo_pins) else None
+            result[name] = pin
+        return result
 
     def detach_servo(self, servo):
         """Libera el pin asociado a un servo virtual del brazo."""
@@ -503,6 +532,21 @@ class ArmHardwareRobot(Robot):
         servo.pin = pin
         self.board.set_pin_mode(pin, boards.Board.OUTPUT)
         return servo
+
+    def _joint_index_for_pin(self, pin):
+        try:
+            pin = int(pin)
+        except (TypeError, ValueError):
+            return None
+        for idx, mapped_pin in enumerate(self._servo_pins):
+            if mapped_pin == pin:
+                return idx
+        return None
+
+    def _joint_index_for_name(self, joint_name):
+        if joint_name not in self.JOINT_NAMES:
+            return None
+        return self.JOINT_NAMES.index(joint_name)
 
     def get_servo_values(self):
         """

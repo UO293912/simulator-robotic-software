@@ -39,6 +39,9 @@ class _FakeWidget:
     def focus_force(self):
         return None
 
+    def update_config_menu_label(self, *_args, **_kwargs):
+        return None
+
 
 class _FakeNotebook(_FakeWidget):
     def __init__(self, *args, **kwargs):
@@ -758,10 +761,11 @@ def test_robot3d_drawing_low_level_helpers_and_iter_triangles(monkeypatch):
         camera=SimpleNamespace(
             get_view_matrix=lambda: (np.eye(3), np.zeros(3)),
             focal_length=800.0,
+            get_focal=lambda h=None: 800.0,
             screen_offset_x=0.0,
             screen_offset_y=0.0,
             projection_mode="perspective",
-            get_projection_scale=lambda: 1.0,
+            get_projection_scale=lambda h=None: 1.0,
             distance=500.0,
             PROJECTION_CABALLERA="caballera",
             CABALLERA_ANGLE_DEG=45.0,
@@ -869,6 +873,33 @@ def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
     assert canvas.created == 2
     assert canvas.itemconfigs == 1
 
+    worker_draw = DrawSpy()
+    worker_drawing = drawing_mod.Robot3DDrawing()
+    worker_drawing._mesh_worker_count = 2
+    worker_drawing._mesh_worker_min_tris = 1
+    tri = np.array([
+        [[0.0, 0.0, 100.0], [0.0, 10.0, 100.0], [10.0, 0.0, 100.0]],
+        [[0.0, 0.0, 120.0], [0.0, 10.0, 120.0], [10.0, 0.0, 120.0]],
+        [[0.0, 0.0, 140.0], [0.0, 10.0, 140.0], [10.0, 0.0, 140.0]],
+        [[0.0, 0.0, 160.0], [0.0, 10.0, 160.0], [10.0, 0.0, 160.0]],
+    ])
+    worker_drawing._render_mesh_vectorized(
+        worker_draw,
+        {
+            "R_view": np.eye(3),
+            "cam_pos": np.zeros(3),
+            "f": 800.0,
+            "cx": 400.0,
+            "cy": 300.0,
+            "mode": "perspective",
+            "ortho_scale": 1.0,
+            "target_depth": 500.0,
+        },
+        [(tri, (120, 160, 200), True)],
+    )
+    assert worker_draw.polygons
+    assert worker_drawing._mesh_executor is not None
+
     layer = layers_mod.Arm3DLayer()
     hud_calls = []
     layer.hud = SimpleNamespace(
@@ -944,10 +975,11 @@ def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
     camera = SimpleNamespace(
         get_view_matrix=lambda: (np.eye(3), np.zeros(3)),
         focal_length=1.0,
+        get_focal=lambda h=None: 1.0,
         screen_offset_x=0.0,
         screen_offset_y=0.0,
         projection_mode="caballera",
-        get_projection_scale=lambda: 2.0,
+        get_projection_scale=lambda h=None: 2.0,
         distance=100.0,
         PROJECTION_CABALLERA="caballera",
         CABALLERA_ANGLE_DEG=45.0,
