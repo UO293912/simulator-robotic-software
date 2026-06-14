@@ -2088,7 +2088,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 class MenuBar(tk.Frame):
 
     def __init__(self, parent, application: MainApplication = None, *args, **kwargs):
-        kwargs.setdefault("bg", "SystemMenu")
+        kwargs.setdefault("bg", "#f0f0f0")
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.application = application
         self._menu_buttons = []
@@ -2207,8 +2207,8 @@ class MenuBar(tk.Frame):
         button = tk.Label(
             self,
             text=label,
-            bg="SystemMenu",
-            fg="SystemMenuText",
+            bg="#f0f0f0",
+            fg="#000000",
             bd=0,
             padx=5,
             pady=1,
@@ -2231,7 +2231,7 @@ class MenuBar(tk.Frame):
         self._active_menu_button = active_button
 
     def _reset_menu_button(self, button):
-        button.configure(bg="SystemMenu", fg="SystemMenuText")
+        button.configure(bg="#f0f0f0", fg="#000000")
 
     def _clear_menu_hover(self, _event=None):
         if self._open_menu_button is not None:
