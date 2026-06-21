@@ -692,15 +692,29 @@ class TestRendering:
             a = math.radians(ang)
             return math.cos(a) * u + math.sin(a) * v
 
-        # El arco sigue al dedo + en todo el rango (error < 1°)
-        for j in (-80.0, -50.0, -17.0):
-            model.joints[2] = j
-            chain = forward_kinematics_chain(model)
-            dims = vm._resolve_dimensions(model)
-            grip = vm._get_gripper_geometry(model, chain, dims)
-            plus = next(f for f in grip['fingers'] if f['sign'] > 0)['dir']
-            frame = vm.get_joint_frames(model, chain)[2]
-            cosang = float(np.clip(np.dot(arc_dir(frame, j), plus), -1.0, 1.0))
+        chain = forward_kinematics_chain(model)
+        dims = vm._resolve_dimensions(model)
+        grip = vm._get_gripper_geometry(model, chain, dims)
+        frame = vm.get_joint_frames(model, chain)[2]
+
+        # El arco barre la apertura real definida en la tabla DH (0..mx-mn = 63°)
+        assert frame['arc_angles'] == (0.0, 63.0)
+        # Su referencia (ángulo 0) va por el eje central de la pinza (forward) y
+        # está centrado en el pivote de los dedos (hinge_center): la línea recta
+        # del arco pasa por el centro, no desplazada.
+        fwd = np.asarray(grip['forward'], float)
+        np.testing.assert_allclose(arc_dir(frame, 0.0), fwd, atol=1e-9)
+        np.testing.assert_allclose(frame['pos'], grip['hinge_center'], atol=1e-9)
+
+        # Los extremos del arco corresponden al dedo + cerrado (mx) y abierto (mn)
+        for jval, ang in ((-17.0, frame['arc_angles'][0]),
+                          (-80.0, frame['arc_angles'][1])):
+            model.joints[2] = jval
+            ch = forward_kinematics_chain(model)
+            plus = next(f for f in vm._get_gripper_geometry(model, ch, dims)['fingers']
+                        if f['sign'] > 0)['dir']
+            fr = vm.get_joint_frames(model, ch)[2]
+            cosang = float(np.clip(np.dot(arc_dir(fr, ang), plus), -1.0, 1.0))
             assert math.degrees(math.acos(cosang)) < 1.0
 
         # El dedo barre el rango articular completo (63° = 80 - 17)

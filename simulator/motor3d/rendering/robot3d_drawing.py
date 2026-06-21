@@ -673,20 +673,21 @@ class GenericDhVisualModel:
                 'r_arc': r_arc,
             })
 
-        # Si la última articulación es una pinza decorativa, su arco de rango debe
-        # seguir al dedo dibujado, no al marco articular crudo. El dedo + gira
-        # (mx - jval) sobre el eje de la pinza desde 'forward'; con xref girado a
-        # mx y el eje invertido, la maquinaria del arco (que gira xref por jval)
-        # reproduce exactamente esa dirección en todo el rango.
+        # Si la última articulación es una pinza decorativa, su arco de rango se
+        # ancla en el centro de la pinza: la referencia (ángulo 0) va a lo largo de
+        # 'forward' (eje central = dedos cerrados) y el arco barre la apertura real
+        # de la articulación [0, mx-mn] hacia el lado del dedo +. Así la línea
+        # recta del arco pasa por el centro y los extremos corresponden a los
+        # dedos cerrados (mx) y abiertos (mn) — coherente con el rango DH.
         grip = self._get_gripper_geometry(model, chain, dims) if chain else None
         if grip is not None:
             gi = grip['joint_idx']
             if gi < len(frames):
-                forward = np.asarray(grip['forward'], dtype=float)
-                hinge = np.asarray(grip['hinge_axis'], dtype=float)
-                _, mx_g = model.joint_limits[gi]
-                frames[gi]['xref'] = self._rotate_vec(forward, hinge, math.radians(mx_g))
-                frames[gi]['axis'] = -hinge
+                mn_g, mx_g = model.joint_limits[gi]
+                frames[gi]['pos'] = list(np.asarray(grip['hinge_center'], dtype=float))
+                frames[gi]['xref'] = np.asarray(grip['forward'], dtype=float)
+                frames[gi]['axis'] = np.asarray(grip['hinge_axis'], dtype=float)
+                frames[gi]['arc_angles'] = (0.0, float(mx_g - mn_g))
         return frames
 
     @staticmethod
@@ -1680,7 +1681,10 @@ class Robot3DDrawing:
             v = v_raw / v_n
             u = np.cross(v, axis)   # re-ortonormalización: u ⟂ axis ⟂ v
 
-            mn, mx = model.joint_limits[i]
+            # Por defecto el arco barre el rango articular [mn, mx]. Si el frame
+            # define 'arc_angles' (p. ej. la pinza, que barre su apertura desde
+            # la referencia 'forward'), se usan esos ángulos locales.
+            mn, mx = frame.get('arc_angles', model.joint_limits[i])
             r_arc = frame['r_arc']
 
             # Puntos del arco con índice original (para descartar saltos si algún punto
