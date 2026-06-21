@@ -24,8 +24,11 @@ class _FakeWidget:
     def grid_remove(self):
         self.hidden = True
 
-    def forget(self):
+    def forget(self, *_args):
         self.hidden = True
+
+    def panes(self):
+        return [child for child, _ in self.added]
 
     def grid_columnconfigure(self, *_args, **_kwargs):
         return None
@@ -1029,3 +1032,132 @@ def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
     )
     arcs = drawing._collect_joint_arcs(model, [], {}, perspective)
     assert arcs == []
+
+
+# ---------------------------------------------------------------------------
+# Diseño responsive del módulo 3D (lógica pura, sin Tk real)
+# ---------------------------------------------------------------------------
+
+
+def test_arm3d_config_compute_ui_scale_fits_screen():
+    """La escala adaptativa de la ventana de configuración se topea a 0.85 en
+    pantallas grandes y encoge (sin bajar de 0.5) en pantallas pequeñas."""
+    import graphics.gui as gui_mod
+
+    Win = gui_mod.Arm3DConfigurationWindow
+    big = SimpleNamespace(
+        winfo_screenwidth=lambda: 3840, winfo_screenheight=lambda: 2160,
+        _CONTENT_K_W=Win._CONTENT_K_W, _CONTENT_K_H=Win._CONTENT_K_H,
+    )
+    small = SimpleNamespace(
+        winfo_screenwidth=lambda: 1024, winfo_screenheight=lambda: 600,
+        _CONTENT_K_W=Win._CONTENT_K_W, _CONTENT_K_H=Win._CONTENT_K_H,
+    )
+    s_big = Win._compute_ui_scale(big)
+    s_small = Win._compute_ui_scale(small)
+
+    assert s_big == pytest.approx(0.85)
+    assert 0.5 <= s_small < 0.85
+    assert s_small <= s_big
+
+
+def test_drawing_frame_camera_scale_tiers():
+    """La barra de cámara elige el tamaño de icono por tramos de ancho del
+    viewport (encoge de forma escalonada al estrecharse)."""
+    import graphics.gui as gui_mod
+
+    fake = SimpleNamespace(
+        _cam_icon_size=None, _cam_buttons=[],
+        _cam_font_scaler=gui_mod.FontScaler(),
+    )
+    expectations = [(700, 26), (500, 22), (400, 18), (300, 14)]
+    for width, expected_icon in expectations:
+        fake._cam_icon_size = None  # forzar recálculo en cada tramo
+        gui_mod.DrawingFrame._apply_camera_scale(fake, width)
+        assert fake._cam_icon_size == expected_icon
+
+
+def test_arm3d_config_canvas_configure_fills_width():
+    """Regresión: al ensanchar el canvas, el contenido se estira para llenar el
+    hueco horizontal; al estrecharlo respeta su ancho natural (con scroll)."""
+    import graphics.gui as gui_mod
+
+    class FakeCanvas:
+        def __init__(self):
+            self.item_widths = []
+
+        def itemconfigure(self, _id, width):
+            self.item_widths.append(width)
+
+        def configure(self, **_kwargs):
+            return None
+
+    canvas = FakeCanvas()
+    inner = SimpleNamespace(winfo_reqwidth=lambda: 400, winfo_reqheight=lambda: 300)
+    fake = SimpleNamespace(
+        _scroll_canvas=canvas, _scroll_inner=inner, _scroll_inner_id="iid",
+        _last_fill_w=None, _set_scrollbar_visibility=lambda *_a: None,
+    )
+
+    # Canvas más ancho que el contenido -> se estira hasta el ancho del canvas.
+    gui_mod.Arm3DConfigurationWindow._on_scroll_canvas_configure(
+        fake, SimpleNamespace(width=700, height=500))
+    assert canvas.item_widths[-1] == 700
+
+    # Canvas más estrecho -> mantiene el ancho natural (no aplasta el contenido).
+    fake._last_fill_w = None
+    gui_mod.Arm3DConfigurationWindow._on_scroll_canvas_configure(
+        fake, SimpleNamespace(width=250, height=500))
+    assert canvas.item_widths[-1] == 400
+
+
+def test_arm3d_layer_fps_counter_scales_with_viewport():
+    """El contador de FPS usa una fuente proporcional al viewport (mayor en
+    ventanas grandes, menor en pequeñas), acotada al rango legible [8, 16]."""
+    import graphics.layers as layers_mod
+
+    class FakeCanvas:
+        def __init__(self, w, h):
+            self._w, self._h = w, h
+            self.fonts = []
+
+        def delete(self, *_a):
+            return None
+
+        def winfo_width(self):
+            return self._w
+
+        def winfo_height(self):
+            return self._h
+
+        def create_text(self, _x, _y, **kwargs):
+            self.fonts.append(kwargs.get("font"))
+            return 1
+
+        def bbox(self, _id):
+            return (0, 0, 10, 10)
+
+        def create_rectangle(self, *_a, **_k):
+            return 2
+
+        def tag_lower(self, *_a):
+            return None
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.visual['show_fps_counter'] = True
+
+    big = FakeCanvas(1600, 1000)
+    layer._canvas = big
+    layer._fps_last_frame_time = None
+    layer._draw_fps_counter()
+
+    small = FakeCanvas(320, 240)
+    layer._canvas = small
+    layer._fps_last_frame_time = None
+    layer._draw_fps_counter()
+
+    big_size = big.fonts[-1][1]
+    small_size = small.fonts[-1][1]
+    assert big_size > small_size
+    assert 8 <= small_size <= 16
+    assert 8 <= big_size <= 16
