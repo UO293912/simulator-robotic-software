@@ -376,14 +376,16 @@ class BraccioVisualModel:
         # Joint 5 — pinza (gripper_joint URDF), rotación alrededor de −Y
         # Se usa el origen articular del dedo derecho (gripper_joint):
         #   xyz=(10,0,30)mm, rpy=(0,−0.2967,0) desde wrist_roll
-        # La dirección de referencia (DH joint=0 → q_urdf=π/2) se obtiene
-        # aplicando _R([0,-1,0], π/2) al eje Z de T_pre_right_g, que resulta
-        # en −T_pre_right_g[:,0].
+        # La dirección de referencia debe coincidir con el dedo que se DIBUJA: la
+        # malla del gripper lleva un origen visual rpy=(0,π/2,0) que la gira 90°
+        # respecto al marco articular, de modo que el dedo visible apunta según
+        # +Z de T_pre_right_g (no −X). Sin esta corrección el arco quedaba 90°
+        # desfasado respecto a la posición real del dedo en ambos extremos.
         T_pre_right_g = T_wrist_r @ _T([10.0, 0.0, 30.0], [0.0, -0.2967, 0.0])
         frames.append({
             'pos': T_pre_right_g[:3, 3].tolist(),
             'axis': -T_pre_right_g[:3, 1].copy(),   # eje −Y (URDF axis=-Y)
-            'xref': -T_pre_right_g[:3, 0].copy(),   # dirección del dedo a DH joint[5]=0
+            'xref': T_pre_right_g[:3, 2].copy(),     # dirección del dedo visible
             'r_arc': 50.0,
         })
 
