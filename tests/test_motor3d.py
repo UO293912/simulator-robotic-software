@@ -386,6 +386,39 @@ def test_max_reach_includes_prismatic_joint_stroke():
     assert model.max_reach() == 170.0
 
 
+def test_generic_joint_range_arcs_visible_for_zero_length_links():
+    """Las articulaciones con a=0 (p. ej. la base que gira sobre una columna d, o
+    un último eslabón de longitud 0) deben tener un radio de arco visible, no cero,
+    para que su rango articular se dibuje en pantalla."""
+    from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+    from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+    from motor3d.rendering.robot3d_drawing import Robot3DDrawing
+
+    model = ArmKinematicState()
+    model.load_dict({
+        'dof': 4,
+        'link_lengths': [0.0, 150.0, 150.0, 0.0],
+        'joints': [0.0, 0.0, 0.0, 0.0],
+        'joint_limits': [[-160, 160], [-90, 90], [-120, 120], [-90, 90]],
+        'joint_types': ['R', 'R', 'R', 'R'],
+        'dh_rows': [
+            {'theta': 0.0, 'd': 100.0, 'a': 0.0, 'alpha': 90.0},
+            {'theta': 0.0, 'd': 0.0, 'a': 150.0, 'alpha': 0.0},
+            {'theta': 0.0, 'd': 0.0, 'a': 150.0, 'alpha': 0.0},
+            {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 90.0},
+        ],
+        'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
+        'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+    })
+    renderer = Robot3DDrawing(stl_dir=None)
+    chain = forward_kinematics_chain(model)
+    frames = renderer.generic_visual.get_joint_frames(model, chain)
+
+    assert len(frames) == model.dof
+    for i, frame in enumerate(frames):
+        assert frame['r_arc'] > 1.0, f"J{i + 1}: arco invisible (r_arc={frame['r_arc']})"
+
+
 # ---------------------------------------------------------------------------
 # P-CU03-01 : Rendering sin crash
 # ---------------------------------------------------------------------------

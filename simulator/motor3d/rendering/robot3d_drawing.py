@@ -646,10 +646,16 @@ class GenericDhVisualModel:
         matrices = chain.get('matrices', []) if chain else []
         positions = chain.get('positions', []) if chain else []
         base_T = get_base_transform(model)
+        # Radio mínimo visible (fuera del disco de la articulación): garantiza que
+        # el arco de rango se dibuje también en articulaciones con a=0 (p. ej. la
+        # base que gira sobre una columna 'd'), cuyo eslabón propio mide 0.
+        dims = self._resolve_dimensions(model)
+        arc_floor = dims['radius'] * 1.8
         for i in range(model.dof):
             T = matrices[i - 1] if i > 0 else base_T
             pos = positions[i] if i < len(positions) else [0.0, 0.0, 0.0]
-            r_arc = model.link_lengths[i] * 0.4 if i < len(model.link_lengths) else 40.0
+            a_len = abs(model.link_lengths[i]) if i < len(model.link_lengths) else 100.0
+            r_arc = max(a_len * 0.4, arc_floor)
             frames.append({
                 'pos': pos,
                 'axis': T[:3, 2].copy(),
