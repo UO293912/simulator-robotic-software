@@ -596,7 +596,10 @@ class GenericDhVisualModel:
         side = self._safe_normalize(np.cross(hinge_axis, forward), T_prev[:3, 1])
 
         palm_depth = max(radius * 0.95, seg_len * 0.9, 18.0)
-        bridge_half_span = radius * 0.78
+        # Separación lateral de los dedos respecto al eje central: lo bastante
+        # pequeña para que las piezas queden cerca del centro (dejando un hueco
+        # interior mínimo) en cualquier configuración.
+        bridge_half_span = radius * 0.34
         finger_width = radius * 0.36
         finger_len = max(radius * 2.45, seg_len * 3.0)
         finger_base_offset = finger_width * 0.25
@@ -673,34 +676,22 @@ class GenericDhVisualModel:
                 'r_arc': r_arc,
             })
 
-        # Si la última articulación es una pinza decorativa, su arco de rango se
-        # ancla en el centro de la pinza: la referencia (ángulo 0) va a lo largo de
-        # 'forward' (eje central = dedos cerrados) y el arco barre la apertura real
-        # de la articulación [0, mx-mn] hacia el lado del dedo +. Así la línea
-        # recta del arco pasa por el centro y los extremos corresponden a los
-        # dedos cerrados (mx) y abiertos (mn) — coherente con el rango DH.
+        # La pinza tiene DOS dedos simétricos: su arco de rango se dibuja como un
+        # sector simétrico centrado en el eje de la pinza ('forward'). Cada borde
+        # corresponde a un dedo en su apertura máxima (±(mx-mn)); el centro (ángulo
+        # 0 = forward) es la pinza cerrada. Así el arco pasa por el centro y cada
+        # lado representa el recorrido de su dedo, no un sector desplazado a un lado.
         grip = self._get_gripper_geometry(model, chain, dims) if chain else None
         if grip is not None:
             gi = grip['joint_idx']
             if gi < len(frames):
                 mn_g, mx_g = model.joint_limits[gi]
+                aperture = float(mx_g - mn_g)
                 frames[gi]['pos'] = list(np.asarray(grip['hinge_center'], dtype=float))
-                frames[gi]['xref'] = np.asarray(grip['forward'], dtype=float)
                 frames[gi]['axis'] = np.asarray(grip['hinge_axis'], dtype=float)
-                frames[gi]['arc_angles'] = (0.0, float(mx_g - mn_g))
+                frames[gi]['xref'] = np.asarray(grip['forward'], dtype=float)
+                frames[gi]['arc_angles'] = (-aperture, aperture)
         return frames
-
-    @staticmethod
-    def _rotate_vec(vec, axis, angle):
-        """Rota `vec` `angle` radianes alrededor de `axis` (fórmula de Rodrigues)."""
-        v = np.asarray(vec, dtype=float)
-        k = np.asarray(axis, dtype=float)
-        n = np.linalg.norm(k)
-        if n < 1e-9:
-            return v
-        k = k / n
-        c, s = math.cos(angle), math.sin(angle)
-        return v * c + np.cross(k, v) * s + k * float(np.dot(k, v)) * (1.0 - c)
 
     def _get_prismatic_geometry(self, model, joint_idx, chain):
         """
