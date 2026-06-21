@@ -610,18 +610,16 @@ class GenericDhVisualModel:
         hinge_center = p0 + forward * (palm_depth * 0.46)
         tcp = hinge_center + forward * (finger_base_offset + finger_len)
 
-        # Cada dedo gira sobre el eje de la pinza el recorrido REAL de la
-        # articulación: abierto al máximo en el límite inferior (mn) y cerrado en
-        # el superior (mx). Así la apertura visible cubre todo el rango articular
-        # (p. ej. 63° si el rango es 63°), y el arco de rango coincide con el dedo.
-        mn_g, mx_g = (model.joint_limits[joint_idx]
-                      if joint_idx < len(model.joint_limits) else (0.0, 90.0))
+        # Cada dedo se separa del eje un ángulo igual al valor articular: los dedos
+        # quedan paralelos (cerrados, a lo largo de 'forward') en jval=0 y se abren
+        # a medida que jval se aleja de 0. Así cada límite acota el recorrido de su
+        # dedo y el límite más cercano a 0 controla cuánto puede cerrarse la pinza
+        # (si no llega a 0 queda un hueco; si lo cruza, se cerraría de más).
         jval_g = float(model.joints[joint_idx]) if joint_idx < len(model.joints) else 0.0
-        open_angle = math.radians(mx_g - jval_g)
         fingers = []
         for sign in (+1.0, -1.0):
             hinge = hinge_center + side * sign * bridge_half_span
-            angle = sign * open_angle
+            angle = math.radians(-sign * jval_g)
             finger_dir = (
                 math.cos(angle) * forward
                 + math.sin(angle) * side
@@ -676,21 +674,22 @@ class GenericDhVisualModel:
                 'r_arc': r_arc,
             })
 
-        # La pinza tiene DOS dedos simétricos: su arco de rango se dibuja como un
-        # sector simétrico centrado en el eje de la pinza ('forward'). Cada borde
-        # corresponde a un dedo en su apertura máxima (±(mx-mn)); el centro (ángulo
-        # 0 = forward) es la pinza cerrada. Así el arco pasa por el centro y cada
-        # lado representa el recorrido de su dedo, no un sector desplazado a un lado.
+        # Como el Braccio, se marca el rango de UN solo dedo (el +): el arco sigue
+        # a ese dedo, que se separa del eje 'forward' un ángulo -jval. Sobre el
+        # rango articular [mn, mx] el dedo barre [-mx, -mn]; así cada límite mueve
+        # su borde (el cercano a 0 controla el cierre, el lejano la apertura). El
+        # arco se centra en la base de ese dedo para que lo siga.
         grip = self._get_gripper_geometry(model, chain, dims) if chain else None
         if grip is not None:
             gi = grip['joint_idx']
             if gi < len(frames):
                 mn_g, mx_g = model.joint_limits[gi]
-                aperture = float(mx_g - mn_g)
-                frames[gi]['pos'] = list(np.asarray(grip['hinge_center'], dtype=float))
+                plus = next((f for f in grip['fingers'] if f['sign'] > 0), None)
+                if plus is not None:
+                    frames[gi]['pos'] = list(np.asarray(plus['hinge'], dtype=float))
                 frames[gi]['axis'] = np.asarray(grip['hinge_axis'], dtype=float)
                 frames[gi]['xref'] = np.asarray(grip['forward'], dtype=float)
-                frames[gi]['arc_angles'] = (-aperture, aperture)
+                frames[gi]['arc_angles'] = (float(-mx_g), float(-mn_g))
         return frames
 
     def _get_prismatic_geometry(self, model, joint_idx, chain):

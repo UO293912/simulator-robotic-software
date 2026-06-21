@@ -684,30 +684,46 @@ class TestRendering:
         )
         vm = GenericDhVisualModel()
 
+        def arc_dir(frame, ang):
+            axis = np.array(frame['axis'], float)
+            axis /= np.linalg.norm(axis)
+            u = np.array(frame['xref'], float)
+            u = u - axis * np.dot(u, axis)
+            u /= np.linalg.norm(u)
+            v = np.cross(axis, u)
+            a = math.radians(ang)
+            return math.cos(a) * u + math.sin(a) * v
+
         chain = forward_kinematics_chain(model)
         dims = vm._resolve_dimensions(model)
         grip = vm._get_gripper_geometry(model, chain, dims)
         frame = vm.get_joint_frames(model, chain)[2]
 
-        # Arco simétrico centrado en el eje de la pinza: ±(mx-mn) = ±63°, con la
-        # referencia (forward) por el centro y el pivote en hinge_center.
-        assert frame['arc_angles'] == (-63.0, 63.0)
+        # Se marca el rango de UN dedo (como el Braccio): el arco barre [-mx, -mn],
+        # con cada límite en su borde. El borde interior (-mx) es el cercano a 0
+        # (controla el cierre) y el exterior (-mn) la apertura máxima.
+        assert frame['arc_angles'] == (17.0, 80.0)   # (-mx, -mn) con lim (-80,-17)
         np.testing.assert_allclose(frame['axis'], grip['hinge_axis'], atol=1e-9)
         np.testing.assert_allclose(frame['xref'], grip['forward'], atol=1e-9)
-        np.testing.assert_allclose(frame['pos'], grip['hinge_center'], atol=1e-9)
 
-        # El dedo barre el rango articular completo (63° = 80 - 17)
-        model.joints[2] = -80.0
-        d_open = next(f for f in vm._get_gripper_geometry(
-            model, forward_kinematics_chain(model),
-            vm._resolve_dimensions(model))['fingers'] if f['sign'] > 0)['dir']
-        model.joints[2] = -17.0
-        d_closed = next(f for f in vm._get_gripper_geometry(
-            model, forward_kinematics_chain(model),
-            vm._resolve_dimensions(model))['fingers'] if f['sign'] > 0)['dir']
-        sweep = math.degrees(math.acos(
-            float(np.clip(np.dot(d_open, d_closed), -1.0, 1.0))))
-        assert abs(sweep - 63.0) < 1.0, f"barrido del dedo {sweep:.1f}° != 63°"
+        # El arco sigue al dedo + en los extremos: borde interior = dedo en mx,
+        # borde exterior = dedo en mn.
+        for jval, ang in ((-17.0, frame['arc_angles'][0]),
+                          (-80.0, frame['arc_angles'][1])):
+            model.joints[2] = jval
+            ch = forward_kinematics_chain(model)
+            plus = next(f for f in vm._get_gripper_geometry(model, ch, dims)['fingers']
+                        if f['sign'] > 0)['dir']
+            fr = vm.get_joint_frames(model, ch)[2]
+            cosang = float(np.clip(np.dot(arc_dir(fr, ang), plus), -1.0, 1.0))
+            assert math.degrees(math.acos(cosang)) < 1.0
+
+        # Los dedos quedan paralelos (cerrados) en jval=0: el límite central
+        # controla si la pinza puede cerrarse.
+        model.joints[2] = 0.0
+        for f in vm._get_gripper_geometry(
+                model, forward_kinematics_chain(model), dims)['fingers']:
+            np.testing.assert_allclose(f['dir'], grip['forward'], atol=1e-9)
 
     def test_prismatic_visual_geometry_separates_slide_axis_from_rigid_offset(self):
         """Una P con `a` no nulo debe deslizar por z y dejar el offset lateral aparte."""
