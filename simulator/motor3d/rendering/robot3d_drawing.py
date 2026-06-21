@@ -607,13 +607,21 @@ class GenericDhVisualModel:
         hinge_center = p0 + forward * (palm_depth * 0.46)
         tcp = hinge_center + forward * (finger_base_offset + finger_len)
 
-        open_angle = math.radians(self.GRIPPER_MAX_OPEN_DEG) * (1.0 - self._gripper_ratio(model, joint_idx))
+        # Cada dedo gira sobre el eje de la pinza el recorrido REAL de la
+        # articulación: abierto al máximo en el límite inferior (mn) y cerrado en
+        # el superior (mx). Así la apertura visible cubre todo el rango articular
+        # (p. ej. 63° si el rango es 63°), y el arco de rango coincide con el dedo.
+        mn_g, mx_g = (model.joint_limits[joint_idx]
+                      if joint_idx < len(model.joint_limits) else (0.0, 90.0))
+        jval_g = float(model.joints[joint_idx]) if joint_idx < len(model.joints) else 0.0
+        open_angle = math.radians(mx_g - jval_g)
         fingers = []
         for sign in (+1.0, -1.0):
             hinge = hinge_center + side * sign * bridge_half_span
+            angle = sign * open_angle
             finger_dir = (
-                math.cos(open_angle) * forward
-                + sign * math.sin(open_angle) * side
+                math.cos(angle) * forward
+                + math.sin(angle) * side
             )
             finger_dir = self._safe_normalize(finger_dir, forward)
             root = hinge + finger_dir * finger_base_offset
@@ -664,7 +672,34 @@ class GenericDhVisualModel:
                 'xref': self._joint_neutral_xref(model, i, T),
                 'r_arc': r_arc,
             })
+
+        # Si la última articulación es una pinza decorativa, su arco de rango debe
+        # seguir al dedo dibujado, no al marco articular crudo. El dedo + gira
+        # (mx - jval) sobre el eje de la pinza desde 'forward'; con xref girado a
+        # mx y el eje invertido, la maquinaria del arco (que gira xref por jval)
+        # reproduce exactamente esa dirección en todo el rango.
+        grip = self._get_gripper_geometry(model, chain, dims) if chain else None
+        if grip is not None:
+            gi = grip['joint_idx']
+            if gi < len(frames):
+                forward = np.asarray(grip['forward'], dtype=float)
+                hinge = np.asarray(grip['hinge_axis'], dtype=float)
+                _, mx_g = model.joint_limits[gi]
+                frames[gi]['xref'] = self._rotate_vec(forward, hinge, math.radians(mx_g))
+                frames[gi]['axis'] = -hinge
         return frames
+
+    @staticmethod
+    def _rotate_vec(vec, axis, angle):
+        """Rota `vec` `angle` radianes alrededor de `axis` (fórmula de Rodrigues)."""
+        v = np.asarray(vec, dtype=float)
+        k = np.asarray(axis, dtype=float)
+        n = np.linalg.norm(k)
+        if n < 1e-9:
+            return v
+        k = k / n
+        c, s = math.cos(angle), math.sin(angle)
+        return v * c + np.cross(k, v) * s + k * float(np.dot(k, v)) * (1.0 - c)
 
     def _get_prismatic_geometry(self, model, joint_idx, chain):
         """
@@ -846,9 +881,9 @@ class GenericDhVisualModel:
                 if prism.size > 0:
                     yield prism, link_color
 
-        # Indicador del efector final
+        # Indicador del efector final (punto objetivo de la IK): esfera pequeña.
         ee = np.array(self.get_effective_end_effector(model, positions, chain), dtype=float)
-        sphere = _make_sphere_approx(ee, r * 0.58)
+        sphere = _make_sphere_approx(ee, max(4.0, r * 0.26))
         if sphere.size > 0:
             yield sphere, (220, 180, 50)
 

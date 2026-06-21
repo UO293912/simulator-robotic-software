@@ -657,6 +657,65 @@ class TestRendering:
             gripper_closed['forward'],
         )
 
+    def test_generic_gripper_range_arc_tracks_finger(self):
+        """El arco de rango de la pinza genérica debe seguir al dedo dibujado en
+        todo el rango, y los dedos deben barrer el rango articular completo."""
+        import math
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 20.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -17.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[10.0, -15.0, -80.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 20.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+        vm = GenericDhVisualModel()
+
+        def arc_dir(frame, ang):
+            axis = np.array(frame['axis'], float)
+            axis /= np.linalg.norm(axis)
+            u = np.array(frame['xref'], float)
+            u = u - axis * np.dot(u, axis)
+            u /= np.linalg.norm(u)
+            v = np.cross(axis, u)
+            a = math.radians(ang)
+            return math.cos(a) * u + math.sin(a) * v
+
+        # El arco sigue al dedo + en todo el rango (error < 1°)
+        for j in (-80.0, -50.0, -17.0):
+            model.joints[2] = j
+            chain = forward_kinematics_chain(model)
+            dims = vm._resolve_dimensions(model)
+            grip = vm._get_gripper_geometry(model, chain, dims)
+            plus = next(f for f in grip['fingers'] if f['sign'] > 0)['dir']
+            frame = vm.get_joint_frames(model, chain)[2]
+            cosang = float(np.clip(np.dot(arc_dir(frame, j), plus), -1.0, 1.0))
+            assert math.degrees(math.acos(cosang)) < 1.0
+
+        # El dedo barre el rango articular completo (63° = 80 - 17)
+        model.joints[2] = -80.0
+        d_open = next(f for f in vm._get_gripper_geometry(
+            model, forward_kinematics_chain(model),
+            vm._resolve_dimensions(model))['fingers'] if f['sign'] > 0)['dir']
+        model.joints[2] = -17.0
+        d_closed = next(f for f in vm._get_gripper_geometry(
+            model, forward_kinematics_chain(model),
+            vm._resolve_dimensions(model))['fingers'] if f['sign'] > 0)['dir']
+        sweep = math.degrees(math.acos(
+            float(np.clip(np.dot(d_open, d_closed), -1.0, 1.0))))
+        assert abs(sweep - 63.0) < 1.0, f"barrido del dedo {sweep:.1f}° != 63°"
+
     def test_prismatic_visual_geometry_separates_slide_axis_from_rigid_offset(self):
         """Una P con `a` no nulo debe deslizar por z y dejar el offset lateral aparte."""
         import numpy as np
