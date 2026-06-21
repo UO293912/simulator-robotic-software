@@ -1980,6 +1980,40 @@ class TestPersistence:
             assert distance < 1.0, f"DH y TCP visual divergen {distance:.2f} mm"
             assert visual_tcp[2] <= api.model.max_reach() + 30.0
 
+    def test_generic_ik_targets_closed_gripper_tip(self):
+        """En un brazo genérico la IK debe llevar el centro de la pinza cerrada
+        (el TCP que muestra el panel), no la muñeca, hasta el objetivo escrito."""
+        import math
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        api.model.load_dict({
+            'dof': 6,
+            'link_lengths': [0.0, 125.0, 125.0, 60.0, 31.62, 0.0],
+            'joints': [0.0, -48.0, 45.0, 50.0, 81.0, -17.0],
+            'joint_limits': [[-92, 78], [-75, 75], [-50, 110],
+                             [-70, 110], [0, 162], [-80, -17]],
+            'joint_types': ['R', 'R', 'R', 'R', 'R', 'R'],
+            'dh_rows': [
+                {'theta': 0.0, 'd': 72.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 90.0, 'd': 0.0, 'a': 125.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 125.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 60.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 31.62, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+            ],
+            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
+            'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        })
+        api.scene.update()
+
+        for target in ((150.0, 150.0, 200.0), (0.0, 0.0, 300.0),
+                       (200.0, -100.0, 180.0)):
+            api.solve_ik(*target)
+            tip = api.scene.get_end_effector()
+            err = math.dist(tip, target)
+            assert err < 5.0, f"TCP {tip} lejos del objetivo {target}: {err:.1f} mm"
+
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""
         from motor3d.persistence.arm_config_repository import ArmConfigRepository
