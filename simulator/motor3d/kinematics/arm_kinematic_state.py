@@ -143,6 +143,12 @@ class ArmKinematicState:
 
             reach += a + max_abs_d
 
+        # El efector cinemático incluye el desplazamiento de herramienta
+        # (tool_offset); si no se contabiliza, el extremo real cae fuera de la
+        # esfera de alcance y el chequeo de workspace marca falsos "fuera de rango".
+        tool = getattr(self, 'tool_offset', None) or [0.0, 0.0, 0.0]
+        reach += math.sqrt(sum(float(v) ** 2 for v in tool[:3]))
+
         return reach
 
     def to_dict(self):

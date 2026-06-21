@@ -22,6 +22,8 @@ class Motor3DApi:
 
     DEFAULT_PRESET = 'braccio_tinkerkit'
     AUTO_GENERIC_CAMERA_DISTANCE_FACTOR = 1.25
+    # Umbral de error (mm) por debajo del cual la IK se reporta como "convergida".
+    IK_REPORT_TOLERANCE_MM = 5.0
 
     def __init__(self):
         self.model = ArmKinematicState()
@@ -135,11 +137,14 @@ class Motor3DApi:
         Returns:
             (converged: bool, message: str)
         """
-        converged, error = solve_inverse_kinematics(
+        # El solver sigue refinando de forma agresiva (tolerancia interna ~1 mm),
+        # pero el éxito se reporta hasta IK_REPORT_TOLERANCE_MM: errores de 1-5 mm
+        # son visualmente exactos y no deben anunciarse como "objetivo no alcanzable".
+        _, error = solve_inverse_kinematics(
             self.model, [x, y, z], max_iter=150, tolerance=1.0, alpha=0.65
         )
         self.scene.update(track_trail=track_trail)
-        if converged:
+        if error <= self.IK_REPORT_TOLERANCE_MM:
             return True, f"IK convergida (error={error:.1f} mm)"
         else:
             return False, (
@@ -196,8 +201,14 @@ class Motor3DApi:
     # ------------------------------------------------------------------
 
     def evaluate_safety(self):
-        """Evalúa el estado de seguridad de la pose actual."""
-        points = self._points_with_effective_tcp()
+        """Evalúa el estado de seguridad de la pose actual.
+
+        El chequeo de workspace se hace sobre el efector cinemático
+        (chain['end_effector'], el mismo punto que persigue la IK), no sobre el
+        TCP visual: la geometría cosmética de la pinza se extiende más allá de la
+        cadena y provocaba falsos "fuera de rango" en poses normales estiradas.
+        """
+        points = self._points_with_kinematic_end_effector()
         return self.safety_manager.evaluate(points, self.model.max_reach(), model=self.model)
 
 
@@ -274,4 +285,20 @@ class Motor3DApi:
             points[-1] = list(tcp)
         else:
             points = [list(tcp)]
+        return points
+
+    def _points_with_kinematic_end_effector(self):
+        """Posiciones articulares con el último punto = efector cinemático.
+
+        Es el extremo de la cadena DH (incluido tool_offset), el mismo objetivo
+        que resuelve la IK; se usa para el chequeo de alcance/workspace."""
+        points = [list(p) for p in (self.scene.last_points or [])]
+        chain = self.scene.last_chain
+        ee = chain.get('end_effector') if chain else None
+        if ee is None:
+            return points
+        if points:
+            points[-1] = list(ee)
+        else:
+            points = [list(ee)]
         return points
