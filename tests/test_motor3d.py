@@ -73,7 +73,7 @@ class TestForwardKinematics:
 
     def test_fk_rest_pose_arm_points_up(self, braccio_model):
         """Con todos los joints=0 (servos a 90°) el brazo debe apuntar hacia arriba.
-        El efector final debe estar por encima de z=800 mm y tener X≈Y≈0.
+        El efector final debe estar cerca del alcance máximo en z y tener X≈Y≈0.
         """
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 
@@ -81,7 +81,8 @@ class TestForwardKinematics:
         chain = forward_kinematics_chain(braccio_model)
         ee = chain['end_effector']
 
-        assert ee[2] > 800.0, f"z esperado >800 mm, obtenido {ee[2]:.1f}"
+        min_z = braccio_model.max_reach() * 0.9
+        assert ee[2] > min_z, f"z esperado >{min_z:.0f} mm, obtenido {ee[2]:.1f}"
         assert abs(ee[0]) < 5.0, f"x esperado ≈0, obtenido {ee[0]:.1f}"
         assert abs(ee[1]) < 5.0, f"y esperado ≈0, obtenido {ee[1]:.1f}"
 
@@ -286,7 +287,7 @@ class TestInverseKinematics:
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
         from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
 
-        target = [0.0, 0.0, 500.0]
+        target = [0.0, 0.0, 525.0]
         ee_init = forward_kinematics_chain(braccio_model)['end_effector']
         error_init = math.sqrt(sum((a - b) ** 2 for a, b in zip(ee_init, target)))
 
@@ -1959,21 +1960,25 @@ class TestPersistence:
 
         assert layer.motor3d.model.joints[0] == pytest.approx(10.0)
 
-    def test_braccio_scene_reports_visual_tcp_as_end_effector(self):
-        """El HUD y seguridad deben usar el TCP real de las garras, no el extremo DH generico."""
+    def test_braccio_dh_effector_matches_visual_tcp(self):
+        """Tras recalibrar el DH al STL real, el efector cinematico (objetivo de la
+        IK y valor mostrado) coincide con el TCP visual de las garras: lo que se
+        escribe en la CI = lo mostrado = el brazo dibujado."""
         import math
         from motor3d.api import Motor3DApi
 
         api = Motor3DApi()
-        api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -17.0]
-        api.scene.update()
+        for joints in ([0.0, 0.0, 0.0, 0.0, 0.0, -17.0],
+                       [10.0, -20.0, 15.0, 30.0, 40.0, -80.0]):
+            api.model.joints = list(joints)
+            api.scene.update()
 
-        fk_ee = api.scene.last_chain["end_effector"]
-        visual_tcp = api.scene.get_end_effector()
-        distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
+            fk_ee = api.scene.last_chain["end_effector"]
+            visual_tcp = api.scene.get_end_effector()
+            distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
 
-        assert distance > 100.0
-        assert visual_tcp[2] <= api.model.max_reach() + 30.0
+            assert distance < 1.0, f"DH y TCP visual divergen {distance:.2f} mm"
+            assert visual_tcp[2] <= api.model.max_reach() + 30.0
 
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""
