@@ -294,9 +294,8 @@ def test_loop_execute_and_reboot_manage_background_thread(monkeypatch):
     standard._stop_event.clear()
 
 
-def test_loop_run_covers_pause_interrupt_and_failure_paths(monkeypatch):
+def test_loop_run_continues_after_debug_pause_and_stops_on_interrupt(monkeypatch):
     import compiler.commands as commands
-    import graphics.layers as layers_mod
     import libraries.standard as standard
     import robot_components.robot_state as state
 
@@ -317,6 +316,17 @@ def test_loop_run_covers_pause_interrupt_and_failure_paths(monkeypatch):
     assert controller.executing is True
     assert controller.notifications == []
 
+
+def test_loop_run_waits_while_arm_safety_is_blocked(monkeypatch):
+    import compiler.commands as commands
+    import graphics.layers as layers_mod
+    import libraries.standard as standard
+    import robot_components.robot_state as state
+
+    controller = _make_controller()
+    loop_command = commands.Loop(controller)
+    standard.state = state.State()
+
     class FakeArm3DLayer:
         def __init__(self):
             self.safety_blocked = True
@@ -329,7 +339,19 @@ def test_loop_run_covers_pause_interrupt_and_failure_paths(monkeypatch):
     monkeypatch.setattr(commands, "module", SimpleNamespace(loop=lambda: pytest.fail("loop() should be blocked")))
     loop_command._run()
 
-    controller.arm3d = False
+    assert loop_command._stop_flag is True
+    assert controller.executing is True
+
+
+def test_loop_run_reports_unexpected_sketch_failure(monkeypatch):
+    import compiler.commands as commands
+    import libraries.standard as standard
+    import robot_components.robot_state as state
+
+    controller = _make_controller()
+    loop_command = commands.Loop(controller)
+    standard.state = state.State()
+
     controller.robot_layer = SimpleNamespace(robot=SimpleNamespace(board="demo-board"))
     controller.executing = True
     loop_command._stop_flag = False

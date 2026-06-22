@@ -398,7 +398,9 @@ class _FakeFileManager:
         self.saved.append((path, content))
 
 
-def test_main_application_new_code_paths(monkeypatch):
+@pytest.fixture
+def main_application_harness(monkeypatch):
+    """Build MainApplication without a real Tk window and expose its spies."""
     import graphics.gui as gui_mod
     import graphics.layers as layers_mod
 
@@ -455,6 +457,17 @@ def test_main_application_new_code_paths(monkeypatch):
     app.selector_bar.track_selector.value = 2
     app.selector_bar.gamification_option_selector.value = 0
 
+    return SimpleNamespace(
+        app=app,
+        file_managers=file_managers,
+        opened_windows=opened_windows,
+    )
+
+
+def test_main_application_delegates_execution_and_file_workflows(main_application_harness):
+    harness = main_application_harness
+    app = harness.app
+
     app.execute()
     app.stop()
     app.toggle_pause()
@@ -464,7 +477,21 @@ def test_main_application_new_code_paths(monkeypatch):
     app.editor_redo()
     app.open_file()
     app.save_file()
+
     assert app.get_code() == "line-1\nline-2\n"
+    assert harness.file_managers[-1].opened == ["opened.ino"]
+    assert harness.file_managers[-1].saved[-1] == ("saved.ino", "line-1\nline-2\n")
+    assert app.editor_frame.text.undo_calls == 1
+    assert app.editor_frame.text.redo_calls == 1
+    assert ("execute", 0) in app.controller.calls
+    assert ("stop",) in app.controller.calls
+    assert ("toggle_pause",) in app.controller.calls
+    assert ("step_once",) in app.controller.calls
+
+
+def test_main_application_routes_robot_configuration_and_zoom(main_application_harness):
+    harness = main_application_harness
+    app = harness.app
 
     app.open_pin_configuration()
     app.selector_bar.robot_selector.value = 5
@@ -479,6 +506,17 @@ def test_main_application_new_code_paths(monkeypatch):
 
     app.change_robot(None)
     app.change_track(None)
+
+    assert harness.opened_windows[0][0] == "pin"
+    assert any(kind == "arm3d" for kind, _args, _kwargs in harness.opened_windows)
+    assert ("zoom_in",) in app.controller.calls
+    assert ("zoom_out",) in app.controller.calls
+    assert app.drawing_frame.zoom_labels[-1] == "145%"
+    assert app.drawing_frame.mouse_modes[-1] == "pan"
+
+
+def test_main_application_updates_challenges_and_optional_controls(main_application_harness):
+    app = main_application_harness.app
 
     app.controller.board = True
     for challenge in range(7):
@@ -505,6 +543,21 @@ def test_main_application_new_code_paths(monkeypatch):
     app.show_key_drawing(True)
     app.show_key_drawing(False)
 
+    assert app.selector_bar.actions == [
+        "recover_circuit",
+        "hide_circuit",
+        "recover_gamification",
+        "hide_gamification",
+    ]
+    assert "show_joystick" in app.drawing_frame.show_calls
+    assert "hide_joystick" in app.drawing_frame.show_calls
+    assert app.drawing_frame.key_movement.packed is False
+    assert app.drawing_frame.key_drawing.packed is False
+
+
+def test_main_application_manages_arm_panel_input_console_and_shutdown(main_application_harness):
+    app = main_application_harness.app
+
     app.selector_bar.robot_selector.value = 5
     app.controller.change_robot(5)
     app.show_arm3d_panel(True)
@@ -525,23 +578,14 @@ def test_main_application_new_code_paths(monkeypatch):
     app.set_drawing()
     app.close()
 
-    assert file_managers[-1].opened == ["opened.ino"]
-    assert file_managers[-1].saved[-1] == ("saved.ino", "line-1\nline-2\n")
-    assert opened_windows[0][0] == "pin"
-    assert any(kind == "arm3d" for kind, _args, _kwargs in opened_windows)
-    assert ("execute", 0) in app.controller.calls
-    assert ("zoom_in",) in app.controller.calls
-    assert ("zoom_out",) in app.controller.calls
     assert ("filter_console", {"info": True, "warning": False, "error": True}) in app.controller.calls
     assert app.move_WASD["w"] is False
     assert app._destroyed is True
     assert app.right_notebook.select() == str(app.editor_frame)
 
 
-def test_arm3d_hud_and_screen_updater_new_code_paths(monkeypatch):
-    import compiler.commands as commands_mod
+def test_arm3d_hud_reflects_joint_and_safety_state():
     import graphics.huds as huds_mod
-    import graphics.screen_updater as screen_mod
 
     class DrawSpy:
         def __init__(self):
@@ -585,6 +629,11 @@ def test_arm3d_hud_and_screen_updater_new_code_paths(monkeypatch):
     assert any(call[0] == "delete" for call in canvas.calls)
     assert any("BLOQUEADO" in str(call) for call in canvas.calls)
     assert info_panel_calls
+
+
+def test_screen_updater_waits_for_resume_and_interrupts_stopped_execution(monkeypatch):
+    import compiler.commands as commands_mod
+    import graphics.screen_updater as screen_mod
 
     sleeping = []
     original_current_thread = screen_mod.threading.current_thread
@@ -637,7 +686,7 @@ def test_arm3d_hud_and_screen_updater_new_code_paths(monkeypatch):
     screen_mod.view = None
 
 
-def test_arm_kinematic_state_new_code_helpers():
+def test_arm_kinematic_state_normalizes_partial_configuration_and_limits():
     from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
 
     state = ArmKinematicState()
@@ -685,7 +734,7 @@ def test_kinematics_fk_rejects_negative_prismatic_rotation_indexes():
     assert get_prismatic_pre_rotation(model, 0) == {"yaw": 45.0, "pitch": 15.0}
 
 
-def test_robot3d_drawing_low_level_helpers_and_iter_triangles(monkeypatch):
+def test_generic_robot_renderer_builds_geometry_for_rotational_and_prismatic_models(monkeypatch):
     from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
     from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
     from motor3d.rendering.robot3d_drawing import (
@@ -781,12 +830,11 @@ def test_robot3d_drawing_low_level_helpers_and_iter_triangles(monkeypatch):
     assert len(mesh_groups[0][1]) == 2
 
 
-def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
+def test_robot3d_drawing_projects_scene_and_parallelizes_meshes(monkeypatch):
     from motor3d.camera.camera import Camera
     from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
     from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
     from motor3d.rendering import robot3d_drawing as drawing_mod
-    import graphics.layers as layers_mod
 
     class DrawSpy:
         def __init__(self):
@@ -903,6 +951,10 @@ def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
     assert worker_draw.polygons
     assert worker_drawing._mesh_executor is not None
 
+
+def test_arm3d_layer_delegates_camera_render_and_hud_operations(monkeypatch):
+    import graphics.layers as layers_mod
+
     layer = layers_mod.Arm3DLayer()
     hud_calls = []
     layer.hud = SimpleNamespace(
@@ -944,7 +996,7 @@ def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
     assert any(call[0] == "update" for call in hud_calls)
 
 
-def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
+def test_stl_loader_handles_missing_truncated_and_ascii_files(tmp_path):
     from motor3d.rendering import robot3d_drawing as drawing_mod
 
     missing = drawing_mod._load_stl(tmp_path / "missing.stl")
@@ -973,6 +1025,10 @@ def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
     )
     triangles = drawing_mod._load_stl(ascii_stl)
     assert triangles.shape == (1, 3, 3)
+
+
+def test_robot3d_drawing_ignores_degenerate_geometry():
+    from motor3d.rendering import robot3d_drawing as drawing_mod
 
     drawing = drawing_mod.Robot3DDrawing()
     camera = SimpleNamespace(
