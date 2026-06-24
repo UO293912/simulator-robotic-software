@@ -829,20 +829,26 @@ class Arm3DLayer(Layer):
         text = "FPS: {:.0f}".format(self._fps_display_value)
         try:
             width = self._canvas.winfo_width()
+            height = self._canvas.winfo_height()
         except Exception:
-            width = 800
-        x = max(72, width - 12)
-        y = 12
+            width, height = 800, 600
+        # Tamaño de fuente, margen y padding proporcionales al viewport para que
+        # el contador encoja/crezca con la ventana (responsive).
+        ref = max(160, min(width, int(height * 1.4)))
+        size = max(8, min(16, int(round(ref / 55.0))))
+        margin = max(6, int(round(ref / 70.0)))
+        pad = max(3, int(round(size * 0.45)))
+        x = max(size * 5, width - margin)
+        y = margin
         try:
             text_id = self._canvas.create_text(
                 x, y, text=text, anchor="ne",
-                font=("Consolas", 11, "bold"),
+                font=("Consolas", size, "bold"),
                 fill="#E8FFFB",
                 tags="arm3d_fps_counter",
             )
             bbox = self._canvas.bbox(text_id)
             if bbox:
-                pad = 5
                 rect_id = self._canvas.create_rectangle(
                     bbox[0] - pad, bbox[1] - pad,
                     bbox[2] + pad, bbox[3] + pad,

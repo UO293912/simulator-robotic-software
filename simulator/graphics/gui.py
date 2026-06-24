@@ -4,6 +4,7 @@ import tkinter as tk
 import tkinter.messagebox as messagebox
 from tkinter.filedialog import askopenfilename, asksaveasfilename
 import tkinter.ttk as ttk
+import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageTk
 import graphics.controller as controller
 import files.files_reader as files
@@ -39,6 +40,102 @@ PANEL_CONFIRM_DISABLED_BG = "#91979C"
 PANEL_CONFIRM_BORDER = "#0A6A3F"
 
 
+class FontScaler:
+    """Conjunto de fuentes ``tkfont.Font`` que se reescalan por un factor común.
+
+    Permite que un panel reflujie todas sus fuentes con una sola llamada
+    (``apply(scale)``). Cada fuente recuerda su tamaño base de diseño y se
+    recalcula respetando un mínimo legible. Como las fuentes son objetos
+    compartidos, asignarlas a varios widgets y cambiar su tamaño actualiza
+    todos a la vez de forma eficiente.
+    """
+
+    def __init__(self, family="Consolas"):
+        self._family = family
+        self._fonts = []  # (Font, base_size)
+
+    def font(self, base_size, weight="normal", slant="roman"):
+        f = tkfont.Font(family=self._family, size=base_size,
+                        weight=weight, slant=slant)
+        self._fonts.append((f, base_size))
+        return f
+
+    def apply(self, scale, minimum=7):
+        scale = max(0.1, float(scale))
+        for f, base in self._fonts:
+            size = max(minimum, int(round(base * scale)))
+            if f.cget("size") != size:
+                f.configure(size=size)
+
+
+class VScrollFrame(tk.Frame):
+    """Contenedor con scroll vertical automático.
+
+    El contenido se añade dentro de ``self.body``. La barra de scroll aparece
+    sola cuando el contenido es más alto que el área visible y se oculta cuando
+    cabe. La rueda del ratón desplaza el contenido (incluida sobre los hijos).
+    """
+
+    def __init__(self, parent, bg, **kwargs):
+        tk.Frame.__init__(self, parent, bg=bg, **kwargs)
+        self._bg = bg
+        self._canvas = tk.Canvas(self, bg=bg, bd=0, highlightthickness=0)
+        self._vbar = tk.Scrollbar(self, orient=tk.VERTICAL,
+                                  command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=self._vbar.set)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.body = tk.Frame(self._canvas, bg=bg)
+        self._win = self._canvas.create_window((0, 0), window=self.body,
+                                               anchor="nw")
+        self._vbar_shown = False
+        self.body.bind("<Configure>", self._on_body_configure)
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+        self.bind_wheel(self)
+
+    def _on_body_configure(self, _event=None):
+        try:
+            self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        except Exception:
+            pass
+        self._update_vbar()
+
+    def _on_canvas_configure(self, event):
+        try:
+            self._canvas.itemconfigure(self._win, width=event.width)
+        except Exception:
+            pass
+        self._update_vbar()
+
+    def _update_vbar(self):
+        try:
+            need = self.body.winfo_reqheight() > self._canvas.winfo_height() + 1
+        except Exception:
+            return
+        if need and not self._vbar_shown:
+            self._vbar.pack(side=tk.RIGHT, fill=tk.Y, before=self._canvas)
+            self._vbar_shown = True
+        elif not need and self._vbar_shown:
+            self._vbar.pack_forget()
+            self._vbar_shown = False
+
+    def _on_wheel(self, event):
+        if not self._vbar_shown:
+            return
+        try:
+            self._canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+        except Exception:
+            pass
+
+    def bind_wheel(self, widget):
+        """Propaga el desplazamiento con rueda a un widget y sus descendientes."""
+        try:
+            widget.bind("<MouseWheel>", self._on_wheel, add="+")
+            for child in widget.winfo_children():
+                self.bind_wheel(child)
+        except Exception:
+            pass
+
+
 class MainApplication(tk.Tk):
 
     def __init__(self, *args, **kwargs):
@@ -56,11 +153,15 @@ class MainApplication(tk.Tk):
         self.vertical_pane = tk.PanedWindow(
             orient=tk.VERTICAL, sashpad=5, sashrelief="solid", bg=DARK_BLUE)
 
-        # Área de contenido: panel izquierdo de info + canvas central + notebook derecho
-        self.content_area = tk.Frame(self.vertical_pane, bg=DARK_BLUE)
+        # Área de contenido: PanedWindow horizontal [info | central+derecho] para
+        # que el panel de info sea redimensionable con sash frente al viewport.
+        self.content_area = tk.PanedWindow(
+            self.vertical_pane, orient=tk.HORIZONTAL,
+            sashpad=5, sashrelief="solid", bg=DARK_BLUE)
 
         # Panel izquierdo de información del brazo 3D (oculto por defecto)
         self.left_info_panel = Arm3DInfoPanel(self.content_area, self, bg=DARK_BLUE)
+        self._left_info_visible = False
 
         # PanedWindow central+derecho
         self.center_right_pane = tk.PanedWindow(
@@ -75,7 +176,7 @@ class MainApplication(tk.Tk):
         self.arm3d_control_panel = Arm3DControlPanel(
             self.right_notebook, self, bg=DARK_BLUE,
             highlightthickness=1, highlightbackground="black")
-        self.right_notebook.add(self.editor_frame, text="  CÓDIGO  ")
+        self.right_notebook.add(self.editor_frame, text="CÓDIGO")
 
         self.console_frame = ConsoleFrame(self.vertical_pane, self, bg=DARK_BLUE)
 
@@ -103,25 +204,48 @@ class MainApplication(tk.Tk):
         self.tools_frame.pack(fill=tk.X)
         self.vertical_pane.pack(fill="both", expand=True)
 
-        # Layout del área de contenido con grid (permite show/hide del panel izquierdo)
-        self.content_area.grid_columnconfigure(0, weight=0)
-        self.content_area.grid_columnconfigure(1, weight=1)
-        self.content_area.grid_rowconfigure(0, weight=1)
-        self.left_info_panel.grid(row=0, column=0, sticky="nsew")
-        self.left_info_panel.grid_remove()  # oculto inicialmente
-        self.center_right_pane.grid(row=0, column=1, sticky="nsew")
-
         # Notebook: CÓDIGO a la izquierda, CONTROL MANUAL a la derecha
         self.center_right_pane.add(self.drawing_frame, stretch="first", width=900, minsize=100)
-        self.center_right_pane.add(self.right_notebook, width=280, minsize=100)
+        self.center_right_pane.add(self.right_notebook, width=320, minsize=120)
+
+        # El panel central+derecho ocupa todo el área; el panel de info se
+        # inserta a su izquierda solo cuando el Braccio está activo.
+        self.content_area.add(self.center_right_pane, stretch="always", minsize=200)
 
         self.vertical_pane.add(self.content_area, stretch="first", minsize=100)
         self.vertical_pane.add(self.console_frame, stretch="never", height=200, minsize=100)
+
+        self._setup_notebook_tab_scaling()
 
         self.bind("<KeyPress>", self.key_press)
         self.bind("<KeyRelease>", self.key_release)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.challenge = 0
+
+    def _setup_notebook_tab_scaling(self):
+        """Hace que la fuente de las pestañas (CÓDIGO / CONTROL MANUAL) se
+        autoajuste al ancho del notebook para que no se trunquen."""
+        self._nb_tab_font = tkfont.Font(family="Consolas", size=10)
+        try:
+            style = ttk.Style()
+            style.configure("Arm3D.TNotebook.Tab",
+                            font=self._nb_tab_font, padding=(3, 2))
+            self.right_notebook.configure(style="Arm3D.TNotebook")
+            self.right_notebook.bind("<Configure>", self._on_notebook_configure)
+        except Exception:
+            pass
+
+    def _on_notebook_configure(self, event):
+        # Fuente de las pestañas (CÓDIGO + CONTROL MANUAL) proporcional al ancho
+        # del notebook: se reduce para que SIEMPRE quepan sin truncar (diseño
+        # responsive) y crece hasta un tope cuando hay sitio. El divisor está
+        # calibrado para que el texto quepa de verdad en ttk.
+        try:
+            size = max(7, min(11, int(round(event.width / 33.0))))
+            if self._nb_tab_font.cget("size") != size:
+                self._nb_tab_font.configure(size=size)
+        except Exception:
+            pass
 
     def prepare_controller(self):
         self.__update_robot()  # call first so the robot_layer is created
@@ -326,11 +450,26 @@ class MainApplication(tk.Tk):
         else:
             self.drawing_frame.hide_buttons_gamification()
 
+    def _set_left_info_visible(self, visible):
+        """Inserta o quita el panel de info como primer pane del PanedWindow
+        (a la izquierda del viewport), con sash para redimensionarlo."""
+        if visible and not self._left_info_visible:
+            try:
+                self.content_area.add(
+                    self.left_info_panel, before=self.center_right_pane,
+                    width=210, minsize=90, stretch="never")
+            except Exception:
+                self.content_area.add(self.left_info_panel)
+            self._left_info_visible = True
+        elif not visible and self._left_info_visible:
+            self.content_area.forget(self.left_info_panel)
+            self._left_info_visible = False
+
     def show_arm3d_panel(self, showing):
         if showing:
             self._set_arm3d_control_tab_visible(True)
             # Mostrar panel izquierdo de información
-            self.left_info_panel.grid()
+            self._set_left_info_visible(True)
             # Ocultar HUD clásico (la info va al panel izquierdo)
             self.drawing_frame.hide_hud()
             # Mostrar botones de vista de cámara
@@ -343,7 +482,7 @@ class MainApplication(tk.Tk):
             self._set_arm3d_control_tab_visible(False)
             self.set_arm3d_mouse_drag_mode(None)
             # Ocultar panel izquierdo
-            self.left_info_panel.grid_remove()
+            self._set_left_info_visible(False)
             # Restaurar HUD clásico
             self.drawing_frame.show_hud()
             # Ocultar botones de cámara
@@ -357,7 +496,7 @@ class MainApplication(tk.Tk):
         is_visible = control_tab in self.right_notebook.tabs()
         if visible and not is_visible:
             self.right_notebook.add(
-                self.arm3d_control_panel, text="  CONTROL MANUAL  ")
+                self.arm3d_control_panel, text="CONTROL MANUAL")
         elif not visible and is_visible:
             if self.right_notebook.select() == control_tab:
                 self.right_notebook.select(self.editor_frame)
@@ -822,36 +961,76 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         tk.Toplevel.__init__(self, parent, *args, **kwargs)
         self.title("Configuración Brazo 3D")
         self.focus_force()
-        self.resizable(False, False)
+        self.resizable(True, True)
         self.configure(bg=WINDOW_BG)
         self.application = application
         self.motor3d = motor3d_api
         self._parent_window = parent
-        self._ui_scale = 0.82
+        # Escala calculada para que el PEOR caso (DOF6 + ayuda desplegada) quepa
+        # entero en la pantalla: así la ventana nunca se sale ni necesita scroll
+        # (preferencia del usuario: encoger para que todo sea visible).
+        self._ui_scale = self._compute_ui_scale()
+        # Escala de diseño (la mayor): tope al que se vuelve cuando hay sitio.
+        self._design_scale = self._ui_scale
+        # Las fuentes se generan vía FontScaler con tamaño base = size*_ui_scale.
+        # Al redimensionar la ventana se reconstruye el cuerpo a otra _ui_scale,
+        # encogiendo proporcionalmente fuentes Y estructura (paddings) sin perder
+        # el layout original.
+        self._fonts = FontScaler()
+        self._font_cache = {}
+        self._font_scale = 1.0
         self._combo_style_name = "Arm3DConfig.TCombobox"
         self._configure_window_styles()
 
+        # Cuerpo desplazable: el contenido vive en self._scroll_inner; así la
+        # ventana nunca se sale de la pantalla (aparece scroll si hace falta) y
+        # puede redimensionarse. Los botones se anclan fuera del scroll.
+        self._build_scroll_container()
+        self._build_config_body()
+
+        # Anclar el cuerpo desplazable una vez los botones ya reservan su zona
+        # inferior (pack: primero BOTTOM, luego el cuerpo rellena el resto).
+        self._scroll_body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Aplicar estado inicial según el perfil activo (debe ir después de crear todos los widgets)
+        self._apply_preset_display(self._computed_initial_preset)
+
+        self._sync_scroll_layout()
+        self._fit_window_to_content(center=True)
+        # Enlazar el reflujo por redimensionado (reconstruye a otra escala).
+        self._last_fit_scale = self._ui_scale
+        self._resize_job = None
+        self._last_win_size = None
+        self.bind("<Configure>", self._on_window_configure)
+
+    def _build_config_body(self):
+        """Construye el cuerpo de la ventana (perfil/DOF/ayuda/tabla/botones).
+        Aislado para poder reconstruirlo a otra escala (_ui_scale) al
+        redimensionar, encogiendo TODO de forma proporcional."""
+        body = self._scroll_inner
+
         # ---- Frame superior: perfil y DOF ----
         top_frame = tk.Frame(
-            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            body, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        top_frame.pack(fill=tk.X, padx=18, pady=(14, 8))
+        top_frame.pack(fill=tk.X, padx=self._s(18), pady=(self._s(14), self._s(8)))
         top_inner = tk.Frame(top_frame, bg=SURFACE_BG)
-        top_inner.pack(fill=tk.X, padx=12, pady=8)
+        top_inner.pack(fill=tk.X, padx=self._s(12), pady=self._s(8))
 
         top_inner.grid_columnconfigure(0, weight=3)
         top_inner.grid_columnconfigure(1, weight=1)
         top_inner.grid_columnconfigure(2, weight=2)
 
         profile_block = tk.Frame(top_inner, bg=SURFACE_BG)
-        profile_block.grid(row=0, column=0, sticky="ew", padx=(0, 14))
+        profile_block.grid(row=0, column=0, sticky="ew", padx=(0, self._s(14)))
         tk.Label(profile_block, text="Perfil", bg=SURFACE_BG, fg=DARK_BLUE,
                  font=self._font(10, "bold")).pack(anchor="w", pady=(0, self._s(4)))
         self._presets = self.motor3d.repository.list_builtin_presets()
         preset_names = ["Custom"] + sorted(self._presets.keys())
         current_preset = self.motor3d.active_preset_name
         initial_preset = current_preset if current_preset in self._presets else "Custom"
+        self._computed_initial_preset = initial_preset
         self._preset_var = tk.StringVar(value=initial_preset)
         preset_combo = ttk.Combobox(
             profile_block,
@@ -865,7 +1044,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         preset_combo.bind("<<ComboboxSelected>>", self._on_preset_selected)
 
         dof_block = tk.Frame(top_inner, bg=SURFACE_BG)
-        dof_block.grid(row=0, column=1, sticky="ew", padx=(0, 14))
+        dof_block.grid(row=0, column=1, sticky="ew", padx=(0, self._s(14)))
         tk.Label(dof_block, text="DOF", bg=SURFACE_BG, fg=DARK_BLUE,
                  font=self._font(10, "bold")).pack(anchor="w", pady=(0, self._s(4)))
         self._dof_var = tk.IntVar(value=self.motor3d.model.dof)
@@ -928,12 +1107,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._base_row_entries = {}
 
         help_section = tk.Frame(
-            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            body, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        help_section.pack(fill=tk.X, padx=18, pady=(0, 8))
+        help_section.pack(fill=tk.X, padx=self._s(18), pady=(0, self._s(8)))
         help_frame = tk.Frame(help_section, bg=SURFACE_BG)
-        help_frame.pack(fill=tk.X, padx=12, pady=(8, 8))
+        help_frame.pack(fill=tk.X, padx=self._s(12), pady=(self._s(8), self._s(8)))
         self._help_frame = help_frame
         self._help_visible = False
         self._help_btn = tk.Button(
@@ -942,8 +1121,8 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             command=self._toggle_config_help,
             **self._action_button_options(),
         )
-        self._help_btn.configure(anchor="w", justify="left", padx=16)
-        self._help_btn.pack(fill=tk.X, pady=1)
+        self._help_btn.configure(anchor="w", justify="left", padx=self._s(16))
+        self._help_btn.pack(fill=tk.X, pady=self._s(1))
         self._legend_frame = self._build_config_legend(help_frame)
         self._help_body = tk.Frame(
             help_section,
@@ -958,7 +1137,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             bg=SURFACE_ALT_BG,
             bd=0,
             highlightthickness=0,
-            height=72,
+            # Ancho base PEQUEÑO: el canvas rellena por expand, pero su ancho
+            # requerido no debe arrastrar el ancho del contenido (si no, al abrir
+            # la ayuda el contenido se ensancha y rompe el escalado responsive).
+            width=self._s(200),
+            height=self._s(72),
             yscrollincrement=16,
         )
         self._help_scrollbar = tk.Scrollbar(
@@ -981,9 +1164,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         )
         self._help_canvas.bind(
             "<Configure>",
-            lambda event: self._help_canvas.itemconfigure(
-                self._help_canvas_window, width=event.width
-            ),
+            self._on_help_canvas_configure,
         )
         self._help_canvas.bind("<MouseWheel>", self._on_help_mousewheel)
         self._help_content.bind("<MouseWheel>", self._on_help_mousewheel)
@@ -1024,9 +1205,9 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             fg=TEXT_PRIMARY,
             justify="left",
             anchor="w",
-            wraplength=920,
-            padx=10,
-            pady=8,
+            wraplength=self._s(360),
+            padx=self._s(10),
+            pady=self._s(8),
             font=self._font(9),
         )
         self._help_label.pack(fill=tk.X)
@@ -1034,12 +1215,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
         # ---- Tabla DH ----
         table_shell = tk.Frame(
-            self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
+            body, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        table_shell.pack(fill=tk.BOTH, expand=True, padx=18, pady=(0, 8))
+        table_shell.pack(fill=tk.BOTH, expand=True, padx=self._s(18), pady=(0, self._s(8)))
         table_frame = tk.Frame(table_shell, bg=SURFACE_BG)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=8)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=self._s(10), pady=self._s(8))
 
         headers = [
             "J", "Theta (°)", "d (mm)", "a (mm)", "Alpha (°)",
@@ -1048,7 +1229,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         for col, h in enumerate(headers):
             tk.Label(table_frame, text=h, font=self._font(11, "bold"), bg=SURFACE_HEADER_BG,
                      fg="white", relief=tk.SOLID, bd=1, padx=self._s(8),
-                     pady=self._s(7)).grid(row=0, column=col, sticky="nsew", padx=2, pady=(0, self._s(4)))
+                     pady=self._s(7)).grid(row=0, column=col, sticky="nsew", padx=self._s(2), pady=(0, self._s(4)))
         for col in range(len(headers)):
             table_frame.grid_columnconfigure(
                 col, weight=1 if col in (1, 2, 3, 4, 6, 7, 8, 9) else 0
@@ -1060,19 +1241,20 @@ class Arm3DConfigurationWindow(tk.Toplevel):
 
         self._table_frame = table_frame
 
-        # ---- Botones inferiores ----
+        # ---- Botones inferiores (anclados fuera del scroll, siempre visibles) ----
         btn_frame = tk.Frame(
             self, bg=SURFACE_BG, bd=1, relief=tk.SOLID,
             highlightthickness=1, highlightbackground=PANEL_BORDER
         )
-        btn_frame.pack(fill=tk.X, padx=18, pady=(0, 14))
+        btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=self._s(18), pady=(0, self._s(14)))
+        self._btn_frame = btn_frame
         btn_inner = tk.Frame(btn_frame, bg=SURFACE_BG)
-        btn_inner.pack(fill=tk.X, padx=12, pady=8)
+        btn_inner.pack(fill=tk.X, padx=self._s(12), pady=self._s(8))
 
         left_btn_frame = tk.Frame(btn_inner, bg=SURFACE_BG)
-        left_btn_frame.pack(side=tk.LEFT, pady=2)
+        left_btn_frame.pack(side=tk.LEFT, pady=self._s(2))
         right_btn_frame = tk.Frame(btn_inner, bg=SURFACE_BG)
-        right_btn_frame.pack(side=tk.RIGHT, pady=2)
+        right_btn_frame.pack(side=tk.RIGHT, pady=self._s(2))
 
         self._btn_import = tk.Button(
             left_btn_frame,
@@ -1080,42 +1262,49 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             command=self._import_json,
             **self._action_button_options(),
         )
-        self._btn_import.pack(side=tk.LEFT, padx=(0, 12))
+        self._btn_import.pack(side=tk.LEFT, padx=(0, self._s(12)))
         self._btn_export = tk.Button(
             left_btn_frame,
             text="Exportar config",
             command=self._export_json,
             **self._action_button_options(),
         )
-        self._btn_export.pack(side=tk.LEFT, padx=(0, 4))
+        self._btn_export.pack(side=tk.LEFT, padx=(0, self._s(4)))
         self._btn_cancel = tk.Button(
             right_btn_frame,
             text="Cancelar",
             command=self.destroy,
             **self._action_button_options(),
         )
-        self._btn_cancel.pack(side=tk.RIGHT, padx=(12, 0))
+        self._btn_cancel.pack(side=tk.RIGHT, padx=(self._s(12), 0))
         self._btn_save = tk.Button(
             right_btn_frame,
             text="Confirmar",
             command=self._save,
             **self._action_button_options("confirm"),
         )
-        self._btn_save.pack(side=tk.RIGHT, padx=(0, 4))
-
-        # Aplicar estado inicial según el perfil activo (debe ir después de crear todos los widgets)
-        self._apply_preset_display(initial_preset)
-
-        self._fit_window_to_content(center=True)
+        self._btn_save.pack(side=tk.RIGHT, padx=(0, self._s(4)))
 
     def _s(self, value, minimum=1):
         scale = getattr(self, "_ui_scale", 0.82)
         return max(minimum, int(round(value * scale)))
 
     def _font(self, size, *styles):
-        scale = getattr(self, "_ui_scale", 0.82)
-        scaled_size = max(8, int(round(size * scale)))
-        return ("Consolas", scaled_size, *styles)
+        # Tamaño de diseño (incorpora la escala estructural _ui_scale). El factor
+        # vivo _font_scale lo aplica FontScaler.apply() al redimensionar.
+        base = max(7, int(round(size * getattr(self, "_ui_scale", 0.82))))
+        fonts = getattr(self, "_fonts", None)
+        if fonts is None:
+            # Fallback para instancias creadas con __new__ en pruebas.
+            return ("Consolas", base, *styles)
+        weight = "bold" if "bold" in styles else "normal"
+        slant = "italic" if "italic" in styles else "roman"
+        key = (base, weight, slant)
+        f = self._font_cache.get(key)
+        if f is None:
+            f = fonts.font(base, weight, slant)
+            self._font_cache[key] = f
+        return f
 
     def _configure_window_styles(self):
         style = ttk.Style(self)
@@ -1141,13 +1330,312 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             arrowcolor=[("disabled", TEXT_MUTED), ("readonly", TEXT_PRIMARY)],
         )
 
+    # ------------------------------------------------------------------
+    # Escalado adaptativo + cuerpo desplazable
+    # ------------------------------------------------------------------
+    # Tamaño del contenido del peor caso (DOF6 + ayuda desplegada) por unidad de
+    # escala, medido empíricamente: contenido ≈ escala * (K_W, K_H). Sirve para
+    # elegir una escala con la que TODO quepa en pantalla sin scroll.
+    _CONTENT_K_W = 1010.0
+    _CONTENT_K_H = 905.0
+
+    def _compute_ui_scale(self):
+        """Escala de la UI: la mayor posible (diseño compacto) con la que el peor
+        caso de contenido quepa entero en la pantalla actual, en alto y ancho.
+        """
+        try:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+        except Exception:
+            return 0.82
+        # Escala base por altura (≈0.82 en 1080p); y topes para que el peor caso
+        # quepa dejando margen (88% alto, 92% ancho).
+        base = screen_h / 1320.0
+        fit_h = (screen_h * 0.88) / self._CONTENT_K_H
+        fit_w = (screen_w * 0.92) / self._CONTENT_K_W
+        return max(0.5, min(0.85, base, fit_h, fit_w))
+
+    def _build_scroll_container(self):
+        """Crea el contenedor desplazable (canvas + scrollbars + inner frame)."""
+        body = tk.Frame(self, bg=WINDOW_BG)
+        self._scroll_body = body
+        canvas = tk.Canvas(body, bg=WINDOW_BG, bd=0, highlightthickness=0)
+        vbar = tk.Scrollbar(body, orient=tk.VERTICAL, command=canvas.yview)
+        hbar = tk.Scrollbar(body, orient=tk.HORIZONTAL, command=canvas.xview)
+        canvas.configure(yscrollcommand=vbar.set, xscrollcommand=hbar.set)
+        self._scroll_canvas = canvas
+        self._scroll_vbar = vbar
+        self._scroll_hbar = hbar
+        self._vbar_visible = False
+        self._hbar_visible = False
+        inner = tk.Frame(canvas, bg=WINDOW_BG)
+        self._scroll_inner = inner
+        self._scroll_inner_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind("<Configure>", self._on_scroll_inner_configure)
+        canvas.bind("<Configure>", self._on_scroll_canvas_configure)
+        for w in (canvas, inner):
+            w.bind("<MouseWheel>", self._on_body_mousewheel)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    def _on_scroll_inner_configure(self, _event=None):
+        # Se dispara solo cuando el contenido cambia de tamaño real (tras un
+        # relayout natural de Tk): actualiza la región de scroll y la visibilidad
+        # de las barras sin forzar un relayout síncrono costoso.
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None:
+            return
+        try:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            self._set_scrollbar_visibility(
+                self._scroll_inner.winfo_reqheight() > canvas.winfo_height() + 1,
+                self._scroll_inner.winfo_reqwidth() > canvas.winfo_width() + 1,
+            )
+        except Exception:
+            pass
+
+    def _on_scroll_canvas_configure(self, event):
+        """Reevalúa scrollbars y estira el contenido al ancho del canvas.
+
+        Estirar el contenido para que llene el ancho disponible (cuando sobra
+        sitio) es BARATO: solo propaga el ``fill``/``grid`` de los frames ya
+        existentes —no reconstruye widgets ni reenvuelve texto—, así que se hace
+        en vivo durante el arrastre y el contenido rellena el hueco horizontal de
+        inmediato. Lo costoso (~250 ms) es la reconstrucción a otra escala de
+        fuente, que sigue ocurriendo solo al SOLTAR (debounce). Cuando el
+        contenido es más ancho que el canvas se respeta su ancho natural y
+        aparece scroll horizontal."""
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None:
+            return
+        try:
+            content_w = self._scroll_inner.winfo_reqwidth()
+            content_h = self._scroll_inner.winfo_reqheight()
+            fill_w = max(event.width, content_w)
+            if fill_w != getattr(self, "_last_fill_w", None):
+                canvas.itemconfigure(self._scroll_inner_id, width=fill_w)
+                canvas.configure(scrollregion=(0, 0, fill_w, content_h))
+                self._last_fill_w = fill_w
+            self._set_scrollbar_visibility(
+                content_h > event.height + 1,
+                content_w > event.width + 1,
+            )
+        except Exception:
+            pass
+
+    def _on_body_mousewheel(self, event):
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None or not getattr(self, "_vbar_visible", False):
+            return
+        try:
+            delta = event.delta
+        except Exception:
+            return
+        if not delta:
+            return
+        canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+
+    def _sync_scroll_layout(self, set_canvas_size=True):
+        """Ajusta scrollregion, scrollbars y el estirado del contenido.
+
+        ``set_canvas_size``: si True (init/DOF/ayuda) fija además el tamaño
+        REQUERIDO del canvas al del contenido para que la ventana se abra/ajuste
+        a su contenido. Durante el redimensionado (rebuild) se pasa False: la
+        ventana ya tiene el tamaño que puso el usuario y fijar el tamaño del
+        canvas haría que la ventana se encogiera al contenido (rompía el
+        agrandado y la responsividad al abrir la ayuda)."""
+        canvas = getattr(self, "_scroll_canvas", None)
+        if canvas is None:
+            return
+        try:
+            self.update_idletasks()
+            content_w = self._scroll_inner.winfo_reqwidth()
+            content_h = self._scroll_inner.winfo_reqheight()
+            btn_h = 0
+            btn_frame = getattr(self, "_btn_frame", None)
+            if btn_frame is not None:
+                btn_h = btn_frame.winfo_reqheight()
+            # Guardar el tamaño natural a fuente de diseño (factor 1.0) como
+            # referencia para el preview y el cálculo de escala al redimensionar.
+            if abs(getattr(self, "_font_scale", 1.0) - 1.0) < 0.02:
+                self._built_nat_w = content_w
+                self._built_nat_h = content_h + btn_h
+            try:
+                cap_w = int(self.winfo_screenwidth() * 0.94)
+                cap_h = int(self.winfo_screenheight() * 0.90)
+            except Exception:
+                cap_w, cap_h = content_w, content_h
+            view_w = min(content_w, cap_w)
+            view_h = min(content_h, max(cap_h - btn_h, 200))
+            need_v = content_h > view_h + 1
+            need_h = content_w > view_w + 1
+            self._set_scrollbar_visibility(need_v, need_h)
+            # Estirar el contenido para llenar el ancho del canvas cuando sobra
+            # sitio (evita el hueco a la derecha al agrandar). Se hace aquí, en
+            # el "settle", no en cada píxel del arrastre, para no penalizar el
+            # rendimiento. La región de scroll cubre el ancho real mostrado.
+            cw = max(canvas.winfo_width(), 1)
+            fill_w = max(cw, content_w)
+            try:
+                canvas.itemconfigure(self._scroll_inner_id, width=fill_w)
+                self._last_fill_w = fill_w
+            except Exception:
+                pass
+            if set_canvas_size:
+                canvas.configure(
+                    width=view_w, height=view_h,
+                    scrollregion=(0, 0, fill_w, content_h),
+                )
+            else:
+                canvas.configure(scrollregion=(0, 0, fill_w, content_h))
+        except Exception:
+            pass
+
+    def _set_scrollbar_visibility(self, need_v, need_h):
+        vbar = getattr(self, "_scroll_vbar", None)
+        hbar = getattr(self, "_scroll_hbar", None)
+        if vbar is not None and need_v != getattr(self, "_vbar_visible", False):
+            if need_v:
+                vbar.pack(side=tk.RIGHT, fill=tk.Y, before=self._scroll_canvas)
+            else:
+                vbar.pack_forget()
+            self._vbar_visible = need_v
+        if hbar is not None and need_h != getattr(self, "_hbar_visible", False):
+            if need_h:
+                hbar.pack(side=tk.BOTTOM, fill=tk.X, before=self._scroll_canvas)
+            else:
+                hbar.pack_forget()
+            self._hbar_visible = need_h
+
+    def _on_window_configure(self, event):
+        """Redimensionado de la ventana.
+
+        Reconstruir el cuerpo (ttk + tabla + texto con wrap) cuesta ~250 ms, y
+        cualquier reescalado (incluso solo de fuentes) provoca ese relayout. Por
+        eso NO se reescala durante el arrastre —la ventana solo se redimensiona,
+        con su scroll, que es barato— y se reconstruye UNA sola vez a la escala
+        adecuada cuando el arrastre se detiene (debounce), quedando proporcional
+        y sin scroll.
+        """
+        if event.widget is not self:
+            return
+        size = (event.width, event.height)
+        last = getattr(self, "_last_win_size", None)
+        if last is not None and abs(size[0] - last[0]) < 8 and abs(size[1] - last[1]) < 8:
+            return
+        self._last_win_size = size
+        if getattr(self, "_resize_job", None) is not None:
+            try:
+                self.after_cancel(self._resize_job)
+            except Exception:
+                pass
+        self._resize_job = self.after(280, self._apply_resize_scale)
+
+    def _apply_resize_scale(self):
+        self._resize_job = None
+        if not hasattr(self, "tk") or getattr(self, "_scroll_inner", None) is None:
+            return
+        # Escala el contenido para llenar la ventana de forma proporcional, tanto
+        # al ENCOGER como al AGRANDAR (puede crecer por encima del diseño hasta un
+        # tope). Se ajusta a la dimensión limitante para no necesitar scroll; el
+        # hueco horizontal restante lo cubre el estirado del contenido.
+        #
+        # Se itera (máx. 2) re-midiendo el contenido real para converger sin
+        # scroll. Esto solo ocurre al SOLTAR (debounce), una vez por gesto, no
+        # durante el arrastre, por lo que no penaliza la fluidez.
+        max_scale = max(0.95, self._design_scale)
+        for _ in range(2):
+            try:
+                self.update_idletasks()
+                nat_w = self._scroll_inner.winfo_reqwidth()
+                nat_h = self._scroll_inner.winfo_reqheight()
+                btn_frame = getattr(self, "_btn_frame", None)
+                if btn_frame is not None:
+                    nat_h += btn_frame.winfo_reqheight()
+                win_w = self.winfo_width()
+                win_h = self.winfo_height()
+            except Exception:
+                return
+            if nat_w <= 1 or nat_h <= 1 or win_w <= 1:
+                return
+            ratio = min((win_w - 6) / nat_w, (win_h - 6) / nat_h)
+            target = max(0.40, min(max_scale, self._ui_scale * ratio))
+            if abs(target - self._ui_scale) < 0.02:
+                break
+            self._rebuild_config_body(target)
+
+    def _rebuild_config_body(self, scale):
+        """Reconstruye el cuerpo a otra escala conservando el estado editado."""
+        try:
+            cfg = self._snapshot_config_from_inputs(target_dof=self._dof_var.get())
+            self.motor3d.set_model_config(cfg)
+        except Exception:
+            pass
+        saved = {
+            "preset": self._preset_var.get() if hasattr(self, "_preset_var") else "Custom",
+            "dof": self._dof_var.get() if hasattr(self, "_dof_var") else 6,
+            "visual": self._visual_var.get() if hasattr(self, "_visual_var") else None,
+            "fps": self._fps_counter_var.get() if hasattr(self, "_fps_counter_var") else True,
+            "help": getattr(self, "_help_visible", False),
+        }
+        self._ui_scale = scale
+        self._fonts = FontScaler()
+        self._font_cache = {}
+        self._font_scale = 1.0
+        self._configure_window_styles()
+        try:
+            for w in self._scroll_inner.winfo_children():
+                w.destroy()
+            if getattr(self, "_btn_frame", None) is not None:
+                self._btn_frame.destroy()
+        except Exception:
+            pass
+        self._build_config_body()
+        # Reasegurar el orden de empaquetado: el _btn_frame (BOTTOM) recién creado
+        # debe reservar su zona ANTES de que el cuerpo (TOP+expand) rellene el
+        # resto; si no, el cuerpo lo aplasta y los botones desaparecen.
+        try:
+            self._scroll_body.pack_forget()
+            self._scroll_body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        except Exception:
+            pass
+        try:
+            self._dof_var.set(saved["dof"])
+            if saved["visual"] is not None:
+                self._visual_var.set(saved["visual"])
+            self._fps_counter_var.set(saved["fps"])
+            self._preset_var.set(saved["preset"])
+        except Exception:
+            pass
+        self._apply_preset_display(saved["preset"])
+        if saved["help"] and not getattr(self, "_help_visible", False):
+            self._toggle_config_help(refit=False)
+        # Un único layout síncrono: ajusta scroll y captura el tamaño natural a
+        # fuente de diseño. set_canvas_size=False: NO reajustar la ventana al
+        # contenido (la ventana ya tiene el tamaño del usuario durante el
+        # redimensionado; si no, se encogería tras cada rebuild).
+        self._sync_scroll_layout(set_canvas_size=False)
+
     def _fit_window_to_content(self, center=False):
         if not hasattr(self, "tk"):
             return
         self.update_idletasks()
         width = self.winfo_reqwidth()
         height = self.winfo_reqheight()
-        self.minsize(width, height)
+        # Recortar al tamaño de pantalla para que la ventana nunca se salga
+        # (el scroll del cuerpo cubre el contenido que no quepa). Protegido por
+        # try/except para no romper invocaciones de prueba con stubs.
+        try:
+            width = min(width, int(self.winfo_screenwidth() * 0.96))
+            height = min(height, int(self.winfo_screenheight() * 0.94))
+        except Exception:
+            pass
+        # El ANCHO se fija al del contenido: apenas puede encoger (las fuentes
+        # tienen un mínimo legible y la tabla tiene 11 columnas), así que impedir
+        # estrecharlo evita por completo la barra horizontal —incluso cuando
+        # aparece la vertical, que se reserva su hueco dentro de este ancho—.
+        # El ALTO sí puede encoger; si el contenido no cabe, aparece scroll
+        # vertical pero los botones permanecen anclados y visibles.
+        self.minsize(width, min(height, 360))
 
         if center:
             parent = getattr(self, "_parent_window", None)
@@ -1406,7 +1894,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             table_frame, text="0", font=self._font(11, "bold"),
             width=self._s(3), bg=SURFACE_BG, fg=TEXT_MUTED
         )
-        base_lbl.grid(row=1, column=0, sticky="nsew", padx=2, pady=2)
+        base_lbl.grid(row=1, column=0, sticky="nsew", padx=self._s(2), pady=self._s(2))
         self._base_row_widgets.append(base_lbl)
 
         for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
@@ -1419,7 +1907,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self._remember_semantic_state(entry, "disabled" if disabled else "normal")
             if disabled:
                 entry.configure(state="disabled")
-            entry.grid(row=1, column=col + 1, sticky="nsew", padx=2, pady=2)
+            entry.grid(row=1, column=col + 1, sticky="nsew", padx=self._s(2), pady=self._s(2))
             self._base_row_entries[key] = entry
             self._base_row_widgets.append(entry)
             self._base_row_controls.append(entry)
@@ -1433,7 +1921,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._remember_semantic_state(type_entry, "disabled" if type_disabled else "normal")
         if type_disabled:
             type_entry.configure(state="disabled")
-        type_entry.grid(row=1, column=5, sticky="nsew", padx=2, pady=2)
+        type_entry.grid(row=1, column=5, sticky="nsew", padx=self._s(2), pady=self._s(2))
         self._base_row_widgets.append(type_entry)
 
         for col in (6, 7, 8, 9, 10):
@@ -1446,12 +1934,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self._remember_semantic_state(lim_entry, "disabled" if meta_disabled else "normal")
             if meta_disabled:
                 lim_entry.configure(state="disabled")
-            lim_entry.grid(row=1, column=col, sticky="nsew", padx=2, pady=2)
+            lim_entry.grid(row=1, column=col, sticky="nsew", padx=self._s(2), pady=self._s(2))
             self._base_row_widgets.append(lim_entry)
 
         note = tk.Label(table_frame, text="fija", font=self._font(9),
                         bg=SURFACE_BG, fg=TEXT_MUTED)
-        note.grid(row=1, column=11, padx=2, pady=2)
+        note.grid(row=1, column=11, padx=self._s(2), pady=self._s(2))
         self._base_row_widgets.append(note)
 
         for i in range(n):
@@ -1468,7 +1956,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 table_frame, text=str(i + 1), font=self._font(11, "bold"),
                 width=self._s(3), bg=SURFACE_BG, fg=TEXT_MUTED
             )
-            joint_lbl.grid(row=grid_row, column=0, sticky="nsew", padx=2, pady=2)
+            joint_lbl.grid(row=grid_row, column=0, sticky="nsew", padx=self._s(2), pady=self._s(2))
 
             dh_entries = []
             for col, key in enumerate(['theta', 'd', 'a', 'alpha']):
@@ -1481,7 +1969,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 self._remember_semantic_state(e, "disabled" if disabled else "normal")
                 if disabled:
                     e.configure(state="disabled")
-                e.grid(row=grid_row, column=col + 1, sticky="nsew", padx=2, pady=2)
+                e.grid(row=grid_row, column=col + 1, sticky="nsew", padx=self._s(2), pady=self._s(2))
                 dh_entries.append(e)
             row_entries.extend(dh_entries)
 
@@ -1496,7 +1984,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 self._remember_semantic_state(direction_entry, "disabled" if direction_disabled else "normal")
                 if direction_disabled:
                     direction_entry.configure(state="disabled")
-                direction_entry.grid(row=grid_row, column=offset + 8, sticky="nsew", padx=2, pady=2)
+                direction_entry.grid(row=grid_row, column=offset + 8, sticky="nsew", padx=self._s(2), pady=self._s(2))
                 direction_entries.append(direction_entry)
 
             def _make_type_cb(combo, theta_e, d_e, a_e, direction_widgets, unit_widget):
@@ -1563,7 +2051,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             )
             type_combo.set(jtype)
             self._remember_semantic_state(type_combo, "readonly")
-            type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=2, pady=2)
+            type_combo.grid(row=grid_row, column=5, sticky="nsew", padx=self._s(2), pady=self._s(2))
             row_entries.append(type_combo)
 
             lim_unit = "mm" if jtype == 'P' else "deg"
@@ -1572,14 +2060,14 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 **self._entry_options("standard")
             )
             e_min.insert(0, str(round(float(lims[0]), 1)))
-            e_min.grid(row=grid_row, column=6, sticky="nsew", padx=2, pady=2)
+            e_min.grid(row=grid_row, column=6, sticky="nsew", padx=self._s(2), pady=self._s(2))
 
             e_max = tk.Entry(
                 table_frame, font=self._font(11), width=self._s(7),
                 **self._entry_options("standard")
             )
             e_max.insert(0, str(round(float(lims[1]), 1)))
-            e_max.grid(row=grid_row, column=7, sticky="nsew", padx=2, pady=2)
+            e_max.grid(row=grid_row, column=7, sticky="nsew", padx=self._s(2), pady=self._s(2))
 
             pin_entry = tk.Entry(
                 table_frame, font=self._font(11), width=self._s(6),
@@ -1588,13 +2076,13 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             if servo_pin is not None:
                 pin_entry.insert(0, str(servo_pin))
             self._remember_semantic_state(pin_entry, "normal")
-            pin_entry.grid(row=grid_row, column=10, sticky="nsew", padx=2, pady=2)
+            pin_entry.grid(row=grid_row, column=10, sticky="nsew", padx=self._s(2), pady=self._s(2))
 
             unit_lbl = tk.Label(
                 table_frame, text=lim_unit, font=self._font(9),
                 bg=SURFACE_BG, fg=TEXT_MUTED
             )
-            unit_lbl.grid(row=grid_row, column=11, padx=2, pady=2)
+            unit_lbl.grid(row=grid_row, column=11, padx=self._s(2), pady=self._s(2))
 
             type_combo.bind(
                 "<<ComboboxSelected>>",
@@ -1816,6 +2304,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self._sync_arm3d_servo_pin_mapping()
         self._build_dh_rows(self._table_frame)
         self._refresh_base_row_entries()
+        self._sync_scroll_layout()
         self._fit_window_to_content()
 
     def _refresh_base_row_entries(self):
@@ -1832,7 +2321,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             if prev_state == "disabled":
                 entry.configure(state="disabled")
 
-    def _toggle_config_help(self):
+    def _toggle_config_help(self, refit=True):
         if self._help_visible:
             self._help_body.pack_forget()
             self._help_frame.pack_configure(pady=(12, 12))
@@ -1853,7 +2342,22 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                 relief=tk.SUNKEN,
             )
             self._help_visible = True
-        self._fit_window_to_content()
+        # refit=False cuando se invoca desde el rebuild de redimensionado: NO
+        # reajustar la ventana al contenido (la dimensiona el usuario); el sync
+        # del propio rebuild se encarga del scroll.
+        if refit:
+            self._sync_scroll_layout()
+            self._fit_window_to_content()
+
+    def _on_help_canvas_configure(self, event):
+        """Ajusta el contenido de la ayuda al ancho real del canvas y reenvuelve
+        el texto a ese ancho, para que NUNCA fuerce un ancho mayor que el resto
+        del contenido (lo que rompía la responsividad al abrir la ayuda)."""
+        try:
+            self._help_canvas.itemconfigure(self._help_canvas_window, width=event.width)
+            self._help_label.configure(wraplength=max(80, event.width - self._s(14)))
+        except Exception:
+            pass
 
     def _on_help_mousewheel(self, event):
         try:
@@ -2294,13 +2798,32 @@ class Arm3DControlPanel(tk.Frame):
         self._sliders_locked = False
         self._slider_sync_cache = []
 
-        # --- Cinemática Directa: sliders verticales ---
-        tk.Label(self, text="Cinemática Directa",
-                 bg=DARK_BLUE, fg="#00E5CC",
-                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(8, 2))
+        # Fuentes escalables: se reflujan en _on_configure según el ancho del
+        # panel para que nada se recorte cuando el usuario estrecha la pestaña.
+        self._fonts = FontScaler()
+        self._f_section = self._fonts.font(10, "bold")
+        self._f_label = self._fonts.font(9)
+        self._f_value = self._fonts.font(9)
+        self._f_ik = self._fonts.font(10)
+        self._f_entry = self._fonts.font(10)
+        self._f_button = self._fonts.font(10)
+        self._f_status = self._fonts.font(9)
+        self._last_font_scale = None
 
-        sliders_container = tk.Frame(self, bg=DARK_BLUE)
-        sliders_container.pack(fill=tk.X, padx=4)
+        # Cuerpo con scroll vertical automático para la pestaña Control Manual.
+        self._scroll = VScrollFrame(self, bg=DARK_BLUE)
+        self._scroll.pack(fill=tk.BOTH, expand=True)
+        body = self._scroll.body
+
+        # --- Cinemática Directa: sliders verticales ---
+        tk.Label(body, text="Cinemática Directa",
+                 bg=DARK_BLUE, fg="#00E5CC",
+                 font=self._f_section).pack(anchor="w", padx=8, pady=(8, 2))
+
+        sliders_container = tk.Frame(body, bg=DARK_BLUE)
+        # Gutter derecho para que la columna de valores nunca quede pegada al
+        # borde del panel/notebook (evita el recorte del último dígito).
+        sliders_container.pack(fill=tk.X, padx=(6, 12))
         sliders_container.columnconfigure(1, weight=1)
         self._sliders_container = sliders_container
 
@@ -2309,8 +2832,8 @@ class Arm3DControlPanel(tk.Frame):
         self._jlabels = []
         for i in range(self._MAX_DOF):
             jlbl = tk.Label(sliders_container, text=f"J{i + 1}",
-                            bg=DARK_BLUE, fg="white", font=("Consolas", 9),
-                            width=5, anchor="e")
+                            bg=DARK_BLUE, fg="white", font=self._f_label,
+                            width=4, anchor="e")
             jlbl.grid(row=i, column=0, padx=(4, 2), pady=1, sticky="e")
 
             slider = tk.Scale(
@@ -2327,8 +2850,8 @@ class Arm3DControlPanel(tk.Frame):
 
             val_lbl = tk.Label(sliders_container, text=f"90{chr(176)}",
                                bg=DARK_BLUE, fg="white",
-                               font=("Consolas", 9), width=6, anchor="e")
-            val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="w")
+                               font=self._f_value, width=5, anchor="e")
+            val_lbl.grid(row=i, column=2, padx=(2, 4), pady=1, sticky="e")
 
             self._sliders.append(slider)
             self._val_labels.append(val_lbl)
@@ -2341,51 +2864,75 @@ class Arm3DControlPanel(tk.Frame):
             })
 
         # --- Separador ---
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
+        tk.Frame(body, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=6)
 
         # --- Cinemática Inversa ---
-        tk.Label(self, text="Cinemática Inversa",
+        tk.Label(body, text="Cinemática Inversa",
                  bg=DARK_BLUE, fg="#00E5CC",
-                 font=("Consolas", 10, "bold")).pack(anchor="w", padx=8, pady=(0, 4))
+                 font=self._f_section).pack(anchor="w", padx=8, pady=(0, 4))
 
-        ik_coords = tk.Frame(self, bg=DARK_BLUE)
+        ik_coords = tk.Frame(body, bg=DARK_BLUE)
         ik_coords.pack(fill=tk.X, padx=8)
 
+        # Columnas de entrada con peso para que los campos X/Y/Z se expandan y
+        # nunca queden recortados al estrechar el panel.
         for col_i, axis in enumerate(["X", "Y", "Z"]):
             tk.Label(ik_coords, text=f"{axis}:", bg=DARK_BLUE, fg="white",
-                     font=("Consolas", 10)).grid(row=0, column=col_i * 2, padx=(4, 1), sticky="e")
-        self._entry_x = tk.Entry(ik_coords, width=6, font=("Consolas", 10))
-        self._entry_y = tk.Entry(ik_coords, width=6, font=("Consolas", 10))
-        self._entry_z = tk.Entry(ik_coords, width=6, font=("Consolas", 10))
+                     font=self._f_ik).grid(row=0, column=col_i * 2, padx=(4, 1), sticky="e")
+            ik_coords.grid_columnconfigure(col_i * 2 + 1, weight=1, uniform="ik")
+        self._entry_x = tk.Entry(ik_coords, width=4, font=self._f_entry)
+        self._entry_y = tk.Entry(ik_coords, width=4, font=self._f_entry)
+        self._entry_z = tk.Entry(ik_coords, width=4, font=self._f_entry)
         self._entry_x.insert(0, "0")
         self._entry_y.insert(0, "0")
         self._entry_z.insert(0, "400")
-        self._entry_x.grid(row=0, column=1, padx=(0, 4))
-        self._entry_y.grid(row=0, column=3, padx=(0, 4))
-        self._entry_z.grid(row=0, column=5, padx=(0, 4))
+        self._entry_x.grid(row=0, column=1, padx=(0, 4), sticky="ew")
+        self._entry_y.grid(row=0, column=3, padx=(0, 4), sticky="ew")
+        self._entry_z.grid(row=0, column=5, padx=(0, 4), sticky="ew")
 
-        btn_frame = tk.Frame(self, bg=DARK_BLUE)
+        btn_frame = tk.Frame(body, bg=DARK_BLUE)
         btn_frame.pack(fill=tk.X, padx=8, pady=4)
 
         self._btn_ik = tk.Button(btn_frame, text="Confirmar Posición",
                                  bg=BLUE, bd=0, fg=DARK_BLUE,
-                                 font=("Consolas", 10), command=self._on_ik)
+                                 font=self._f_button, command=self._on_ik)
         self._btn_ik.pack(fill=tk.X, pady=(0, 3))
 
         self._btn_reset_cam = tk.Button(btn_frame, text="Reset Cámara",
                                         bg=BLUE, bd=0, fg=DARK_BLUE,
-                                        font=("Consolas", 10), command=self._on_reset_cam)
+                                        font=self._f_button, command=self._on_reset_cam)
         self._btn_reset_cam.pack(fill=tk.X)
 
-        self._lbl_ik_status = tk.Label(self, text="", bg=DARK_BLUE, fg="#aaffaa",
-                                       font=("Consolas", 9), wraplength=240, justify=tk.LEFT)
+        self._lbl_ik_status = tk.Label(body, text="", bg=DARK_BLUE, fg="#aaffaa",
+                                       font=self._f_status, wraplength=240, justify=tk.LEFT)
         self._lbl_ik_status.pack(anchor="w", padx=8, pady=2)
 
         # --- Separador ---
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=4)
+        tk.Frame(body, bg=BLUE, height=1).pack(fill=tk.X, padx=6, pady=4)
+
+        # Reenlazar la rueda del ratón ahora que el contenido existe.
+        self._scroll.bind_wheel(self._scroll.body)
+        # Reflujo de fuentes según el ancho real del panel.
+        self.bind("<Configure>", self._on_configure)
 
         # --- Toggles de visualización ---
     # ------------------------------------------------------------------ helpers
+
+    def _on_configure(self, event):
+        """Escala las fuentes del panel en función de su ancho disponible."""
+        width = event.width
+        if width <= 1:
+            return
+        # Ancho de diseño en el que las fuentes base encajan sin recortes.
+        scale = max(0.6, min(1.15, width / 320.0))
+        if self._last_font_scale is not None and abs(scale - self._last_font_scale) < 0.02:
+            return
+        self._last_font_scale = scale
+        self._fonts.apply(scale)
+        try:
+            self._lbl_ik_status.configure(wraplength=max(80, width - 24))
+        except Exception:
+            pass
 
     def _get_model(self):
         layer = self._get_layer()
@@ -2585,26 +3132,44 @@ class Arm3DInfoPanel(tk.Frame):
     Solo visible cuando el robot Braccio (opción 5) está activo.
     """
 
+    _BASE_WIDTH = 210
+
     def __init__(self, parent, application=None, *args, **kwargs):
         kwargs.setdefault('bg', DARK_BLUE)
         tk.Frame.__init__(self, parent, *args, **kwargs)
         self.application = application
-        self.configure(width=210)
-        self.pack_propagate(False)
+
+        # Cuerpo con scroll vertical automático: si el contenido no cabe en alto,
+        # aparece la barra sola. El panel es redimensionable (sash del PanedWindow).
+        self._scroll = VScrollFrame(self, bg=DARK_BLUE)
+        self._scroll.pack(fill=tk.BOTH, expand=True)
+        body = self._scroll.body
+
+        # Fuentes escalables: se reescalan en _on_configure según el ancho real
+        # del panel (al estrechar el sash encogen proporcionalmente).
+        self._fonts = FontScaler()
+        self._f_title = self._fonts.font(10, "bold")
+        self._f_section = self._fonts.font(9, "bold")
+        self._f_label = self._fonts.font(9)
+        self._f_value = self._fonts.font(9)
+        self._f_limit = self._fonts.font(8)
+        self._f_status = self._fonts.font(9)
+        self._f_toggle = self._fonts.font(9)
+        self._last_scale = None
 
         # Título
-        tk.Label(self, text="Brazo Robótico 3D",
+        tk.Label(body, text="Brazo Robótico 3D",
                  bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 10, "bold")).pack(pady=(10, 4), padx=6, fill=tk.X)
+                 font=self._f_title).pack(pady=(10, 4), padx=6, fill=tk.X)
 
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4)
+        tk.Frame(body, bg=BLUE, height=1).pack(fill=tk.X, padx=4)
 
         # --- Efector final ---
-        tk.Label(self, text="Efector Final",
+        tk.Label(body, text="Efector Final",
                  bg=DARK_BLUE, fg="#00E5CC",
-                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=self._f_section).pack(anchor="w", padx=10, pady=(0, 2))
 
-        ee_frame = tk.Frame(self, bg=DARK_BLUE)
+        ee_frame = tk.Frame(body, bg=DARK_BLUE)
         ee_frame.pack(fill=tk.X, padx=8)
 
         self._lbl_ee = {}
@@ -2612,20 +3177,20 @@ class Arm3DInfoPanel(tk.Frame):
             row = tk.Frame(ee_frame, bg=DARK_BLUE)
             row.pack(fill=tk.X, pady=1)
             tk.Label(row, text=f"{axis}:", bg=DARK_BLUE, fg="white",
-                     font=("Consolas", 9), width=3, anchor="e").pack(side=tk.LEFT)
+                     font=self._f_label, width=3, anchor="e").pack(side=tk.LEFT)
             val = tk.Label(row, text="--- mm", bg=DARK_BLUE, fg="#00E5CC",
-                           font=("Consolas", 9), anchor="w")
+                           font=self._f_value, anchor="w")
             val.pack(side=tk.LEFT, padx=4)
             self._lbl_ee[axis] = val
 
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
+        tk.Frame(body, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
 
         # --- Articulaciones ---
-        tk.Label(self, text="Articulaciones",
+        tk.Label(body, text="Articulaciones",
                  bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=self._f_section).pack(anchor="w", padx=10, pady=(0, 2))
 
-        joints_frame = tk.Frame(self, bg=DARK_BLUE)
+        joints_frame = tk.Frame(body, bg=DARK_BLUE)
         joints_frame.pack(fill=tk.X, padx=8)
 
         self._lbl_joints = []
@@ -2634,58 +3199,78 @@ class Arm3DInfoPanel(tk.Frame):
             row = tk.Frame(joints_frame, bg=DARK_BLUE)
             row.pack(fill=tk.X, pady=1)
             tk.Label(row, text=f"J{i + 1}:", bg=DARK_BLUE, fg="white",
-                     font=("Consolas", 9), width=3, anchor="e").pack(side=tk.LEFT)
+                     font=self._f_label, width=3, anchor="e").pack(side=tk.LEFT)
             val = tk.Label(row, text="---°", bg=DARK_BLUE, fg="white",
-                           font=("Consolas", 9), width=5, anchor="w")
+                           font=self._f_value, width=5, anchor="w")
             val.pack(side=tk.LEFT, padx=2)
             lim = tk.Label(row, text="[---,---]", bg=DARK_BLUE, fg="#AACCFF",
-                           font=("Consolas", 8), anchor="w")
+                           font=self._f_limit, anchor="w")
             lim.pack(side=tk.LEFT, padx=2)
             self._lbl_joints.append(val)
             self._lbl_joint_limits.append(lim)
 
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
+        tk.Frame(body, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
 
         # --- Estado ---
-        tk.Label(self, text="Estado",
+        tk.Label(body, text="Estado",
                  bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=self._f_section).pack(anchor="w", padx=10, pady=(0, 2))
 
-        self._lbl_status = tk.Label(self, text="OK",
+        self._lbl_status = tk.Label(body, text="OK",
                                     bg=DARK_BLUE, fg="#aaffaa",
-                                    font=("Consolas", 9), wraplength=195,
+                                    font=self._f_status, wraplength=195,
                                     justify=tk.LEFT, anchor="w")
         self._lbl_status.pack(anchor="w", padx=10, pady=2)
 
-        tk.Frame(self, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
+        tk.Frame(body, bg=BLUE, height=1).pack(fill=tk.X, padx=4, pady=6)
 
-        tk.Label(self, text="Visualización",
+        tk.Label(body, text="Visualización",
                  bg=DARK_BLUE, fg="white",
-                 font=("Consolas", 9, "bold")).pack(anchor="w", padx=10, pady=(0, 2))
+                 font=self._f_section).pack(anchor="w", padx=10, pady=(0, 2))
 
-        toggles_frame = tk.Frame(self, bg=DARK_BLUE)
+        toggles_frame = tk.Frame(body, bg=DARK_BLUE)
         toggles_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
 
         self._trail_var = tk.BooleanVar(value=True)
         tk.Checkbutton(toggles_frame, text="Trayectoria",
                        variable=self._trail_var,
                        bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
-                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       font=self._f_toggle, activebackground=DARK_BLUE,
                        command=self._on_trail_toggle).pack(anchor="w")
 
         self._joint_ranges_var = tk.BooleanVar(value=False)
         tk.Checkbutton(toggles_frame, text="Rangos articulares",
                        variable=self._joint_ranges_var,
                        bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
-                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       font=self._f_toggle, activebackground=DARK_BLUE,
                        command=self._on_joint_ranges_toggle).pack(anchor="w")
 
         self._joint_axes_var = tk.BooleanVar(value=False)
         tk.Checkbutton(toggles_frame, text="Ejes XYZ",
                        variable=self._joint_axes_var,
                        bg=DARK_BLUE, fg="white", selectcolor=DARK_BLUE,
-                       font=("Consolas", 9), activebackground=DARK_BLUE,
+                       font=self._f_toggle, activebackground=DARK_BLUE,
                        command=self._on_joint_axes_toggle).pack(anchor="w")
+
+        # Reenlazar la rueda del ratón ahora que el contenido existe.
+        self._scroll.bind_wheel(self._scroll.body)
+        self.bind("<Configure>", self._on_configure)
+
+    def _on_configure(self, event):
+        """Reflujo: escala las fuentes según el ancho real del panel; el scroll
+        vertical de VScrollFrame se encarga del desbordamiento en alto."""
+        width = event.width
+        if width <= 1:
+            return
+        scale = max(0.7, min(1.1, width / self._BASE_WIDTH))
+        if self._last_scale is not None and abs(scale - self._last_scale) < 0.02:
+            return
+        self._last_scale = scale
+        self._fonts.apply(scale)
+        try:
+            self._lbl_status.configure(wraplength=max(110, width - 18))
+        except Exception:
+            pass
 
     def apply_visual_toggles(self):
         self._on_trail_toggle()
@@ -2768,24 +3353,34 @@ class DrawingFrame(tk.Frame):
         # Presets de cámara 3D visibles solo para Braccio.
         self.cam_buttons_frame = tk.Frame(self.canvas_frame, bg=DARK_BLUE,
                                           highlightthickness=1, highlightbackground=BLUE)
+        # Dos sub-filas (vistas / modos) que se apilan cuando el viewport es
+        # estrecho para que la barra de cámara no se salga del lienzo.
+        self._cam_views_row = tk.Frame(self.cam_buttons_frame, bg=DARK_BLUE)
+        self._cam_modes_row = tk.Frame(self.cam_buttons_frame, bg=DARK_BLUE)
+        self._cam_rows_stacked = None
         self._camera_view_buttons = {}
         self._camera_drag_buttons = {}
         self._selected_camera_view = None
         self._selected_camera_drag_mode = None
-        for _text, _view, _icon in [
-            ("Libre", None, self.cam_free_icon),
-            ("Caballera", "caballera", self.cam_caballera_icon),
-            ("Isométrica", "isometrica", self.cam_isometrica_icon),
+        # Fuente escalable e iconos en tiers: la barra encoge proporcionalmente.
+        self._cam_font_scaler = FontScaler()
+        self._cam_font = self._cam_font_scaler.font(8, "bold")
+        self._cam_buttons = []          # (button, icon_key)
+        self._cam_icon_size = 26
+        for _text, _view, _icon_key in [
+            ("Libre", None, "free"),
+            ("Caballera", "caballera", "caballera"),
+            ("Isométrica", "isometrica", "isometrica"),
         ]:
             button = tk.Button(
-                self.cam_buttons_frame,
+                self._cam_views_row,
                 text=_text,
-                image=_icon,
+                image=self._cam_icons[_icon_key][26],
                 compound=tk.TOP,
                 justify=tk.CENTER,
                 bg=DARK_BLUE,
                 fg="white",
-                font=("Consolas", 8, "bold"),
+                font=self._cam_font,
                 bd=0,
                 padx=8,
                 pady=4,
@@ -2798,21 +3393,22 @@ class DrawingFrame(tk.Frame):
             )
             button.pack(side=tk.LEFT, padx=2, pady=2)
             self._camera_view_buttons[_view] = button
+            self._cam_buttons.append((button, _icon_key))
 
-        for _text, _mode, _icon in [
-            ("Rotar", "rotate", self.cam_rotate_icon),
-            ("Desplazar", "pan", self.cam_pan_icon),
-            ("Zoom", "zoom", self.cam_zoom_icon),
+        for _text, _mode, _icon_key in [
+            ("Rotar", "rotate", "rotate"),
+            ("Desplazar", "pan", "pan"),
+            ("Zoom", "zoom", "zoom"),
         ]:
             button = tk.Button(
-                self.cam_buttons_frame,
+                self._cam_modes_row,
                 text=_text,
-                image=_icon,
+                image=self._cam_icons[_icon_key][26],
                 compound=tk.TOP,
                 justify=tk.CENTER,
                 bg=DARK_BLUE,
                 fg="white",
-                font=("Consolas", 8, "bold"),
+                font=self._cam_font,
                 bd=0,
                 padx=8,
                 pady=4,
@@ -2825,7 +3421,11 @@ class DrawingFrame(tk.Frame):
             )
             button.pack(side=tk.LEFT, padx=2, pady=2)
             self._camera_drag_buttons[_mode] = button
+            self._cam_buttons.append((button, _icon_key))
+        self._layout_camera_rows(stacked=False)
         self._refresh_camera_button_selection()
+        # Reflujo + escalado de la barra de cámara según el ancho del viewport.
+        self.canvas_frame.bind("<Configure>", self._on_canvas_frame_configure)
 
         self.bottom_frame = tk.Frame(self, bg=BLUE)
         self.key_movement = tk.Checkbutton(self.bottom_frame, text="Movimiento con el teclado", fg="white",
@@ -2932,10 +3532,23 @@ class DrawingFrame(tk.Frame):
         if not label:
             self.arm3d_mouse_mode_hint.place_forget()
             return
-        self.arm3d_mouse_mode_hint.configure(
-            text=f"Modo ratón: {label} | pulsa una tecla para salir"
-        )
-        self.arm3d_mouse_mode_hint.place(relx=0.0, rely=1.0, anchor="sw", x=8, y=-8)
+        # Texto y fuente según el ancho disponible; anclado arriba-izquierda para
+        # no solaparse con la barra de cámara (abajo-derecha).
+        try:
+            width = self.canvas_frame.winfo_width()
+        except Exception:
+            width = 0
+        if width and width < 360:
+            text = f"Ratón: {label}"
+            font = ("Consolas", 7, "bold")
+        elif width and width < 520:
+            text = f"Modo ratón: {label}"
+            font = ("Consolas", 8, "bold")
+        else:
+            text = f"Modo ratón: {label} | pulsa una tecla para salir"
+            font = ("Consolas", 8, "bold")
+        self.arm3d_mouse_mode_hint.configure(text=text, font=font)
+        self.arm3d_mouse_mode_hint.place(relx=0.0, rely=0.0, anchor="nw", x=8, y=8)
 
     def _handle_arm3d_mouse_drag(self, event):
         dx = event.x - self.init_x
@@ -3072,6 +3685,59 @@ class DrawingFrame(tk.Frame):
         """Oculta los botones de navegación de cámara 3D."""
         self.cam_buttons_frame.place_forget()
 
+    def _layout_camera_rows(self, stacked):
+        """Coloca las dos sub-filas de la barra de cámara en una sola fila
+        (lado a lado) o apiladas (vistas arriba, modos abajo)."""
+        if stacked == self._cam_rows_stacked:
+            return
+        self._cam_rows_stacked = stacked
+        self._cam_views_row.grid_forget()
+        self._cam_modes_row.grid_forget()
+        if stacked:
+            self._cam_views_row.grid(row=0, column=0, sticky="e")
+            self._cam_modes_row.grid(row=1, column=0, sticky="e")
+        else:
+            self._cam_views_row.grid(row=0, column=0)
+            self._cam_modes_row.grid(row=0, column=1)
+
+    def _apply_camera_scale(self, width):
+        """Escala iconos, fuente y padding de los botones de cámara por tiers
+        según el ancho del viewport (encoge de forma proporcional)."""
+        if width >= 620:
+            icon, fscale, pad = 26, 1.0, (8, 4)
+        elif width >= 470:
+            icon, fscale, pad = 22, 0.92, (6, 3)
+        elif width >= 360:
+            icon, fscale, pad = 18, 0.82, (4, 3)
+        else:
+            icon, fscale, pad = 14, 0.72, (3, 2)
+        if icon == getattr(self, "_cam_icon_size", None):
+            return
+        self._cam_icon_size = icon
+        for button, key in getattr(self, "_cam_buttons", []):
+            try:
+                button.configure(image=self._cam_icons[key][icon],
+                                 padx=pad[0], pady=pad[1])
+            except Exception:
+                pass
+        self._cam_font_scaler.apply(fscale, minimum=6)
+
+    def _on_canvas_frame_configure(self, event):
+        """Escala la barra de cámara y la apila en dos filas cuando el viewport
+        es demasiado estrecho para mostrar los 6 botones en una sola fila."""
+        self._apply_camera_scale(event.width)
+        try:
+            self.update_idletasks()
+            one_row = (self._cam_views_row.winfo_reqwidth()
+                       + self._cam_modes_row.winfo_reqwidth() + 12)
+        except Exception:
+            return
+        if not self._cam_rows_stacked and event.width < one_row + 16:
+            self._layout_camera_rows(stacked=True)
+        elif self._cam_rows_stacked and event.width > one_row + 44:
+            self._layout_camera_rows(stacked=False)
+        self._update_arm3d_mouse_mode_hint()
+
     def _on_cam_preset(self, view_name):
         """Callback de los botones de preset de cámara."""
         self._selected_camera_view = view_name
@@ -3101,7 +3767,7 @@ class DrawingFrame(tk.Frame):
             bg = selected_bg if mode_name == self._selected_camera_drag_mode else normal_bg
             button.configure(bg=bg, activebackground=selected_bg)
 
-    def _build_camera_drag_icon(self, mode_name):
+    def _render_camera_drag_icon(self, mode_name):
         icon_size = 26
         image = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
@@ -3136,7 +3802,7 @@ class DrawingFrame(tk.Frame):
             draw.arc((5, 5, 21, 21), start=25, end=315, fill=color, width=2)
             _draw_arrow((18, 6), (21, 9), color)
             draw.ellipse((11, 11, 15, 15), fill=accent)
-            return ImageTk.PhotoImage(image)
+            return image
 
         if mode_name == "pan":
             _draw_arrow((13, 13), (13, 4), color)
@@ -3144,18 +3810,18 @@ class DrawingFrame(tk.Frame):
             _draw_arrow((13, 13), (13, 22), color)
             _draw_arrow((13, 13), (4, 13), color)
             draw.ellipse((11, 11, 15, 15), fill=accent)
-            return ImageTk.PhotoImage(image)
+            return image
 
         if mode_name == "zoom":
             draw.ellipse((5, 5, 17, 17), outline=color, width=2)
             draw.line([(15, 15), (22, 22)], fill=color, width=2)
             draw.line([(8, 11), (14, 11)], fill=accent, width=2)
             draw.line([(11, 8), (11, 14)], fill=accent, width=2)
-            return ImageTk.PhotoImage(image)
+            return image
 
-        return ImageTk.PhotoImage(image)
+        return image
 
-    def _build_camera_preset_icon(self, preset_name):
+    def _render_camera_preset_icon(self, preset_name):
         icon_size = 26
         image = Image.new("RGBA", (icon_size, icon_size), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
@@ -3199,7 +3865,7 @@ class DrawingFrame(tk.Frame):
             _draw_arrow((18, 8), (21, 10), orbit_color)
             _draw_arrow((7, 17), (4, 15), orbit_color)
             draw.ellipse((11, 11, 14, 14), fill=orbit_color)
-            return ImageTk.PhotoImage(image)
+            return image
 
         if preset_name == "caballera":
             origin = (6.0, 20.0)
@@ -3245,7 +3911,7 @@ class DrawingFrame(tk.Frame):
             ),
             fill=box_color,
         )
-        return ImageTk.PhotoImage(image)
+        return image
 
     def __load_images(self):
         self.zoom_img = tk.PhotoImage(file="buttons/zoom.png")
@@ -3254,12 +3920,30 @@ class DrawingFrame(tk.Frame):
         self.dezoom_img = tk.PhotoImage(file="buttons/dezoom.png")
         self.dezoom_whi_img = tk.PhotoImage(file="buttons/dezoom_w.png")
         self.dezoom_yel_img = tk.PhotoImage(file="buttons/dezoom_y.png")
-        self.cam_free_icon = self._build_camera_preset_icon("free")
-        self.cam_caballera_icon = self._build_camera_preset_icon("caballera")
-        self.cam_isometrica_icon = self._build_camera_preset_icon("isometrica")
-        self.cam_rotate_icon = self._build_camera_drag_icon("rotate")
-        self.cam_pan_icon = self._build_camera_drag_icon("pan")
-        self.cam_zoom_icon = self._build_camera_drag_icon("zoom")
+        # Iconos de cámara en varios tamaños para encoger la barra de forma
+        # proporcional cuando el viewport es estrecho.
+        sources = {
+            "free": self._render_camera_preset_icon("free"),
+            "caballera": self._render_camera_preset_icon("caballera"),
+            "isometrica": self._render_camera_preset_icon("isometrica"),
+            "rotate": self._render_camera_drag_icon("rotate"),
+            "pan": self._render_camera_drag_icon("pan"),
+            "zoom": self._render_camera_drag_icon("zoom"),
+        }
+        self._cam_icon_sizes = (26, 22, 18, 14)
+        self._cam_icons = {}
+        for key, img in sources.items():
+            tier = {}
+            for sz in self._cam_icon_sizes:
+                im = img if sz == img.width else img.resize((sz, sz), Image.LANCZOS)
+                tier[sz] = ImageTk.PhotoImage(im)
+            self._cam_icons[key] = tier
+        self.cam_free_icon = self._cam_icons["free"][26]
+        self.cam_caballera_icon = self._cam_icons["caballera"][26]
+        self.cam_isometrica_icon = self._cam_icons["isometrica"][26]
+        self.cam_rotate_icon = self._cam_icons["rotate"][26]
+        self.cam_pan_icon = self._cam_icons["pan"][26]
+        self.cam_zoom_icon = self._cam_icons["zoom"][26]
 
 
 class ButtonsGamification(tk.Frame):

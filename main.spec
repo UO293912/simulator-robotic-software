@@ -9,8 +9,16 @@ a = Analysis(
     pathex=['simulator'],
     binaries=[],
     datas=[
-        ('buttons', 'buttons'), 
+        ('buttons', 'buttons'),
         ('assets', 'assets'),
+        # Recursos del motor 3D del Braccio (mallas STL + preset DH). Viven en
+        # simulator/assets y el motor3d los resuelve como <bundle>/assets/{stl,presets}.
+        ('simulator/assets/stl', 'assets/stl'),
+        ('simulator/assets/presets', 'assets/presets'),
+        # Sketches de los retos (robots.py los abre como codes/challengeN) y el
+        # tutorial PDF que enlaza la interfaz (drawing.py -> tutorials/Tutorial.pdf).
+        ('codes', 'codes'),
+        ('tutorials', 'tutorials'),
         ('robot_data.json', '.'),
         ('manual-usuario.pdf', '.')
     ],
@@ -31,7 +39,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='main',
+    name='simulador',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -52,5 +60,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='main',
+    name='simulador',
 )

@@ -24,8 +24,11 @@ class _FakeWidget:
     def grid_remove(self):
         self.hidden = True
 
-    def forget(self):
+    def forget(self, *_args):
         self.hidden = True
+
+    def panes(self):
+        return [child for child, _ in self.added]
 
     def grid_columnconfigure(self, *_args, **_kwargs):
         return None
@@ -395,7 +398,9 @@ class _FakeFileManager:
         self.saved.append((path, content))
 
 
-def test_main_application_new_code_paths(monkeypatch):
+@pytest.fixture
+def main_application_harness(monkeypatch):
+    """Build MainApplication without a real Tk window and expose its spies."""
     import graphics.gui as gui_mod
     import graphics.layers as layers_mod
 
@@ -452,6 +457,17 @@ def test_main_application_new_code_paths(monkeypatch):
     app.selector_bar.track_selector.value = 2
     app.selector_bar.gamification_option_selector.value = 0
 
+    return SimpleNamespace(
+        app=app,
+        file_managers=file_managers,
+        opened_windows=opened_windows,
+    )
+
+
+def test_main_application_delegates_execution_and_file_workflows(main_application_harness):
+    harness = main_application_harness
+    app = harness.app
+
     app.execute()
     app.stop()
     app.toggle_pause()
@@ -461,7 +477,21 @@ def test_main_application_new_code_paths(monkeypatch):
     app.editor_redo()
     app.open_file()
     app.save_file()
+
     assert app.get_code() == "line-1\nline-2\n"
+    assert harness.file_managers[-1].opened == ["opened.ino"]
+    assert harness.file_managers[-1].saved[-1] == ("saved.ino", "line-1\nline-2\n")
+    assert app.editor_frame.text.undo_calls == 1
+    assert app.editor_frame.text.redo_calls == 1
+    assert ("execute", 0) in app.controller.calls
+    assert ("stop",) in app.controller.calls
+    assert ("toggle_pause",) in app.controller.calls
+    assert ("step_once",) in app.controller.calls
+
+
+def test_main_application_routes_robot_configuration_and_zoom(main_application_harness):
+    harness = main_application_harness
+    app = harness.app
 
     app.open_pin_configuration()
     app.selector_bar.robot_selector.value = 5
@@ -476,6 +506,17 @@ def test_main_application_new_code_paths(monkeypatch):
 
     app.change_robot(None)
     app.change_track(None)
+
+    assert harness.opened_windows[0][0] == "pin"
+    assert any(kind == "arm3d" for kind, _args, _kwargs in harness.opened_windows)
+    assert ("zoom_in",) in app.controller.calls
+    assert ("zoom_out",) in app.controller.calls
+    assert app.drawing_frame.zoom_labels[-1] == "145%"
+    assert app.drawing_frame.mouse_modes[-1] == "pan"
+
+
+def test_main_application_updates_challenges_and_optional_controls(main_application_harness):
+    app = main_application_harness.app
 
     app.controller.board = True
     for challenge in range(7):
@@ -502,6 +543,21 @@ def test_main_application_new_code_paths(monkeypatch):
     app.show_key_drawing(True)
     app.show_key_drawing(False)
 
+    assert app.selector_bar.actions == [
+        "recover_circuit",
+        "hide_circuit",
+        "recover_gamification",
+        "hide_gamification",
+    ]
+    assert "show_joystick" in app.drawing_frame.show_calls
+    assert "hide_joystick" in app.drawing_frame.show_calls
+    assert app.drawing_frame.key_movement.packed is False
+    assert app.drawing_frame.key_drawing.packed is False
+
+
+def test_main_application_manages_arm_panel_input_console_and_shutdown(main_application_harness):
+    app = main_application_harness.app
+
     app.selector_bar.robot_selector.value = 5
     app.controller.change_robot(5)
     app.show_arm3d_panel(True)
@@ -522,23 +578,14 @@ def test_main_application_new_code_paths(monkeypatch):
     app.set_drawing()
     app.close()
 
-    assert file_managers[-1].opened == ["opened.ino"]
-    assert file_managers[-1].saved[-1] == ("saved.ino", "line-1\nline-2\n")
-    assert opened_windows[0][0] == "pin"
-    assert any(kind == "arm3d" for kind, _args, _kwargs in opened_windows)
-    assert ("execute", 0) in app.controller.calls
-    assert ("zoom_in",) in app.controller.calls
-    assert ("zoom_out",) in app.controller.calls
     assert ("filter_console", {"info": True, "warning": False, "error": True}) in app.controller.calls
     assert app.move_WASD["w"] is False
     assert app._destroyed is True
     assert app.right_notebook.select() == str(app.editor_frame)
 
 
-def test_arm3d_hud_and_screen_updater_new_code_paths(monkeypatch):
-    import compiler.commands as commands_mod
+def test_arm3d_hud_reflects_joint_and_safety_state():
     import graphics.huds as huds_mod
-    import graphics.screen_updater as screen_mod
 
     class DrawSpy:
         def __init__(self):
@@ -582,6 +629,11 @@ def test_arm3d_hud_and_screen_updater_new_code_paths(monkeypatch):
     assert any(call[0] == "delete" for call in canvas.calls)
     assert any("BLOQUEADO" in str(call) for call in canvas.calls)
     assert info_panel_calls
+
+
+def test_screen_updater_waits_for_resume_and_interrupts_stopped_execution(monkeypatch):
+    import compiler.commands as commands_mod
+    import graphics.screen_updater as screen_mod
 
     sleeping = []
     original_current_thread = screen_mod.threading.current_thread
@@ -634,7 +686,7 @@ def test_arm3d_hud_and_screen_updater_new_code_paths(monkeypatch):
     screen_mod.view = None
 
 
-def test_arm_kinematic_state_new_code_helpers():
+def test_arm_kinematic_state_normalizes_partial_configuration_and_limits():
     from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
 
     state = ArmKinematicState()
@@ -682,7 +734,7 @@ def test_kinematics_fk_rejects_negative_prismatic_rotation_indexes():
     assert get_prismatic_pre_rotation(model, 0) == {"yaw": 45.0, "pitch": 15.0}
 
 
-def test_robot3d_drawing_low_level_helpers_and_iter_triangles(monkeypatch):
+def test_generic_robot_renderer_builds_geometry_for_rotational_and_prismatic_models(monkeypatch):
     from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
     from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
     from motor3d.rendering.robot3d_drawing import (
@@ -778,12 +830,11 @@ def test_robot3d_drawing_low_level_helpers_and_iter_triangles(monkeypatch):
     assert len(mesh_groups[0][1]) == 2
 
 
-def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
+def test_robot3d_drawing_projects_scene_and_parallelizes_meshes(monkeypatch):
     from motor3d.camera.camera import Camera
     from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
     from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
     from motor3d.rendering import robot3d_drawing as drawing_mod
-    import graphics.layers as layers_mod
 
     class DrawSpy:
         def __init__(self):
@@ -900,6 +951,10 @@ def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
     assert worker_draw.polygons
     assert worker_drawing._mesh_executor is not None
 
+
+def test_arm3d_layer_delegates_camera_render_and_hud_operations(monkeypatch):
+    import graphics.layers as layers_mod
+
     layer = layers_mod.Arm3DLayer()
     hud_calls = []
     layer.hud = SimpleNamespace(
@@ -941,7 +996,7 @@ def test_robot3d_drawing_render_helpers_and_arm3d_layer_paths(monkeypatch):
     assert any(call[0] == "update" for call in hud_calls)
 
 
-def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
+def test_stl_loader_handles_missing_truncated_and_ascii_files(tmp_path):
     from motor3d.rendering import robot3d_drawing as drawing_mod
 
     missing = drawing_mod._load_stl(tmp_path / "missing.stl")
@@ -970,6 +1025,10 @@ def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
     )
     triangles = drawing_mod._load_stl(ascii_stl)
     assert triangles.shape == (1, 3, 3)
+
+
+def test_robot3d_drawing_ignores_degenerate_geometry():
+    from motor3d.rendering import robot3d_drawing as drawing_mod
 
     drawing = drawing_mod.Robot3DDrawing()
     camera = SimpleNamespace(
@@ -1029,3 +1088,132 @@ def test_robot3d_drawing_ascii_stl_and_guard_paths(tmp_path):
     )
     arcs = drawing._collect_joint_arcs(model, [], {}, perspective)
     assert arcs == []
+
+
+# ---------------------------------------------------------------------------
+# Diseño responsive del módulo 3D (lógica pura, sin Tk real)
+# ---------------------------------------------------------------------------
+
+
+def test_arm3d_config_compute_ui_scale_fits_screen():
+    """La escala adaptativa de la ventana de configuración se topea a 0.85 en
+    pantallas grandes y encoge (sin bajar de 0.5) en pantallas pequeñas."""
+    import graphics.gui as gui_mod
+
+    Win = gui_mod.Arm3DConfigurationWindow
+    big = SimpleNamespace(
+        winfo_screenwidth=lambda: 3840, winfo_screenheight=lambda: 2160,
+        _CONTENT_K_W=Win._CONTENT_K_W, _CONTENT_K_H=Win._CONTENT_K_H,
+    )
+    small = SimpleNamespace(
+        winfo_screenwidth=lambda: 1024, winfo_screenheight=lambda: 600,
+        _CONTENT_K_W=Win._CONTENT_K_W, _CONTENT_K_H=Win._CONTENT_K_H,
+    )
+    s_big = Win._compute_ui_scale(big)
+    s_small = Win._compute_ui_scale(small)
+
+    assert s_big == pytest.approx(0.85)
+    assert 0.5 <= s_small < 0.85
+    assert s_small <= s_big
+
+
+def test_drawing_frame_camera_scale_tiers():
+    """La barra de cámara elige el tamaño de icono por tramos de ancho del
+    viewport (encoge de forma escalonada al estrecharse)."""
+    import graphics.gui as gui_mod
+
+    fake = SimpleNamespace(
+        _cam_icon_size=None, _cam_buttons=[],
+        _cam_font_scaler=gui_mod.FontScaler(),
+    )
+    expectations = [(700, 26), (500, 22), (400, 18), (300, 14)]
+    for width, expected_icon in expectations:
+        fake._cam_icon_size = None  # forzar recálculo en cada tramo
+        gui_mod.DrawingFrame._apply_camera_scale(fake, width)
+        assert fake._cam_icon_size == expected_icon
+
+
+def test_arm3d_config_canvas_configure_fills_width():
+    """Regresión: al ensanchar el canvas, el contenido se estira para llenar el
+    hueco horizontal; al estrecharlo respeta su ancho natural (con scroll)."""
+    import graphics.gui as gui_mod
+
+    class FakeCanvas:
+        def __init__(self):
+            self.item_widths = []
+
+        def itemconfigure(self, _id, width):
+            self.item_widths.append(width)
+
+        def configure(self, **_kwargs):
+            return None
+
+    canvas = FakeCanvas()
+    inner = SimpleNamespace(winfo_reqwidth=lambda: 400, winfo_reqheight=lambda: 300)
+    fake = SimpleNamespace(
+        _scroll_canvas=canvas, _scroll_inner=inner, _scroll_inner_id="iid",
+        _last_fill_w=None, _set_scrollbar_visibility=lambda *_a: None,
+    )
+
+    # Canvas más ancho que el contenido -> se estira hasta el ancho del canvas.
+    gui_mod.Arm3DConfigurationWindow._on_scroll_canvas_configure(
+        fake, SimpleNamespace(width=700, height=500))
+    assert canvas.item_widths[-1] == 700
+
+    # Canvas más estrecho -> mantiene el ancho natural (no aplasta el contenido).
+    fake._last_fill_w = None
+    gui_mod.Arm3DConfigurationWindow._on_scroll_canvas_configure(
+        fake, SimpleNamespace(width=250, height=500))
+    assert canvas.item_widths[-1] == 400
+
+
+def test_arm3d_layer_fps_counter_scales_with_viewport():
+    """El contador de FPS usa una fuente proporcional al viewport (mayor en
+    ventanas grandes, menor en pequeñas), acotada al rango legible [8, 16]."""
+    import graphics.layers as layers_mod
+
+    class FakeCanvas:
+        def __init__(self, w, h):
+            self._w, self._h = w, h
+            self.fonts = []
+
+        def delete(self, *_a):
+            return None
+
+        def winfo_width(self):
+            return self._w
+
+        def winfo_height(self):
+            return self._h
+
+        def create_text(self, _x, _y, **kwargs):
+            self.fonts.append(kwargs.get("font"))
+            return 1
+
+        def bbox(self, _id):
+            return (0, 0, 10, 10)
+
+        def create_rectangle(self, *_a, **_k):
+            return 2
+
+        def tag_lower(self, *_a):
+            return None
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.visual['show_fps_counter'] = True
+
+    big = FakeCanvas(1600, 1000)
+    layer._canvas = big
+    layer._fps_last_frame_time = None
+    layer._draw_fps_counter()
+
+    small = FakeCanvas(320, 240)
+    layer._canvas = small
+    layer._fps_last_frame_time = None
+    layer._draw_fps_counter()
+
+    big_size = big.fonts[-1][1]
+    small_size = small.fonts[-1][1]
+    assert big_size > small_size
+    assert 8 <= small_size <= 16
+    assert 8 <= big_size <= 16

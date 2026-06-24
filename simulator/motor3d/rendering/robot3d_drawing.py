@@ -376,14 +376,16 @@ class BraccioVisualModel:
         # Joint 5 — pinza (gripper_joint URDF), rotación alrededor de −Y
         # Se usa el origen articular del dedo derecho (gripper_joint):
         #   xyz=(10,0,30)mm, rpy=(0,−0.2967,0) desde wrist_roll
-        # La dirección de referencia (DH joint=0 → q_urdf=π/2) se obtiene
-        # aplicando _R([0,-1,0], π/2) al eje Z de T_pre_right_g, que resulta
-        # en −T_pre_right_g[:,0].
+        # La dirección de referencia debe coincidir con el dedo que se DIBUJA: la
+        # malla del gripper lleva un origen visual rpy=(0,π/2,0) que la gira 90°
+        # respecto al marco articular, de modo que el dedo visible apunta según
+        # +Z de T_pre_right_g (no −X). Sin esta corrección el arco quedaba 90°
+        # desfasado respecto a la posición real del dedo en ambos extremos.
         T_pre_right_g = T_wrist_r @ _T([10.0, 0.0, 30.0], [0.0, -0.2967, 0.0])
         frames.append({
             'pos': T_pre_right_g[:3, 3].tolist(),
             'axis': -T_pre_right_g[:3, 1].copy(),   # eje −Y (URDF axis=-Y)
-            'xref': -T_pre_right_g[:3, 0].copy(),   # dirección del dedo a DH joint[5]=0
+            'xref': T_pre_right_g[:3, 2].copy(),     # dirección del dedo visible
             'r_arc': 50.0,
         })
 
@@ -594,7 +596,10 @@ class GenericDhVisualModel:
         side = self._safe_normalize(np.cross(hinge_axis, forward), T_prev[:3, 1])
 
         palm_depth = max(radius * 0.95, seg_len * 0.9, 18.0)
-        bridge_half_span = radius * 0.78
+        # Separación lateral de los dedos respecto al eje central: lo bastante
+        # pequeña para que las piezas queden cerca del centro (dejando un hueco
+        # interior mínimo) en cualquier configuración.
+        bridge_half_span = radius * 0.34
         finger_width = radius * 0.36
         finger_len = max(radius * 2.45, seg_len * 3.0)
         finger_base_offset = finger_width * 0.25
@@ -605,13 +610,19 @@ class GenericDhVisualModel:
         hinge_center = p0 + forward * (palm_depth * 0.46)
         tcp = hinge_center + forward * (finger_base_offset + finger_len)
 
-        open_angle = math.radians(self.GRIPPER_MAX_OPEN_DEG) * (1.0 - self._gripper_ratio(model, joint_idx))
+        # Cada dedo se separa del eje un ángulo igual al valor articular: los dedos
+        # quedan paralelos (cerrados, a lo largo de 'forward') en jval=0 y se abren
+        # a medida que jval se aleja de 0. Así cada límite acota el recorrido de su
+        # dedo y el límite más cercano a 0 controla cuánto puede cerrarse la pinza
+        # (si no llega a 0 queda un hueco; si lo cruza, se cerraría de más).
+        jval_g = float(model.joints[joint_idx]) if joint_idx < len(model.joints) else 0.0
         fingers = []
         for sign in (+1.0, -1.0):
             hinge = hinge_center + side * sign * bridge_half_span
+            angle = math.radians(-sign * jval_g)
             finger_dir = (
-                math.cos(open_angle) * forward
-                + sign * math.sin(open_angle) * side
+                math.cos(angle) * forward
+                + math.sin(angle) * side
             )
             finger_dir = self._safe_normalize(finger_dir, forward)
             root = hinge + finger_dir * finger_base_offset
@@ -646,16 +657,39 @@ class GenericDhVisualModel:
         matrices = chain.get('matrices', []) if chain else []
         positions = chain.get('positions', []) if chain else []
         base_T = get_base_transform(model)
+        # Radio mínimo visible (fuera del disco de la articulación): garantiza que
+        # el arco de rango se dibuje también en articulaciones con a=0 (p. ej. la
+        # base que gira sobre una columna 'd'), cuyo eslabón propio mide 0.
+        dims = self._resolve_dimensions(model)
+        arc_floor = dims['radius'] * 1.8
         for i in range(model.dof):
             T = matrices[i - 1] if i > 0 else base_T
             pos = positions[i] if i < len(positions) else [0.0, 0.0, 0.0]
-            r_arc = model.link_lengths[i] * 0.4 if i < len(model.link_lengths) else 40.0
+            a_len = abs(model.link_lengths[i]) if i < len(model.link_lengths) else 100.0
+            r_arc = max(a_len * 0.4, arc_floor)
             frames.append({
                 'pos': pos,
                 'axis': T[:3, 2].copy(),
                 'xref': self._joint_neutral_xref(model, i, T),
                 'r_arc': r_arc,
             })
+
+        # Como el Braccio, se marca el rango de UN solo dedo (el +): el arco sigue
+        # a ese dedo, que se separa del eje 'forward' un ángulo -jval. Sobre el
+        # rango articular [mn, mx] el dedo barre [-mx, -mn]; así cada límite mueve
+        # su borde (el cercano a 0 controla el cierre, el lejano la apertura). El
+        # arco se centra en la base de ese dedo para que lo siga.
+        grip = self._get_gripper_geometry(model, chain, dims) if chain else None
+        if grip is not None:
+            gi = grip['joint_idx']
+            if gi < len(frames):
+                mn_g, mx_g = model.joint_limits[gi]
+                plus = next((f for f in grip['fingers'] if f['sign'] > 0), None)
+                if plus is not None:
+                    frames[gi]['pos'] = list(np.asarray(plus['hinge'], dtype=float))
+                frames[gi]['axis'] = np.asarray(grip['hinge_axis'], dtype=float)
+                frames[gi]['xref'] = np.asarray(grip['forward'], dtype=float)
+                frames[gi]['arc_angles'] = (float(-mx_g), float(-mn_g))
         return frames
 
     def _get_prismatic_geometry(self, model, joint_idx, chain):
@@ -838,9 +872,9 @@ class GenericDhVisualModel:
                 if prism.size > 0:
                     yield prism, link_color
 
-        # Indicador del efector final
+        # Indicador del efector final (punto objetivo de la IK): esfera pequeña.
         ee = np.array(self.get_effective_end_effector(model, positions, chain), dtype=float)
-        sphere = _make_sphere_approx(ee, r * 0.58)
+        sphere = _make_sphere_approx(ee, max(4.0, r * 0.26))
         if sphere.size > 0:
             yield sphere, (220, 180, 50)
 
@@ -1637,7 +1671,10 @@ class Robot3DDrawing:
             v = v_raw / v_n
             u = np.cross(v, axis)   # re-ortonormalización: u ⟂ axis ⟂ v
 
-            mn, mx = model.joint_limits[i]
+            # Por defecto el arco barre el rango articular [mn, mx]. Si el frame
+            # define 'arc_angles' (p. ej. la pinza, que barre su apertura desde
+            # la referencia 'forward'), se usan esos ángulos locales.
+            mn, mx = frame.get('arc_angles', model.joint_limits[i])
             r_arc = frame['r_arc']
 
             # Puntos del arco con índice original (para descartar saltos si algún punto

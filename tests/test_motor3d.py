@@ -73,7 +73,7 @@ class TestForwardKinematics:
 
     def test_fk_rest_pose_arm_points_up(self, braccio_model):
         """Con todos los joints=0 (servos a 90°) el brazo debe apuntar hacia arriba.
-        El efector final debe estar por encima de z=800 mm y tener X≈Y≈0.
+        El efector final debe estar cerca del alcance máximo en z y tener X≈Y≈0.
         """
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 
@@ -81,7 +81,8 @@ class TestForwardKinematics:
         chain = forward_kinematics_chain(braccio_model)
         ee = chain['end_effector']
 
-        assert ee[2] > 800.0, f"z esperado >800 mm, obtenido {ee[2]:.1f}"
+        min_z = braccio_model.max_reach() * 0.9
+        assert ee[2] > min_z, f"z esperado >{min_z:.0f} mm, obtenido {ee[2]:.1f}"
         assert abs(ee[0]) < 5.0, f"x esperado ≈0, obtenido {ee[0]:.1f}"
         assert abs(ee[1]) < 5.0, f"y esperado ≈0, obtenido {ee[1]:.1f}"
 
@@ -286,7 +287,7 @@ class TestInverseKinematics:
         from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
         from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
 
-        target = [0.0, 0.0, 500.0]
+        target = [0.0, 0.0, 525.0]
         ee_init = forward_kinematics_chain(braccio_model)['end_effector']
         error_init = math.sqrt(sum((a - b) ** 2 for a, b in zip(ee_init, target)))
 
@@ -383,6 +384,39 @@ def test_max_reach_includes_prismatic_joint_stroke():
     )
 
     assert model.max_reach() == 170.0
+
+
+def test_generic_joint_range_arcs_visible_for_zero_length_links():
+    """Las articulaciones con a=0 (p. ej. la base que gira sobre una columna d, o
+    un último eslabón de longitud 0) deben tener un radio de arco visible, no cero,
+    para que su rango articular se dibuje en pantalla."""
+    from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+    from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+    from motor3d.rendering.robot3d_drawing import Robot3DDrawing
+
+    model = ArmKinematicState()
+    model.load_dict({
+        'dof': 4,
+        'link_lengths': [0.0, 150.0, 150.0, 0.0],
+        'joints': [0.0, 0.0, 0.0, 0.0],
+        'joint_limits': [[-160, 160], [-90, 90], [-120, 120], [-90, 90]],
+        'joint_types': ['R', 'R', 'R', 'R'],
+        'dh_rows': [
+            {'theta': 0.0, 'd': 100.0, 'a': 0.0, 'alpha': 90.0},
+            {'theta': 0.0, 'd': 0.0, 'a': 150.0, 'alpha': 0.0},
+            {'theta': 0.0, 'd': 0.0, 'a': 150.0, 'alpha': 0.0},
+            {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 90.0},
+        ],
+        'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
+        'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+    })
+    renderer = Robot3DDrawing(stl_dir=None)
+    chain = forward_kinematics_chain(model)
+    frames = renderer.generic_visual.get_joint_frames(model, chain)
+
+    assert len(frames) == model.dof
+    for i, frame in enumerate(frames):
+        assert frame['r_arc'] > 1.0, f"J{i + 1}: arco invisible (r_arc={frame['r_arc']})"
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +656,74 @@ class TestRendering:
             left_closed['dir'],
             gripper_closed['forward'],
         )
+
+    def test_generic_gripper_range_arc_and_fingers(self):
+        """El arco de rango de la pinza se trata como el de cualquier junta (sin
+        arc_angles especiales: barre [min, max], cada límite mueve su borde), con
+        la referencia anclada al eje central de la pinza; los dedos barren el
+        rango articular completo."""
+        import math
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 20.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -17.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[10.0, -15.0, -80.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 20.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+        vm = GenericDhVisualModel()
+
+        def arc_dir(frame, ang):
+            axis = np.array(frame['axis'], float)
+            axis /= np.linalg.norm(axis)
+            u = np.array(frame['xref'], float)
+            u = u - axis * np.dot(u, axis)
+            u /= np.linalg.norm(u)
+            v = np.cross(axis, u)
+            a = math.radians(ang)
+            return math.cos(a) * u + math.sin(a) * v
+
+        chain = forward_kinematics_chain(model)
+        dims = vm._resolve_dimensions(model)
+        grip = vm._get_gripper_geometry(model, chain, dims)
+        frame = vm.get_joint_frames(model, chain)[2]
+
+        # Se marca el rango de UN dedo (como el Braccio): el arco barre [-mx, -mn],
+        # con cada límite en su borde. El borde interior (-mx) es el cercano a 0
+        # (controla el cierre) y el exterior (-mn) la apertura máxima.
+        assert frame['arc_angles'] == (17.0, 80.0)   # (-mx, -mn) con lim (-80,-17)
+        np.testing.assert_allclose(frame['axis'], grip['hinge_axis'], atol=1e-9)
+        np.testing.assert_allclose(frame['xref'], grip['forward'], atol=1e-9)
+
+        # El arco sigue al dedo + en los extremos: borde interior = dedo en mx,
+        # borde exterior = dedo en mn.
+        for jval, ang in ((-17.0, frame['arc_angles'][0]),
+                          (-80.0, frame['arc_angles'][1])):
+            model.joints[2] = jval
+            ch = forward_kinematics_chain(model)
+            plus = next(f for f in vm._get_gripper_geometry(model, ch, dims)['fingers']
+                        if f['sign'] > 0)['dir']
+            fr = vm.get_joint_frames(model, ch)[2]
+            cosang = float(np.clip(np.dot(arc_dir(fr, ang), plus), -1.0, 1.0))
+            assert math.degrees(math.acos(cosang)) < 1.0
+
+        # Los dedos quedan paralelos (cerrados) en jval=0: el límite central
+        # controla si la pinza puede cerrarse.
+        model.joints[2] = 0.0
+        for f in vm._get_gripper_geometry(
+                model, forward_kinematics_chain(model), dims)['fingers']:
+            np.testing.assert_allclose(f['dir'], grip['forward'], atol=1e-9)
 
     def test_prismatic_visual_geometry_separates_slide_axis_from_rigid_offset(self):
         """Una P con `a` no nulo debe deslizar por z y dejar el offset lateral aparte."""
@@ -1959,21 +2061,59 @@ class TestPersistence:
 
         assert layer.motor3d.model.joints[0] == pytest.approx(10.0)
 
-    def test_braccio_scene_reports_visual_tcp_as_end_effector(self):
-        """El HUD y seguridad deben usar el TCP real de las garras, no el extremo DH generico."""
+    def test_braccio_dh_effector_matches_visual_tcp(self):
+        """Tras recalibrar el DH al STL real, el efector cinematico (objetivo de la
+        IK y valor mostrado) coincide con el TCP visual de las garras: lo que se
+        escribe en la CI = lo mostrado = el brazo dibujado."""
         import math
         from motor3d.api import Motor3DApi
 
         api = Motor3DApi()
-        api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -17.0]
+        for joints in ([0.0, 0.0, 0.0, 0.0, 0.0, -17.0],
+                       [10.0, -20.0, 15.0, 30.0, 40.0, -80.0]):
+            api.model.joints = list(joints)
+            api.scene.update()
+
+            fk_ee = api.scene.last_chain["end_effector"]
+            visual_tcp = api.scene.get_end_effector()
+            distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
+
+            assert distance < 1.0, f"DH y TCP visual divergen {distance:.2f} mm"
+            assert visual_tcp[2] <= api.model.max_reach() + 30.0
+
+    def test_generic_ik_targets_closed_gripper_tip(self):
+        """En un brazo genérico la IK debe llevar el centro de la pinza cerrada
+        (el TCP que muestra el panel), no la muñeca, hasta el objetivo escrito."""
+        import math
+        from motor3d.api import Motor3DApi
+
+        api = Motor3DApi()
+        api.model.load_dict({
+            'dof': 6,
+            'link_lengths': [0.0, 125.0, 125.0, 60.0, 31.62, 0.0],
+            'joints': [0.0, -48.0, 45.0, 50.0, 81.0, -17.0],
+            'joint_limits': [[-92, 78], [-75, 75], [-50, 110],
+                             [-70, 110], [0, 162], [-80, -17]],
+            'joint_types': ['R', 'R', 'R', 'R', 'R', 'R'],
+            'dh_rows': [
+                {'theta': 0.0, 'd': 72.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 90.0, 'd': 0.0, 'a': 125.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 125.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 60.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 31.62, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+            ],
+            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
+            'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        })
         api.scene.update()
 
-        fk_ee = api.scene.last_chain["end_effector"]
-        visual_tcp = api.scene.get_end_effector()
-        distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
-
-        assert distance > 100.0
-        assert visual_tcp[2] <= api.model.max_reach() + 30.0
+        for target in ((150.0, 150.0, 200.0), (0.0, 0.0, 300.0),
+                       (200.0, -100.0, 180.0)):
+            api.solve_ik(*target)
+            tip = api.scene.get_end_effector()
+            err = math.dist(tip, target)
+            assert err < 5.0, f"TCP {tip} lejos del objetivo {target}: {err:.1f} mm"
 
     def test_load_nonexistent_file_returns_false(self):
         """load_model con ruta inexistente debe devolver False sin lanzar excepción."""

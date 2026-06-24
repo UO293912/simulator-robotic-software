@@ -6,8 +6,10 @@ import os
 import math
 from pathlib import Path
 
+import numpy as np
+
 from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
-from motor3d.kinematics.kinematics_fk import get_base_transform
+from motor3d.kinematics.kinematics_fk import get_base_transform, forward_kinematics_chain
 from motor3d.kinematics.kinematics_ik import solve_inverse_kinematics
 from motor3d.kinematics.constraints_limits import clamp_model_joints
 from motor3d.camera.camera import Camera
@@ -22,6 +24,8 @@ class Motor3DApi:
 
     DEFAULT_PRESET = 'braccio_tinkerkit'
     AUTO_GENERIC_CAMERA_DISTANCE_FACTOR = 1.25
+    # Umbral de error (mm) por debajo del cual la IK se reporta como "convergida".
+    IK_REPORT_TOLERANCE_MM = 5.0
 
     def __init__(self):
         self.model = ArmKinematicState()
@@ -135,17 +139,85 @@ class Motor3DApi:
         Returns:
             (converged: bool, message: str)
         """
-        converged, error = solve_inverse_kinematics(
-            self.model, [x, y, z], max_iter=150, tolerance=1.0, alpha=0.65
-        )
+        # La IK persigue la punta de la pinza cerrada (TCP, el punto medio entre
+        # las garras), el mismo punto que muestra el panel, para CUALQUIER brazo.
+        # El solver sigue refinando de forma agresiva (tolerancia interna ~1 mm),
+        # pero el éxito se reporta hasta IK_REPORT_TOLERANCE_MM: errores de 1-5 mm
+        # son visualmente exactos y no deben anunciarse como "objetivo no alcanzable".
+        error = self._solve_ik_to_effective_tip([float(x), float(y), float(z)])
         self.scene.update(track_trail=track_trail)
-        if converged:
+        if error <= self.IK_REPORT_TOLERANCE_MM:
             return True, f"IK convergida (error={error:.1f} mm)"
         else:
             return False, (
                 f"Mejor aproximación IK aplicada (error={error:.1f} mm) — "
                 f"objetivo no alcanzable exactamente con la configuración actual"
             )
+
+    def _effective_tip(self, model=None):
+        """Devuelve (punta_efectiva, chain). La punta efectiva es el TCP que se
+        muestra en el panel: para el Braccio es el centro de las garras cerradas
+        (ya incluido en el extremo cinemático recalibrado); para un brazo genérico
+        es el centro entre las puntas de la pinza decorativa. Cae al extremo DH si
+        algo falla."""
+        model = model or self.model
+        chain = forward_kinematics_chain(model)
+        try:
+            tip = self.renderer.get_effective_end_effector(
+                model, chain['positions'], chain)
+        except Exception:
+            tip = chain['end_effector']
+        return [float(v) for v in tip], chain
+
+    def _solve_ik_to_effective_tip(self, target):
+        """Resuelve la IK para que la punta efectiva (TCP) alcance `target`.
+
+        Si la punta coincide con el extremo cinemático (Braccio recalibrado, o
+        brazo sin pinza), basta el solver DH estándar. Si la punta es la de la
+        pinza decorativa de un brazo genérico —rígida respecto al penúltimo marco
+        e independiente de la última articulación (el gripper)— se resuelve un
+        modelo reducido de dof-1 articulaciones con la punta como herramienta
+        constante, lo que la persigue de forma nativa y robusta."""
+        tip, chain = self._effective_tip()
+        ee = chain['end_effector']
+        if self.model.dof >= 2 and math.dist(tip, ee) > 1.0:
+            error = self._solve_via_reduced_model(target, tip, chain)
+            if error is not None:
+                return error
+        solve_inverse_kinematics(
+            self.model, list(target), max_iter=150, tolerance=1.0, alpha=0.65)
+        tip2, _ = self._effective_tip()
+        return math.dist(tip2, target)
+
+    def _solve_via_reduced_model(self, target, tip, chain):
+        """Persigue la punta de la pinza decorativa resolviendo un brazo reducido
+        (sin la última articulación) con la punta expresada como herramienta
+        constante en el penúltimo marco. Devuelve el error final o None si falla."""
+        try:
+            dof = self.model.dof
+            t_parent = np.array(chain['matrices'][dof - 2], dtype=float)
+            tip_local = np.linalg.inv(t_parent) @ np.array(
+                [tip[0], tip[1], tip[2], 1.0])
+            reduced = ArmKinematicState()
+            data = self.model.to_dict()
+            for key in ('dh_rows', 'joint_types', 'joint_limits', 'joints',
+                        'servo_pins', 'servo_calibration', 'prismatic_pre_rotations'):
+                if isinstance(data.get(key), list):
+                    data[key] = data[key][:dof - 1]
+            data['dof'] = dof - 1
+            data['tool'] = {
+                'parent_joint': -1,
+                'offset': [float(tip_local[0]), float(tip_local[1]), float(tip_local[2])],
+            }
+            reduced.load_dict(data)
+            solve_inverse_kinematics(
+                reduced, list(target), max_iter=150, tolerance=1.0, alpha=0.65)
+            for i in range(dof - 1):
+                self.model.set_joint(i, reduced.joints[i])
+            tip2, _ = self._effective_tip()
+            return math.dist(tip2, target)
+        except Exception:
+            return None
 
     # ------------------------------------------------------------------
     # Configuración
@@ -196,8 +268,14 @@ class Motor3DApi:
     # ------------------------------------------------------------------
 
     def evaluate_safety(self):
-        """Evalúa el estado de seguridad de la pose actual."""
-        points = self._points_with_effective_tcp()
+        """Evalúa el estado de seguridad de la pose actual.
+
+        El chequeo de workspace se hace sobre el efector cinemático
+        (chain['end_effector'], el mismo punto que persigue la IK), no sobre el
+        TCP visual: la geometría cosmética de la pinza se extiende más allá de la
+        cadena y provocaba falsos "fuera de rango" en poses normales estiradas.
+        """
+        points = self._points_with_kinematic_end_effector()
         return self.safety_manager.evaluate(points, self.model.max_reach(), model=self.model)
 
 
@@ -274,4 +352,20 @@ class Motor3DApi:
             points[-1] = list(tcp)
         else:
             points = [list(tcp)]
+        return points
+
+    def _points_with_kinematic_end_effector(self):
+        """Posiciones articulares con el último punto = efector cinemático.
+
+        Es el extremo de la cadena DH (incluido tool_offset), el mismo objetivo
+        que resuelve la IK; se usa para el chequeo de alcance/workspace."""
+        points = [list(p) for p in (self.scene.last_points or [])]
+        chain = self.scene.last_chain
+        ee = chain.get('end_effector') if chain else None
+        if ee is None:
+            return points
+        if points:
+            points[-1] = list(ee)
+        else:
+            points = [list(ee)]
         return points
