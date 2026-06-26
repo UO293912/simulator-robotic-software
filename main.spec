@@ -1,7 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 
+import glob
+
 block_cipher = None
+
+# En el distribuible sólo se empaquetan los retos (robots.py los abre como
+# codes/challengeN) y los tres sketches de ejemplo del Braccio. Los sketches de
+# calibración del hardware físico (braccio_identify_m_ports, braccio_medicion_real)
+# se dejan FUERA del ejecutable.
+_codes_datas = [(p, 'codes') for p in sorted(glob.glob('codes/challenge*'))]
+_codes_datas += [
+    ('codes/braccio_secuencia', 'codes'),
+    ('codes/braccio_all_joints', 'codes'),
+    ('codes/braccio_all_joints_servo', 'codes'),
+]
 
 
 a = Analysis(
@@ -15,9 +28,9 @@ a = Analysis(
         # simulator/assets y el motor3d los resuelve como <bundle>/assets/{stl,presets}.
         ('simulator/assets/stl', 'assets/stl'),
         ('simulator/assets/presets', 'assets/presets'),
-        # Sketches de los retos (robots.py los abre como codes/challengeN) y el
-        # tutorial PDF que enlaza la interfaz (drawing.py -> tutorials/Tutorial.pdf).
-        ('codes', 'codes'),
+        # Sólo los retos + los 3 sketches de ejemplo del Braccio (ver _codes_datas
+        # arriba). El tutorial PDF lo enlaza la interfaz (drawing.py -> tutorials/Tutorial.pdf).
+        *_codes_datas,
         ('tutorials', 'tutorials'),
         ('robot_data.json', '.'),
         ('manual-usuario.pdf', '.')
