@@ -6,14 +6,16 @@ import glob
 block_cipher = None
 
 # En el distribuible sólo se empaquetan los retos (robots.py los abre como
-# codes/challengeN) y los tres sketches de ejemplo del Braccio. Los sketches de
-# calibración del hardware físico (braccio_identify_m_ports, braccio_medicion_real)
+# codes/challengeN), los tres sketches de ejemplo del Braccio y el ejemplo mixto
+# de 6 GDL. Los sketches de calibración del hardware físico
+# (braccio_identify_m_ports, braccio_medicion_real)
 # se dejan FUERA del ejecutable.
 _codes_datas = [(p, 'codes') for p in sorted(glob.glob('codes/challenge*'))]
 _codes_datas += [
     ('codes/braccio_secuencia', 'codes'),
     ('codes/braccio_all_joints', 'codes'),
     ('codes/braccio_all_joints_servo', 'codes'),
+    ('codes/brazo_mixto_6gdl_rprprr', 'codes'),
 ]
 
 
