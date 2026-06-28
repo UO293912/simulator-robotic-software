@@ -920,6 +920,30 @@ class Arm3DLayer(Layer):
             return self._braccio_digital_to_real(joint_idx, value) - 90.0
         return float(value) - 90.0
 
+    def _pulse_to_model_value(self, joint_idx, servo):
+        model = self.motor3d.model
+        if self._uses_braccio_calibration() and not self._is_prismatic_joint(joint_idx):
+            return self._to_model_value(joint_idx, getattr(servo, "value", 90.0))
+        if joint_idx >= len(model.joint_limits):
+            return self._to_model_value(joint_idx, getattr(servo, "value", 90.0))
+        try:
+            pulse = float(getattr(servo, "pulse_value"))
+            pulse_min = float(getattr(servo, "pulse_min", getattr(servo, "min", 544)))
+            pulse_max = float(getattr(servo, "pulse_max", getattr(servo, "max", 2400)))
+        except (TypeError, ValueError):
+            return self._to_model_value(joint_idx, getattr(servo, "value", 90.0))
+        if pulse_max <= pulse_min:
+            return self._to_model_value(joint_idx, getattr(servo, "value", 90.0))
+        ratio = (pulse - pulse_min) / (pulse_max - pulse_min)
+        ratio = max(0.0, min(1.0, ratio))
+        mn, mx = model.joint_limits[joint_idx]
+        return float(mn) + ratio * (float(mx) - float(mn))
+
+    def _servo_to_model_value(self, joint_idx, servo):
+        if getattr(servo, "command_mode", "position") == "pulse":
+            return self._pulse_to_model_value(joint_idx, servo)
+        return self._to_model_value(joint_idx, getattr(servo, "value", servo))
+
     def _set_servo_position_value(self, servo, value):
         if hasattr(servo, "set_position_value"):
             servo.set_position_value(value)
@@ -983,13 +1007,14 @@ class Arm3DLayer(Layer):
         if self._current_joints is None or model.dof == 0:
             return False
 
-        servo_values = self.robot.get_servo_values()
-        for i, sv in enumerate(servo_values[:model.dof]):
+        joint_servos = self.robot._joint_servos[:model.dof]
+        for i, servo in enumerate(joint_servos):
+            sv = servo.value
             if self._is_prismatic_velocity_command(i):
                 if self._prismatic_velocity_can_move(i, sv):
                     return True
                 continue
-            target = self._to_model_value(i, sv)
+            target = self._servo_to_model_value(i, servo)
             if i < len(model.joint_limits):
                 mn, mx = model.joint_limits[i]
                 target = max(mn, min(mx, target))
@@ -1004,13 +1029,14 @@ class Arm3DLayer(Layer):
         if self._current_joints is None or model.dof == 0:
             return False
 
-        servo_values = self.robot.get_servo_values()
-        for i, sv in enumerate(servo_values[:model.dof]):
+        joint_servos = self.robot._joint_servos[:model.dof]
+        for i, servo in enumerate(joint_servos):
+            sv = servo.value
             if self._is_prismatic_velocity_command(i):
                 if self._prismatic_velocity_can_move(i, sv):
                     return True
                 continue
-            target = self._to_model_value(i, sv)
+            target = self._servo_to_model_value(i, servo)
             if i < len(model.joint_limits):
                 mn, mx = model.joint_limits[i]
                 target = max(mn, min(mx, target))
@@ -1021,14 +1047,14 @@ class Arm3DLayer(Layer):
 
     def snap_to_servo_targets(self):
         """Aplica inmediatamente al modelo los valores actuales de los servos."""
-        servo_values = self.robot.get_servo_values()
         model = self.motor3d.model
         targets = []
-        for i, sv in enumerate(servo_values[:model.dof]):
+        joint_servos = self.robot._joint_servos[:model.dof]
+        for i, servo in enumerate(joint_servos):
             if self._is_prismatic_velocity_command(i):
                 target = model.joints[i] if i < len(model.joints) else 0.0
             else:
-                target = self._to_model_value(i, sv)
+                target = self._servo_to_model_value(i, servo)
             if i < len(model.joint_limits):
                 mn, mx = model.joint_limits[i]
                 target = max(mn, min(mx, target))
@@ -1052,18 +1078,18 @@ class Arm3DLayer(Layer):
 
     def __sync_from_servos(self):
         """Lee los valores objetivo de los servos e interpola suavemente hacia ellos."""
-        servo_values = self.robot.get_servo_values()
         model = self.motor3d.model
         now = time.monotonic()
+        joint_servos = self.robot._joint_servos[:model.dof]
 
         # Inicializar posición actual en el primer frame
         if self._current_joints is None or len(self._current_joints) != model.dof:
             self._current_joints = []
-            for i, sv in enumerate(servo_values[:model.dof]):
+            for i, servo in enumerate(joint_servos):
                 if self._is_prismatic_velocity_command(i):
                     target = model.joints[i] if i < len(model.joints) else 0.0
                 else:
-                    target = self._to_model_value(i, sv)
+                    target = self._servo_to_model_value(i, servo)
                     if i < len(model.joint_limits):
                         mn, mx = model.joint_limits[i]
                         target = max(mn, min(mx, target))
@@ -1080,7 +1106,8 @@ class Arm3DLayer(Layer):
         self._last_sync_time = now
 
         speed = self._ANIM_SPEED_DPS * dt
-        for i, sv in enumerate(servo_values[:model.dof]):
+        for i, servo in enumerate(joint_servos):
+            sv = servo.value
             curr = self._current_joints[i]
             if self._is_prismatic_velocity_command(i):
                 steps = self._prismatic_velocity_steps(sv)
@@ -1090,11 +1117,13 @@ class Arm3DLayer(Layer):
                     target = max(mn, min(mx, target))
                 self._current_joints[i] = target
             else:
-                target = self._to_model_value(i, sv)
+                target = self._servo_to_model_value(i, servo)
                 if i < len(model.joint_limits):
                     mn, mx = model.joint_limits[i]
                     target = max(mn, min(mx, target))
-                    if not self._uses_braccio_calibration() and i < len(self.robot._joint_servos):
+                    if (not self._uses_braccio_calibration()
+                            and getattr(servo, "command_mode", "position") != "pulse"
+                            and i < len(self.robot._joint_servos)):
                         self._set_servo_position_value(
                             self.robot._joint_servos[i],
                             self._to_control_value(i, target)

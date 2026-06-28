@@ -881,6 +881,46 @@ def test_arm3d_custom_mode_preserves_full_internal_range_with_visible_servo_offs
     assert abs(layer.motor3d.model.joints[0] - 135.0) < 1e-6
 
 
+def test_arm3d_write_microseconds_spans_configured_rotational_range():
+    """Un eje custom de 240 grados debe recorrer todo su rango con pulsos PWM."""
+    import graphics.layers as layers_mod
+    from libraries.servo import Servo
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[100.0],
+        joint_limits=[(-120.0, 120.0)],
+        joint_types=['R'],
+        joints=[0.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        servo_pins=[11],
+    )
+    layer.motor3d.active_preset_name = None
+    layer.motor3d.model.preset_name = None
+    layer.apply_servo_pin_mapping()
+    layer._sync_servos_from_model(reset_animation=True)
+
+    motor = Servo(layer.robot.board, "base")
+    assert motor.attach(11, 500, 2500) == Servo.OK
+
+    assert motor.write_microseconds(500) == Servo.OK
+    layer.snap_to_servo_targets()
+    assert layer.motor3d.model.joints[0] == pytest.approx(-120.0)
+    assert motor.read() == 0
+
+    assert motor.write_microseconds(1500) == Servo.OK
+    layer.snap_to_servo_targets()
+    assert layer.motor3d.model.joints[0] == pytest.approx(0.0)
+    assert motor.read() == 90
+
+    assert motor.write_microseconds(2500) == Servo.OK
+    layer.snap_to_servo_targets()
+    assert layer.motor3d.model.joints[0] == pytest.approx(120.0)
+    assert motor.read() == 180
+
+
 def test_arm3d_prismatic_servo_write_moves_as_linear_actuator(monkeypatch):
     """En una P, Servo.write usa 90 como parada y el resto como velocidad."""
     import graphics.layers as layers_mod
