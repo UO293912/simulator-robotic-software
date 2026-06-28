@@ -26,6 +26,8 @@ class Motor3DApi:
     AUTO_GENERIC_CAMERA_DISTANCE_FACTOR = 1.25
     # Umbral de error (mm) por debajo del cual la IK se reporta como "convergida".
     IK_REPORT_TOLERANCE_MM = 5.0
+    API_IK_MAX_ITER = 600
+    API_IK_ALPHA = 1.0
 
     def __init__(self):
         self.model = ArmKinematicState()
@@ -185,7 +187,8 @@ class Motor3DApi:
             if error is not None:
                 return error
         solve_inverse_kinematics(
-            self.model, list(target), max_iter=150, tolerance=1.0, alpha=0.65)
+            self.model, list(target), max_iter=self.API_IK_MAX_ITER,
+            tolerance=1.0, alpha=self.API_IK_ALPHA)
         tip2, _ = self._effective_tip()
         return math.dist(tip2, target)
 
@@ -211,7 +214,8 @@ class Motor3DApi:
             }
             reduced.load_dict(data)
             solve_inverse_kinematics(
-                reduced, list(target), max_iter=150, tolerance=1.0, alpha=0.65)
+                reduced, list(target), max_iter=self.API_IK_MAX_ITER,
+                tolerance=1.0, alpha=self.API_IK_ALPHA)
             for i in range(dof - 1):
                 self.model.set_joint(i, reduced.joints[i])
             tip2, _ = self._effective_tip()

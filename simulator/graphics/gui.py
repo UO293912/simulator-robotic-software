@@ -928,11 +928,11 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         "alpha": 0.0,
     }
     BRACCIO_TABLE_DH_ROWS = [
-        {"theta": 0.0, "d": 72.0, "a": 0.0, "alpha": 90.0},
+        {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0},
         {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
         {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
-        {"theta": 0.0, "d": 0.0, "a": 60.0, "alpha": 0.0},
-        {"theta": 0.0, "d": 0.0, "a": math.sqrt(10.0 ** 2 + 30.0 ** 2), "alpha": 90.0},
+        {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0},
+        {"theta": 17.7, "d": -145.132, "a": 0.0, "alpha": 2.278},
         {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
     ]
     BRACCIO_SERVO_PINS = [11, 10, 9, 6, 5, 3]
@@ -2299,13 +2299,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                     dh_ok = False
 
             if dh_ok:
-                # RF1.1.1.3: longitud de eslabón 'a' ∈ [0, 2000] mm
+                # RF1.1.1.3: parametro DH 'a' con signo, limitado a +/-2000 mm.
                 a = parsed['a']
-                if a < 0:
-                    _mark_invalid(row[2], f"J{joint_n}: 'a' debe ser ≥ 0 mm.")
-                    dh_ok = False
-                elif a > 2000:
-                    _mark_invalid(row[2], f"J{joint_n}: 'a' supera el límite físico (2000 mm).")
+                if abs(a) > 2000:
+                    _mark_invalid(row[2], f"J{joint_n}: 'a' supera el limite fisico (+/-2000 mm).")
                     dh_ok = False
 
             if dh_ok:

@@ -600,7 +600,7 @@ def test_arm3d_configuration_window_collect_config_marks_semantic_limit_errors(t
     _set_entry_value(row_r[2], "2501")
     _set_entry_value(row_r[5], "500")
     _set_entry_value(row_r[6], "600")
-    _set_entry_value(row_p[2], "-1")
+    _set_entry_value(row_p[2], "-2501")
     _set_entry_value(row_p[7], "10")
     _set_entry_value(row_p[8], "190")
     _set_entry_value(row_p[5], "50")

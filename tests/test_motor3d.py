@@ -1134,24 +1134,24 @@ def test_arm3d_config_locked_preset_keeps_confirm_enabled():
     assert window._btn_save.options["state"] == "normal"
 
 
-def test_arm3d_config_braccio_table_defaults_match_visual_lengths():
-    """La tabla del Braccio debe ofrecer longitudes acordes al modelo visual exacto."""
+def test_arm3d_config_braccio_table_defaults_match_calibrated_preset():
+    """La tabla del Braccio debe mostrar la DH calibrada que coincide con el TCP."""
     from graphics.gui import Arm3DConfigurationWindow
 
     defaults = Arm3DConfigurationWindow._braccio_table_defaults()
     rows = defaults["dh_rows"]
 
     assert defaults["base"] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
-    assert rows[0] == {"theta": 0.0, "d": 72.0, "a": 0.0, "alpha": 90.0}
-    assert rows[1]["a"] == 125.0
-    assert rows[2]["a"] == 125.0
-    assert rows[3]["a"] == 60.0
-    assert rows[4]["a"] == pytest.approx(31.6227766017, abs=1e-9)
+    assert rows[0] == {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0}
+    assert rows[1] == {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0}
+    assert rows[2] == {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0}
+    assert rows[3] == {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0}
+    assert rows[4] == {"theta": 17.7, "d": -145.132, "a": 0.0, "alpha": 2.278}
     assert rows[5] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
 
 
 def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
-    """Seleccionar el preset Braccio debe mostrar en tabla la plantilla visual corregida."""
+    """Seleccionar el preset Braccio debe mostrar la DH calibrada del preset."""
     from graphics.gui import Arm3DConfigurationWindow
 
     class DummyMotor3D:
@@ -1178,10 +1178,10 @@ def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
 
     config = Arm3DConfigurationWindow._table_source_config(window)
 
-    assert config["dh_rows"][0]["d"] == 72.0
+    assert config["dh_rows"][0] == {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0}
     assert config["dh_rows"][1]["a"] == 125.0
-    assert config["dh_rows"][3]["a"] == 60.0
-    assert config["dh_rows"][4]["a"] == pytest.approx(31.6227766017, abs=1e-9)
+    assert config["dh_rows"][3] == {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0}
+    assert config["dh_rows"][4] == {"theta": 17.7, "d": -145.132, "a": 0.0, "alpha": 2.278}
 
 
 def test_arm3d_unlock_restores_semantic_disabled_fields():
