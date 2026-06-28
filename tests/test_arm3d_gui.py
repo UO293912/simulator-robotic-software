@@ -263,8 +263,20 @@ def test_pin_configuration_window_supports_variants_and_commit(monkeypatch, tk_a
     }
 
 
-def test_arm3d_configuration_window_constructor_and_help_flow(tk_app):
+def test_arm3d_configuration_window_constructor_and_tutorial_access(monkeypatch, tk_app):
     import graphics.gui as gui_mod
+
+    popen_calls = []
+    monkeypatch.setattr(
+        gui_mod.subprocess,
+        "Popen",
+        lambda *args, **kwargs: popen_calls.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        gui_mod.os.path,
+        "exists",
+        lambda path: os.path.basename(path) == "Tutorial_tablas_DH.pdf",
+    )
 
     motor = DummyMotor3D()
     window = gui_mod.Arm3DConfigurationWindow(tk_app, motor, tk_app)
@@ -276,11 +288,11 @@ def test_arm3d_configuration_window_constructor_and_help_flow(tk_app):
     assert config["joint_types"] == ["R", "P"]
     assert config["servo_pins"] == [11, 10]
 
-    window._toggle_config_help()
-    assert window._help_visible is True
-    window._on_help_mousewheel(SimpleNamespace(delta=-120))
-    window._toggle_config_help()
-    assert window._help_visible is False
+    assert "tablas DH" in window._help_btn.cget("text")
+    window._open_dh_tutorial()
+    assert popen_calls
+    opened_path = popen_calls[-1][0][0][0]
+    assert os.path.basename(opened_path) == "Tutorial_tablas_DH.pdf"
 
     window._dof_var.set(1)
     window._on_dof_change()

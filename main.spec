@@ -29,7 +29,7 @@ a = Analysis(
         ('simulator/assets/stl', 'assets/stl'),
         ('simulator/assets/presets', 'assets/presets'),
         # Sólo los retos + los 3 sketches de ejemplo del Braccio (ver _codes_datas
-        # arriba). El tutorial PDF lo enlaza la interfaz (drawing.py -> tutorials/Tutorial.pdf).
+        # arriba). Los PDFs de tutoriales los enlaza la interfaz desde tutorials/.
         *_codes_datas,
         ('tutorials', 'tutorials'),
         ('robot_data.json', '.'),
