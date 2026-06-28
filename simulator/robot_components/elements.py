@@ -76,6 +76,7 @@ class ArmJointServo(Servo):
     def __init__(self):
         super().__init__()
         self.value = 0.0
+        self.command_mode = "position"
 
     def set_value(self, pin, value):
         """
@@ -84,6 +85,16 @@ class ArmJointServo(Servo):
         """
         try:
             Element.set_value(self, pin, float(value))
+            self.command_mode = "velocity"
+            return True
+        except (TypeError, ValueError):
+            return False
+
+    def set_position_value(self, value):
+        """Sincroniza una posicion del modelo sin marcarla como sketch."""
+        try:
+            Element.set_value(self, self.pin, float(value))
+            self.command_mode = "position"
             return True
         except (TypeError, ValueError):
             return False

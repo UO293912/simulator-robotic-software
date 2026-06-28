@@ -881,6 +881,80 @@ def test_arm3d_custom_mode_preserves_full_internal_range_with_visible_servo_offs
     assert abs(layer.motor3d.model.joints[0] - 135.0) < 1e-6
 
 
+def test_arm3d_prismatic_servo_write_moves_as_linear_actuator(monkeypatch):
+    """En una P, Servo.write usa 90 como parada y el resto como velocidad."""
+    import graphics.layers as layers_mod
+    from libraries.servo import Servo
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[0.0],
+        joint_limits=[(0.0, 120.0)],
+        joint_types=['P'],
+        joints=[60.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        servo_pins=[11],
+    )
+    layer.motor3d.active_preset_name = None
+    layer.motor3d.model.preset_name = None
+    layer.apply_servo_pin_mapping()
+    layer._sync_servos_from_model(reset_animation=True)
+
+    clock = {"now": 0.25}
+    monkeypatch.setattr(layers_mod.time, "monotonic", lambda: clock["now"])
+    layer._last_sync_time = 0.0
+
+    servo = Servo(layer.robot.board, "base")
+    assert servo.attach(11) == Servo.OK
+    servo.write(0)
+
+    assert layer.wants_fast_render() is True
+    layer._Arm3DLayer__sync_from_servos()
+    assert layer.motor3d.model.joints[0] == pytest.approx(82.5)
+
+    servo.write(90)
+    clock["now"] = 0.50
+    assert layer.is_motion_active() is False
+    layer._Arm3DLayer__sync_from_servos()
+    assert layer.motor3d.model.joints[0] == pytest.approx(82.5)
+
+
+def test_arm3d_prismatic_servo_write_stops_at_joint_limits(monkeypatch):
+    """La logica de corredera no atraviesa los limites configurados."""
+    import graphics.layers as layers_mod
+    from libraries.servo import Servo
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[0.0],
+        joint_limits=[(0.0, 120.0)],
+        joint_types=['P'],
+        joints=[119.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        servo_pins=[11],
+    )
+    layer.motor3d.active_preset_name = None
+    layer.motor3d.model.preset_name = None
+    layer.apply_servo_pin_mapping()
+    layer._sync_servos_from_model(reset_animation=True)
+
+    clock = {"now": 0.25}
+    monkeypatch.setattr(layers_mod.time, "monotonic", lambda: clock["now"])
+    layer._last_sync_time = 0.0
+
+    servo = Servo(layer.robot.board, "base")
+    assert servo.attach(11) == Servo.OK
+    servo.write(0)
+
+    layer._Arm3DLayer__sync_from_servos()
+    assert layer.motor3d.model.joints[0] == pytest.approx(120.0)
+    assert layer.wants_fast_render() is False
+
+
 def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
     """El Braccio predefinido debe seguir usando la numeración servo tradicional."""
     from graphics.layers import Arm3DLayer
