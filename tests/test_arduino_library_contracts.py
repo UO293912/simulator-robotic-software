@@ -234,7 +234,13 @@ def test_servo_lifecycle_clamps_angles_and_releases_pin():
     motor.write("invalid")
     assert motor.read() == 0
     assert motor.write_microseconds(1500) == motor.OK
-    assert motor.read() == 1500
+    assert motor.read() == 101
+    assert motor.write_microseconds(500) == motor.OK
+    assert motor.read() == 0
+    assert motor.write_microseconds(2500) == motor.OK
+    assert motor.read() == 180
+    assert motor.write_microseconds("invalid") == motor.ERROR
+    assert motor.read() == 180
 
     assert motor.detach() == motor.OK
     assert board.detached == [6]
