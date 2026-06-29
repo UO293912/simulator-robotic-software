@@ -932,8 +932,8 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
         {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
         {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0},
-        {"theta": 17.7, "d": -145.132, "a": 0.0, "alpha": 2.278},
-        {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
+        {"theta": 90.0, "d": -60.0, "a": 0.0, "alpha": 180.0},
+        {"theta": -90.0, "d": 126.55, "a": 0.5, "alpha": 0.0},
     ]
     BRACCIO_SERVO_PINS = [11, 10, 9, 6, 5, 3]
 

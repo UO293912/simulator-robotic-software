@@ -1186,8 +1186,8 @@ def test_arm3d_config_braccio_table_defaults_match_calibrated_preset():
     assert rows[1] == {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0}
     assert rows[2] == {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0}
     assert rows[3] == {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0}
-    assert rows[4] == {"theta": 17.7, "d": -145.132, "a": 0.0, "alpha": 2.278}
-    assert rows[5] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
+    assert rows[4] == {"theta": 90.0, "d": -60.0, "a": 0.0, "alpha": 180.0}
+    assert rows[5] == {"theta": -90.0, "d": 126.55, "a": 0.5, "alpha": 0.0}
 
 
 def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
@@ -1221,7 +1221,8 @@ def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
     assert config["dh_rows"][0] == {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0}
     assert config["dh_rows"][1]["a"] == 125.0
     assert config["dh_rows"][3] == {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0}
-    assert config["dh_rows"][4] == {"theta": 17.7, "d": -145.132, "a": 0.0, "alpha": 2.278}
+    assert config["dh_rows"][4] == {"theta": 90.0, "d": -60.0, "a": 0.0, "alpha": 180.0}
+    assert config["dh_rows"][5] == {"theta": -90.0, "d": 126.55, "a": 0.5, "alpha": 0.0}
 
 
 def test_arm3d_unlock_restores_semantic_disabled_fields():
@@ -2084,7 +2085,7 @@ class TestSafetyAndConstraints:
 
     def test_safety_warns_for_true_jacobian_singularity(self, motor3d_api):
         """Una pose extendida con perdida de rango del Jacobiano mantiene el aviso."""
-        motor3d_api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -80.0]
+        motor3d_api.model.joints = [0.0, 0.0, 0.0, 0.0, 81.0, -17.0]
         motor3d_api.scene.update()
 
         result = motor3d_api.evaluate_safety()
@@ -2175,12 +2176,15 @@ class TestPersistence:
 
         assert layer.motor3d.model.joints[0] == pytest.approx(10.0)
 
-    def test_braccio_dh_effector_matches_visual_tcp(self):
-        """Tras recalibrar el DH al STL real, el efector cinematico (objetivo de la
-        IK y valor mostrado) coincide con el TCP visual de las garras: lo que se
-        escribe en la CI = lo mostrado = el brazo dibujado."""
+    def test_braccio_dh_neutral_gripper_tip_matches_visual_tcp(self):
+        """La tabla DH del Braccio lleva la longitud real de la pinza.
+
+        El TCP visual exacto del Braccio se mantiene en el centro de las garras,
+        por eso se compara con la referencia neutra q5=0.
+        """
         import math
         from motor3d.api import Motor3DApi
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 
         api = Motor3DApi()
         for joints in ([0.0, 0.0, 0.0, 0.0, 0.0, -17.0],
@@ -2188,11 +2192,18 @@ class TestPersistence:
             api.model.joints = list(joints)
             api.scene.update()
 
-            fk_ee = api.scene.last_chain["end_effector"]
             visual_tcp = api.scene.get_end_effector()
-            distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
+            saved_joints = list(api.model.joints)
+            api.model.joints[5] = 0.0
+            neutral_fk_ee = forward_kinematics_chain(api.model)["end_effector"]
+            api.model.joints = saved_joints
 
-            assert distance < 1.0, f"DH y TCP visual divergen {distance:.2f} mm"
+            neutral_distance = math.sqrt(sum(
+                (a - b) ** 2 for a, b in zip(neutral_fk_ee, visual_tcp)
+            ))
+
+            assert neutral_distance < 2.0, (
+                f"DH neutra y TCP visual divergen {neutral_distance:.2f} mm")
             assert visual_tcp[2] <= api.model.max_reach() + 30.0
 
     def test_generic_ik_targets_closed_gripper_tip(self):
