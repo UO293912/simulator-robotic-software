@@ -154,7 +154,7 @@ class _ModelJointSnap:
     """Proxy del modelo que sobreescribe únicamente los ángulos articulares.
 
     Permite calcular forward_kinematics_chain con joints intermedios sin
-    modificar el modelo real. Delega dof, dh_rows y tool_offset al modelo base.
+    modificar el modelo real. Delega dof y dh_rows al modelo base.
     """
 
     __slots__ = ('_base', 'joints')

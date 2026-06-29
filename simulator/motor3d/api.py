@@ -178,8 +178,8 @@ class Motor3DApi:
         brazo sin pinza), basta el solver DH estándar. Si la punta es la de la
         pinza decorativa de un brazo genérico —rígida respecto al penúltimo marco
         e independiente de la última articulación (el gripper)— se resuelve un
-        modelo reducido de dof-1 articulaciones con la punta como herramienta
-        constante, lo que la persigue de forma nativa y robusta."""
+        modelo temporal con una fila DH fija hasta la punta, lo que la persigue
+        de forma nativa y robusta sin offsets de herramienta ocultos."""
         tip, chain = self._effective_tip()
         ee = chain['end_effector']
         if self.model.dof >= 2 and math.dist(tip, ee) > 1.0:
@@ -193,9 +193,11 @@ class Motor3DApi:
         return math.dist(tip2, target)
 
     def _solve_via_reduced_model(self, target, tip, chain):
-        """Persigue la punta de la pinza decorativa resolviendo un brazo reducido
-        (sin la última articulación) con la punta expresada como herramienta
-        constante en el penúltimo marco. Devuelve el error final o None si falla."""
+        """Persigue la punta de la pinza decorativa con un modelo temporal.
+
+        Se elimina la última articulación de apertura y se añade una fila DH fija
+        que lleva desde el penúltimo marco hasta el TCP de la pinza.
+        """
         try:
             dof = self.model.dof
             t_parent = np.array(chain['matrices'][dof - 2], dtype=float)
@@ -207,11 +209,24 @@ class Motor3DApi:
                         'servo_pins', 'servo_calibration', 'prismatic_pre_rotations'):
                 if isinstance(data.get(key), list):
                     data[key] = data[key][:dof - 1]
-            data['dof'] = dof - 1
-            data['tool'] = {
-                'parent_joint': -1,
-                'offset': [float(tip_local[0]), float(tip_local[1]), float(tip_local[2])],
-            }
+
+            x, y, z = float(tip_local[0]), float(tip_local[1]), float(tip_local[2])
+            data['dh_rows'].append({
+                'theta': math.degrees(math.atan2(y, x)) if abs(x) > 1e-9 or abs(y) > 1e-9 else 0.0,
+                'd': z,
+                'a': math.hypot(x, y),
+                'alpha': 0.0,
+            })
+            data['joint_types'].append('R')
+            data['joint_limits'].append([0.0, 0.0])
+            data['joints'].append(0.0)
+            if isinstance(data.get('servo_pins'), list):
+                data['servo_pins'].append(None)
+            if isinstance(data.get('servo_calibration'), list):
+                data['servo_calibration'].append([])
+            if isinstance(data.get('prismatic_pre_rotations'), list):
+                data['prismatic_pre_rotations'].append({'yaw': 0.0, 'pitch': 0.0})
+            data['dof'] = dof
             reduced.load_dict(data)
             solve_inverse_kinematics(
                 reduced, list(target), max_iter=self.API_IK_MAX_ITER,
@@ -338,10 +353,7 @@ class Motor3DApi:
         except Exception:
             base_offset = 0.0
 
-        tool_offset = getattr(self.model, 'tool_offset', None) or [0.0, 0.0, 0.0]
-        tool_extent = math.sqrt(sum(float(v) * float(v) for v in tool_offset[:3]))
-
-        extent = base_offset + reach + tool_extent
+        extent = base_offset + reach
         return max(
             self.camera.DEFAULT_DISTANCE,
             extent * self.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
@@ -361,8 +373,8 @@ class Motor3DApi:
     def _points_with_kinematic_end_effector(self):
         """Posiciones articulares con el último punto = efector cinemático.
 
-        Es el extremo de la cadena DH (incluido tool_offset), el mismo objetivo
-        que resuelve la IK; se usa para el chequeo de alcance/workspace."""
+        Es el extremo de la cadena DH, el mismo objetivo que resuelve la IK; se
+        usa para el chequeo de alcance/workspace."""
         points = [list(p) for p in (self.scene.last_points or [])]
         chain = self.scene.last_chain
         ee = chain.get('end_effector') if chain else None

@@ -175,7 +175,6 @@ def _make_two_dof_config():
             {"theta": 0.0, "d": 120.0, "a": 0.0, "alpha": 90.0},
             {"theta": 0.0, "d": 0.0, "a": 200.0, "alpha": 0.0},
         ],
-        "tool": {"parent_joint": -1, "offset": [0.0, 0.0, 0.0]},
         "visual": {"mode": "auto_generic", "theme": "default", "sizes": {}},
     }
 

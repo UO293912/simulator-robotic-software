@@ -246,11 +246,9 @@ class TestInverseKinematics:
 
     def test_ik_api_refines_single_call_beyond_legacy_tolerance(self, motor3d_api):
         """La API de IK debe refinar en una sola llamada hasta ~1 mm."""
-        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
-
         target = [0.0, 300.0, 200.0]
         converged, _ = motor3d_api.solve_ik(*target)
-        ee = forward_kinematics_chain(motor3d_api.model)['end_effector']
+        ee = motor3d_api.scene.get_end_effector()
         error = math.sqrt(
             (ee[0] - target[0]) ** 2
             + (ee[1] - target[1]) ** 2
@@ -407,7 +405,6 @@ def test_generic_joint_range_arcs_visible_for_zero_length_links():
             {'theta': 0.0, 'd': 0.0, 'a': 150.0, 'alpha': 0.0},
             {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 90.0},
         ],
-        'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
         'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
     })
     renderer = Robot3DDrawing(stl_dir=None)
@@ -605,6 +602,116 @@ class TestRendering:
 
         np.testing.assert_allclose(tcp_open, tcp_closed, atol=1e-9)
         assert np.linalg.norm(fk_open - fk_closed) > 5.0
+
+    def test_generic_gripper_uses_last_dh_offset_as_closed_tip(self):
+        """La pinza usa d/a del ultimo row como su punta cerrada, no como eslabon."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 100.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -10.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[15.0, -20.0, -60.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 25.0, 'd': 80.0, 'a': 60.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        dims = visual._resolve_dimensions(model)
+        chain = forward_kinematics_chain(model)
+        grip = visual._get_gripper_geometry(model, chain, dims)
+        assert grip is not None
+
+        neutral = ArmKinematicState()
+        neutral.load_dict(model.to_dict())
+        neutral.joints[2] = 0.0
+        neutral_chain = forward_kinematics_chain(neutral)
+        np.testing.assert_allclose(grip['tcp'], neutral_chain['positions'][-1], atol=1e-9)
+        assert np.linalg.norm(np.asarray(chain['positions'][-1]) - grip['tcp']) > 5.0
+        np.testing.assert_allclose(
+            visual.get_effective_end_effector(model, chain['positions'], chain),
+            grip['tcp'],
+            atol=1e-9,
+        )
+
+        neutral_grip = visual._get_gripper_geometry(neutral, neutral_chain, dims)
+        tips_midpoint = 0.5 * (
+            neutral_grip['fingers'][0]['tip'] + neutral_grip['fingers'][1]['tip']
+        )
+        np.testing.assert_allclose(neutral_grip['tcp'], tips_midpoint, atol=1e-9)
+
+    def test_generic_gripper_with_d_dominant_tip_still_opens_visually(self):
+        """Una pinza larga por d debe abrir alrededor de un eje visual perpendicular."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=2,
+            link_lengths=[120.0, 2.0],
+            joint_limits=[(-90.0, 90.0), (-80.0, -17.0)],
+            joint_types=['R', 'R'],
+            joints=[0.0, -80.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 0.0, 'a': 120.0, 'alpha': 90.0},
+                {'theta': -90.0, 'd': 126.55, 'a': 0.5, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        grip = visual._get_gripper_geometry(
+            model, forward_kinematics_chain(model), visual._resolve_dimensions(model)
+        )
+
+        assert grip is not None
+        assert abs(float(np.dot(grip['hinge_axis'], grip['forward']))) < 1e-9
+        left = next(f for f in grip['fingers'] if f['sign'] > 0)
+        right = next(f for f in grip['fingers'] if f['sign'] < 0)
+        assert np.dot(left['dir'], grip['side']) > 0.1
+        assert np.dot(right['dir'], grip['side']) < -0.1
+
+    def test_generic_gripper_has_no_minimum_size_with_zero_last_dh_offset(self):
+        """La pinza no debe heredar un tamano minimo si el ultimo d/a es cero."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 0.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -10.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[15.0, -20.0, -60.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        chain = forward_kinematics_chain(model)
+        grip = visual._get_gripper_geometry(model, chain, visual._resolve_dimensions(model))
+
+        assert grip is not None
+        assert grip['palm_depth'] == pytest.approx(0.0)
+        assert grip['finger_width'] == pytest.approx(0.0)
+        np.testing.assert_allclose(grip['tcp'], chain['positions'][-2], atol=1e-9)
 
     def test_generic_gripper_fingers_counter_rotate_symmetrically(self):
         """La pinza genérica debe abrir los dedos en espejo usando un pivote común."""
@@ -1631,7 +1738,6 @@ class TestCameraNavigation:
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
             ],
-            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
             'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         }
 
@@ -1656,7 +1762,6 @@ class TestCameraNavigation:
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
             ],
-            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
             'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         }
 
@@ -2228,7 +2333,6 @@ class TestPersistence:
                 {'theta': 0.0, 'd': 0.0, 'a': 31.62, 'alpha': 90.0},
                 {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
             ],
-            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
             'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         })
         api.scene.update()
@@ -2858,27 +2962,13 @@ class TestMotor3DEdgeCases:
 
         np.testing.assert_allclose(jacobian, [[0.0, 0.0, 1.0]], atol=1e-9)
 
-    def test_fk_legacy_rpy_tool_offset_and_invalid_vector_fallback(self):
+    def test_fk_legacy_rpy_and_invalid_vector_fallback(self):
         import numpy as np
         import motor3d.kinematics.kinematics_fk as fk
-        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
 
         model_with_rpy = SimpleNamespace(base_rpy=[0.0, 90.0, 0.0])
         transform = fk.get_base_transform(model_with_rpy)
         np.testing.assert_allclose(transform[:3, 2], [1.0, 0.0, 0.0], atol=1e-9)
-
-        arm = ArmKinematicState()
-        arm.configure(
-            dof=1,
-            link_lengths=[10.0],
-            joint_limits=[(-90.0, 90.0)],
-            joint_types=["R"],
-            joints=[0.0],
-            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 10.0, "alpha": 0.0}],
-            tool={"parent_joint": 0, "offset": [1.0, 2.0, 3.0]},
-        )
-        chain = fk.forward_kinematics_chain(arm)
-        np.testing.assert_allclose(chain["end_effector"], [11.0, 2.0, 3.0], atol=1e-9)
 
         assert fk.get_prismatic_pre_rotation(
             SimpleNamespace(prismatic_pre_rotations=["bad"]), 0
@@ -2990,7 +3080,6 @@ class TestMotor3DEdgeCases:
             joint_types=["R"],
             joints=[0.0],
             dh_rows=[{"theta": 0.0, "d": 0.0, "a": 100.0, "alpha": 0.0}],
-            tool={"parent_joint": 0, "offset": [3.0, 4.0, 0.0]},
             visual={"mode": "auto_generic"},
         )
 
@@ -3001,6 +3090,6 @@ class TestMotor3DEdgeCases:
 
         expected = max(
             api.camera.DEFAULT_DISTANCE,
-            (100.0 + 5.0) * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
+            100.0 * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
         )
         assert math.isclose(api._recommended_camera_distance(), expected)

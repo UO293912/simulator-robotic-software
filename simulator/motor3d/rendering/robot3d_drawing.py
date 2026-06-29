@@ -262,7 +262,7 @@ class BraccioVisualModel:
 
     def get_effective_end_effector(self, model, points, chain):
         """
-        Devuelve el TCP (tool center point) calculado con la cadena URDF:
+        Devuelve el TCP calculado con la cadena URDF:
         la posición de la punta de las garras cuando están cerradas,
         independiente del estado real de apertura del gripper (joint[5]).
 
@@ -558,9 +558,30 @@ class GenericDhVisualModel:
                 return np.array([1.0, 0.0, 0.0], dtype=float)
         return vec / norm
 
+    @staticmethod
+    def _rotate_about_axis(vector, axis, angle):
+        vec = np.asarray(vector, dtype=float)
+        ax = np.asarray(axis, dtype=float)
+        ax_norm = np.linalg.norm(ax)
+        if ax_norm < 1e-9:
+            return vec
+        ax = ax / ax_norm
+        c = math.cos(angle)
+        s = math.sin(angle)
+        return (
+            vec * c
+            + np.cross(ax, vec) * s
+            + ax * np.dot(ax, vec) * (1.0 - c)
+        )
+
     def _is_gripper_joint(self, model, joint_idx, seg_len, radius):
         jtype = model.joint_types[joint_idx] if joint_idx < len(model.joint_types) else 'R'
-        return joint_idx == model.dof - 1 and jtype != 'P' and seg_len < radius * 2.8
+        if joint_idx != model.dof - 1 or model.dof < 2 or jtype == 'P':
+            return False
+        if seg_len < radius * 2.8:
+            return True
+        mn, mx = model.joint_limits[joint_idx] if joint_idx < len(model.joint_limits) else (-90.0, 90.0)
+        return float(mx) <= 10.0 and float(mn) < float(mx)
 
     def _gripper_ratio(self, model, joint_idx):
         jval = model.joints[joint_idx] if joint_idx < len(model.joints) else 0.0
@@ -588,30 +609,45 @@ class GenericDhVisualModel:
 
         base_T = get_base_transform(model)
         T_prev = matrices[joint_idx - 1] if joint_idx > 0 else base_T
+        row = model.dh_rows[joint_idx] if joint_idx < len(model.dh_rows) else {}
 
         hinge_axis = self._safe_normalize(T_prev[:3, 2], [0.0, 0.0, 1.0])
         forward = self._joint_neutral_xref(model, joint_idx, T_prev)
         forward = np.asarray(forward, dtype=float) - hinge_axis * np.dot(forward, hinge_axis)
         forward = self._safe_normalize(forward, T_prev[:3, 0])
-        side = self._safe_normalize(np.cross(hinge_axis, forward), T_prev[:3, 1])
 
-        palm_depth = max(radius * 0.95, seg_len * 0.9, 18.0)
-        # Separación lateral de los dedos respecto al eje central: lo bastante
-        # pequeña para que las piezas queden cerca del centro (dejando un hueco
-        # interior mínimo) en cualquier configuración.
-        bridge_half_span = radius * 0.34
-        finger_width = radius * 0.36
-        finger_len = max(radius * 2.45, seg_len * 3.0)
-        finger_base_offset = finger_width * 0.25
-        knuckle_radius = max(radius * 0.18, finger_width * 0.42)
+        a_offset = float(row.get('a', 0.0))
+        d_offset = float(row.get('d', 0.0))
+        closed_offset = forward * a_offset + hinge_axis * d_offset
+        tcp = p0 + closed_offset
+        visual_span = float(np.linalg.norm(closed_offset))
+        closed_dir = self._safe_normalize(closed_offset, forward)
 
-        wrist_center = p0 - forward * (palm_depth * 0.10)
-        bridge_center = p0 + forward * (palm_depth * 0.18)
-        hinge_center = p0 + forward * (palm_depth * 0.46)
-        tcp = hinge_center + forward * (finger_base_offset + finger_len)
+        open_axis = hinge_axis - closed_dir * np.dot(hinge_axis, closed_dir)
+        if np.linalg.norm(open_axis) < 1e-9:
+            open_axis = forward - closed_dir * np.dot(forward, closed_dir)
+        open_axis = self._safe_normalize(open_axis, T_prev[:3, 1])
+        side = self._safe_normalize(np.cross(open_axis, closed_dir), np.cross(hinge_axis, forward))
+
+        palm_radius = min(visual_span * 0.09, radius * 0.38)
+        palm_depth = min(visual_span * 0.10, radius * 0.50)
+        # Pinza estilizada: la longitud viene de la fila DH, pero el grosor queda
+        # acotado para que escalas grandes no generen mordazas desproporcionadas.
+        finger_width = min(visual_span * 0.055, radius * 0.24)
+        bridge_half_span = finger_width * 0.58
+        hinge_dist = min(visual_span * 0.24, radius * 1.25)
+        finger_len = max(0.0, visual_span - hinge_dist)
+        knuckle_radius = finger_width * 0.42
+
+        wrist_center = p0 + closed_dir * (palm_depth * 0.50)
+        hinge_center = p0 + closed_dir * hinge_dist
+        bridge_center = hinge_center
+        neck_start = p0 + closed_dir * palm_depth
+        neck_end = hinge_center
+        neck_width = finger_width * 1.05
 
         # Cada dedo se separa del eje un ángulo igual al valor articular: los dedos
-        # quedan paralelos (cerrados, a lo largo de 'forward') en jval=0 y se abren
+        # quedan paralelos (cerrados, a lo largo de 'closed_dir') en jval=0 y se abren
         # a medida que jval se aleja de 0. Así cada límite acota el recorrido de su
         # dedo y el límite más cercano a 0 controla cuánto puede cerrarse la pinza
         # (si no llega a 0 queda un hueco; si lo cruza, se cerraría de más).
@@ -620,12 +656,9 @@ class GenericDhVisualModel:
         for sign in (+1.0, -1.0):
             hinge = hinge_center + side * sign * bridge_half_span
             angle = math.radians(-sign * jval_g)
-            finger_dir = (
-                math.cos(angle) * forward
-                + math.sin(angle) * side
-            )
-            finger_dir = self._safe_normalize(finger_dir, forward)
-            root = hinge + finger_dir * finger_base_offset
+            finger_dir = self._rotate_about_axis(closed_dir, open_axis, angle)
+            finger_dir = self._safe_normalize(finger_dir, closed_dir)
+            root = hinge.copy()
             tip = root + finger_dir * finger_len
             fingers.append({
                 'sign': sign,
@@ -637,17 +670,19 @@ class GenericDhVisualModel:
 
         return {
             'joint_idx': joint_idx,
-            'radius': radius,
+            'palm_radius': palm_radius,
             'palm_depth': palm_depth,
             'finger_width': finger_width,
             'bridge_half_span': bridge_half_span,
             'knuckle_radius': knuckle_radius,
+            'neck_start': neck_start,
+            'neck_end': neck_end,
+            'neck_width': neck_width,
             'wrist_center': wrist_center,
             'bridge_center': bridge_center,
-            'hinge_center': hinge_center,
-            'forward': forward,
+            'forward': closed_dir,
             'side': side,
-            'hinge_axis': hinge_axis,
+            'hinge_axis': open_axis,
             'tcp': tcp,
             'fingers': fingers,
         }
@@ -762,7 +797,7 @@ class GenericDhVisualModel:
 
             # Frame anterior: define el eje de rotación REAL del joint i (col Z)
             T_prev = matrices[i - 1] if i > 0 else base_T
-            # Transform alineado con la dirección del eslabón (p0→p1)
+            # Transform alineado con la direccion del eslabon (p0 -> p1)
             T_link = _axis_aligned_transform(p1 - p0)
 
             jtype    = model.joint_types[i] if i < len(model.joint_types) else 'R'
@@ -785,13 +820,21 @@ class GenericDhVisualModel:
             if is_gripper:
                 palm = _make_cylinder(
                     gripper['wrist_center'],
-                    T_prev,
-                    r * 0.60,
-                    max(r * 0.80, gripper['palm_depth'] * 0.92),
+                    _axis_aligned_transform(gripper['forward']),
+                    gripper['palm_radius'],
+                    gripper['palm_depth'] * 0.92,
                     self.JOINT_STEPS,
                 )
                 if palm.size > 0:
                     yield palm, housing_color
+
+                neck = _make_link_prism(
+                    gripper['neck_start'],
+                    gripper['neck_end'],
+                    gripper['neck_width'],
+                )
+                if neck.size > 0:
+                    yield neck, housing_color
 
                 bridge = _make_link_prism(
                     gripper['bridge_center'] - gripper['side'] * gripper['bridge_half_span'],
@@ -867,7 +910,7 @@ class GenericDhVisualModel:
                 hub = _make_cylinder(p0, T_link, r * 0.38, hub_h, self.JOINT_STEPS)
                 if hub.size > 0:
                     yield hub, actuator_color
-                # Sección de eslabón
+                # Seccion de eslabon: el destino ya combina d y a de la fila DH.
                 prism = _make_link_prism(p0, p1, lw)
                 if prism.size > 0:
                     yield prism, link_color
@@ -899,6 +942,9 @@ class GenericDhVisualModel:
 
 def _make_cylinder(center, transform_mat, radius, height, steps):
     """Genera triángulos de un cilindro orientado según los ejes de transform_mat."""
+    if radius <= 1e-9 or height <= 1e-9 or steps < 3:
+        return np.zeros((0, 3, 3))
+
     tris = []
     angles = [2 * math.pi * k / steps for k in range(steps)]
     # Usar la columna Z de la matriz de transformación como eje del cilindro
@@ -929,15 +975,19 @@ def _make_cylinder(center, transform_mat, radius, height, steps):
         p1t = top + radius * (math.cos(a1) * u + math.sin(a1) * v)
         tris.append(np.array([[p0b, p1b, p0t]]))
         tris.append(np.array([[p1b, p1t, p0t]]))
+        tris.append(np.array([[top, p0t, p1t]]))
+        tris.append(np.array([[bot, p1b, p0b]]))
 
     if tris:
-        result = np.vstack(tris)
-        return result
+        return np.vstack(tris)
     return np.zeros((0, 3, 3))
 
 
 def _make_link_prism(p0, p1, width):
     """Genera triángulos de un prisma cuadrado entre dos puntos."""
+    if width <= 1e-9:
+        return np.zeros((0, 3, 3))
+
     p0 = np.array(p0, dtype=float)
     p1 = np.array(p1, dtype=float)
     axis = p1 - p0
@@ -964,6 +1014,11 @@ def _make_link_prism(p0, p1, width):
         j = (i + 1) % 4
         faces.append([corners_b[i], corners_b[j], corners_t[i]])
         faces.append([corners_b[j], corners_t[j], corners_t[i]])
+
+    faces.append([corners_b[0], corners_b[1], corners_b[2]])
+    faces.append([corners_b[0], corners_b[2], corners_b[3]])
+    faces.append([corners_t[0], corners_t[2], corners_t[1]])
+    faces.append([corners_t[0], corners_t[3], corners_t[2]])
 
     return np.array(faces, dtype=float)
 

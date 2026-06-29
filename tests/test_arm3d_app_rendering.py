@@ -754,8 +754,8 @@ def test_generic_robot_renderer_builds_geometry_for_rotational_and_prismatic_mod
     cylinder = _make_cylinder([0.0, 0.0, 0.0], np.eye(4), 10.0, 20.0, 8)
     prism = _make_link_prism([0.0, 0.0, 0.0], [30.0, 0.0, 0.0], 8.0)
     sphere = _make_sphere_approx([0.0, 0.0, 0.0], 5.0, steps=4)
-    assert cylinder.shape == (16, 3, 3)
-    assert prism.shape == (8, 3, 3)
+    assert cylinder.shape == (32, 3, 3)
+    assert prism.shape == (12, 3, 3)
     assert sphere.shape == (64, 3, 3)
     assert _tint_color((200, 220, 240), 1.3) == (255, 255, 255)
 

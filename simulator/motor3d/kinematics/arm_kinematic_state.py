@@ -23,13 +23,11 @@ class ArmKinematicState:
         self.servo_calibration = []
         self.base_row = {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}
         self.preset_name = None
-        self.tool_parent_joint = -1
-        self.tool_offset = [0.0, 0.0, 0.0]
         self.visual = {"mode": "auto_generic", "theme": "default", "sizes": {}}
 
     def configure(self, dof, link_lengths=None, joint_limits=None,
                   joint_types=None, joints=None, dh_rows=None,
-                  tool=None, visual=None, base=None, prismatic_pre_rotations=None,
+                  visual=None, base=None, prismatic_pre_rotations=None,
                   servo_pins=None, servo_calibration=None):
         self.dof = max(self.MIN_DOF, min(self.MAX_DOF, int(dof)))
         n = self.dof
@@ -89,13 +87,6 @@ class ArmKinematicState:
         self.servo_calibration = self._normalize_servo_calibration(servo_calibration, n)
         self.base_row = self._normalize_base_row(base)
 
-        if tool:
-            self.tool_parent_joint = tool.get('parent_joint', -1)
-            self.tool_offset = tool.get('offset', [0.0, 0.0, 0.0])
-        else:
-            self.tool_parent_joint = -1
-            self.tool_offset = [0.0, 0.0, 0.0]
-
         if visual:
             self.visual = dict(visual)
         else:
@@ -143,12 +134,6 @@ class ArmKinematicState:
 
             reach += a + max_abs_d
 
-        # El efector cinemático incluye el desplazamiento de herramienta
-        # (tool_offset); si no se contabiliza, el extremo real cae fuera de la
-        # esfera de alcance y el chequeo de workspace marca falsos "fuera de rango".
-        tool = getattr(self, 'tool_offset', None) or [0.0, 0.0, 0.0]
-        reach += math.sqrt(sum(float(v) ** 2 for v in tool[:3]))
-
         return reach
 
     def to_dict(self):
@@ -167,10 +152,6 @@ class ArmKinematicState:
             ],
             'base': dict(self.base_row),
             'preset_name': self.preset_name,
-            'tool': {
-                'parent_joint': self.tool_parent_joint,
-                'offset': list(self.tool_offset),
-            },
             'visual': dict(self.visual),
         }
 
@@ -185,7 +166,6 @@ class ArmKinematicState:
             joints=data.get('joints'),
             dh_rows=data.get('dh_rows'),
             base=data.get('base'),
-            tool=data.get('tool'),
             visual=data.get('visual'),
             prismatic_pre_rotations=data.get('prismatic_pre_rotations'),
             servo_pins=data.get('servo_pins'),
