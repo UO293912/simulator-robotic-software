@@ -12,9 +12,9 @@ block_cipher = None
 # se dejan FUERA del ejecutable.
 _codes_datas = [(p, 'codes') for p in sorted(glob.glob('codes/challenge*'))]
 _codes_datas += [
-    ('codes/braccio_secuencia', 'codes'),
-    ('codes/braccio_all_joints', 'codes'),
-    ('codes/braccio_all_joints_servo', 'codes'),
+    ('codes/Prueba_Braccio_Library.ino', 'codes'),
+    ('codes/Prueba_Servo_Library.ino', 'codes'),
+    ('codes/braccio_medicion_real_servo.ino', 'codes'),
     ('codes/brazo_mixto_6gdl_rprprr', 'codes'),
 ]
 
