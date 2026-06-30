@@ -1448,6 +1448,12 @@ class Robot3DDrawing:
             return []
 
         points = np.asarray(trail, dtype=float)
+        if points.ndim != 2 or points.shape[1] < 3:
+            return []
+        points = points[:, :3]
+        if points.shape[0] < 2:
+            return []
+
         r_view = projection['R_view']
         cam_pos = projection['cam_pos']
         f = projection['f']
@@ -1457,31 +1463,74 @@ class Robot3DDrawing:
         n_points = points.shape[0]
         items = []
         segment_mm, max_pieces = self._trail_quality()
+        cam_points = (points - cam_pos) @ r_view.T
+        visible = cam_points[:, 2] > 0.01
+
+        if mode == 'isometrica':
+            scale = projection['ortho_scale']
+            sx_all = cam_points[:, 0] * scale + cx
+            sy_all = -cam_points[:, 1] * scale + cy
+        else:
+            z_safe = np.where(visible, cam_points[:, 2], 1.0)
+            sx_all = (cam_points[:, 0] / z_safe) * f + cx
+            sy_all = (-cam_points[:, 1] / z_safe) * f + cy
+        projected = np.stack([sx_all, sy_all], axis=1)
+
+        def project_camera_pair(cam0, cam1):
+            if cam0[2] <= 0.01 or cam1[2] <= 0.01:
+                return None
+            if mode == 'isometrica':
+                scale = projection['ortho_scale']
+                p0 = (cam0[0] * scale + cx, -cam0[1] * scale + cy)
+                p1 = (cam1[0] * scale + cx, -cam1[1] * scale + cy)
+            else:
+                p0 = ((cam0[0] / cam0[2]) * f + cx, (-cam0[1] / cam0[2]) * f + cy)
+                p1 = ((cam1[0] / cam1[2]) * f + cx, (-cam1[1] / cam1[2]) * f + cy)
+            return p0, p1
 
         for i in range(n_points - 1):
             p_start = points[i]
             p_end = points[i + 1]
             segment = p_end - p_start
             length = float(np.linalg.norm(segment))
+            if length < 1e-9:
+                continue
             pieces = max(1, min(max_pieces, int(math.ceil(length / segment_mm))))
+
+            if pieces == 1:
+                if not visible[i] or not visible[i + 1]:
+                    continue
+                p0 = (float(projected[i, 0]), float(projected[i, 1]))
+                p1 = (float(projected[i + 1, 0]), float(projected[i + 1, 1]))
+
+                alpha = i / max(1, n_points - 1)
+                brightness = 0.25 + 0.75 * alpha
+                color = (
+                    min(255, int(self.TRAIL_COLOR[0] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[1] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[2] * brightness)),
+                )
+                width_px = 1 if brightness < 0.6 else 2
+                items.append((
+                    float((cam_points[i, 2] + cam_points[i + 1, 2]) * 0.5),
+                    [p0, p1],
+                    color,
+                    width_px,
+                ))
+                continue
+
+            cam_start = cam_points[i]
+            cam_segment = cam_points[i + 1] - cam_start
 
             for piece in range(pieces):
                 t0 = piece / pieces
                 t1 = (piece + 1) / pieces
-                p0 = p_start + segment * t0
-                p1 = p_start + segment * t1
-                cam_pair = np.stack([p0, p1], axis=0)
-                cam_pair = (cam_pair - cam_pos) @ r_view.T
-                if (cam_pair[:, 2] <= 0.01).any():
+                cam0 = cam_start + cam_segment * t0
+                cam1 = cam_start + cam_segment * t1
+                pair = project_camera_pair(cam0, cam1)
+                if pair is None:
                     continue
-
-                if mode == 'isometrica':
-                    scale = projection['ortho_scale']
-                    sx = cam_pair[:, 0] * scale + cx
-                    sy = -cam_pair[:, 1] * scale + cy
-                else:
-                    sx = (cam_pair[:, 0] / cam_pair[:, 2]) * f + cx
-                    sy = (-cam_pair[:, 1] / cam_pair[:, 2]) * f + cy
+                p0, p1 = pair
 
                 alpha = (i + t0) / max(1, n_points - 1)
                 brightness = 0.25 + 0.75 * alpha
@@ -1492,8 +1541,8 @@ class Robot3DDrawing:
                 )
                 width = 1 if brightness < 0.6 else 2
                 items.append((
-                    float(np.mean(cam_pair[:, 2])),
-                    [(float(sx[0]), float(sy[0])), (float(sx[1]), float(sy[1]))],
+                    float((cam0[2] + cam1[2]) * 0.5),
+                    [(float(p0[0]), float(p0[1])), (float(p1[0]), float(p1[1]))],
                     color,
                     width,
                 ))
@@ -1506,31 +1555,58 @@ class Robot3DDrawing:
         if not prepared_chunks and not trail_items:
             return
 
-        draw_items = []
+        pts2d = depths = rgb = mesh_order = None
         if prepared_chunks:
             pts2d = np.concatenate([chunk[0] for chunk in prepared_chunks], axis=0)
             depths = np.concatenate([chunk[1] for chunk in prepared_chunks], axis=0)
             rgb = np.concatenate([chunk[2] for chunk in prepared_chunks], axis=0)
-            for i in range(len(depths)):
-                draw_items.append(('polygon', float(depths[i]), pts2d[i], rgb[i]))
+            mesh_order = np.argsort(-depths)
 
-        for depth, points, color, width in trail_items:
-            draw_items.append(('line', depth, points, color, width))
+        if trail_items:
+            trail_items = sorted(trail_items, key=lambda item: -item[0])
 
-        draw_items.sort(key=lambda item: -item[1])
-        for item in draw_items:
-            try:
-                if item[0] == 'polygon':
-                    pts = item[2]
-                    c = item[3]
-                    draw.polygon(
-                        [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
-                        fill=(int(c[0]), int(c[1]), int(c[2]))
-                    )
-                else:
-                    draw.line(item[2], fill=item[3], width=item[4])
-            except Exception:
-                pass
+        mesh_pos = 0
+        trail_pos = 0
+        mesh_count = 0 if mesh_order is None else len(mesh_order)
+        trail_count = len(trail_items)
+
+        while mesh_pos < mesh_count or trail_pos < trail_count:
+            if trail_pos < trail_count:
+                trail_depth = trail_items[trail_pos][0]
+            else:
+                trail_depth = None
+
+            if mesh_pos < mesh_count:
+                mesh_idx = mesh_order[mesh_pos]
+                mesh_depth = depths[mesh_idx]
+            else:
+                mesh_idx = None
+                mesh_depth = None
+
+            if trail_depth is not None and (mesh_depth is None or trail_depth > mesh_depth):
+                self._draw_trail_item(draw, trail_items[trail_pos])
+                trail_pos += 1
+            else:
+                self._draw_mesh_item(draw, pts2d[mesh_idx], rgb[mesh_idx])
+                mesh_pos += 1
+
+    @staticmethod
+    def _draw_mesh_item(draw, pts, color):
+        try:
+            draw.polygon(
+                [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
+                fill=(int(color[0]), int(color[1]), int(color[2])),
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _draw_trail_item(draw, item):
+        try:
+            _depth, points, color, width = item
+            draw.line(points, fill=color, width=width)
+        except Exception:
+            pass
 
     def _render_mesh_vectorized(self, draw, projection, mesh_groups, trail=None):
         """
