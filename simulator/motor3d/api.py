@@ -23,6 +23,7 @@ from motor3d.safety.safety_manager import SafetyManager
 class Motor3DApi:
 
     DEFAULT_PRESET = 'braccio_tinkerkit'
+    _RUNTIME_VISUAL_FLAGS = ('show_joint_ranges', 'show_joint_axes')
     AUTO_GENERIC_CAMERA_DISTANCE_FACTOR = 1.25
     # Umbral de error (mm) por debajo del cual la IK se reporta como "convergida".
     IK_REPORT_TOLERANCE_MM = 5.0
@@ -247,7 +248,9 @@ class Motor3DApi:
         return self.model.to_dict()
 
     def set_model_config(self, config):
+        visual_flags = self._capture_runtime_visual_flags()
         self.model.load_dict(config)
+        self._restore_runtime_visual_flags(visual_flags)
         self._sync_active_preset_name()
         self.renderer._canvas_image_id = None
         self.scene.clear_trail()
@@ -259,8 +262,10 @@ class Motor3DApi:
         return self.repository.save_model(self.model, path=path or self.autosave_path)
 
     def load_model_config(self, path=None):
+        visual_flags = self._capture_runtime_visual_flags()
         ok = self.repository.load_model(self.model, path=path or self.autosave_path)
         if ok:
+            self._restore_runtime_visual_flags(visual_flags)
             self._sync_active_preset_name()
             self.scene.clear_trail()
             self._sync_camera_distance_for_model()
@@ -319,6 +324,22 @@ class Motor3DApi:
         )
         self.active_preset_name = None
         self.model.preset_name = None
+
+    def _capture_runtime_visual_flags(self):
+        visual = getattr(self.model, 'visual', {}) or {}
+        return {
+            key: bool(visual.get(key, False))
+            for key in self._RUNTIME_VISUAL_FLAGS
+        }
+
+    def _restore_runtime_visual_flags(self, flags):
+        if not isinstance(flags, dict):
+            return
+        for key in self._RUNTIME_VISUAL_FLAGS:
+            if flags.get(key, False):
+                self.model.visual[key] = True
+            else:
+                self.model.visual.pop(key, None)
 
     def _sync_active_preset_name(self):
         preset_name = getattr(self.model, 'preset_name', None)

@@ -1255,12 +1255,8 @@ class Robot3DDrawing:
                 continue
             mesh_groups.append((tris_world, color, True))
 
-        # Trayectoria — dibujada ANTES del mesh para que el brazo la ocluya correctamente
-        if trail:
-            self._draw_trail(draw, trail, projection)
-
-        # Renderizado vectorizado del mesh (NumPy pipeline)
-        self._render_mesh_vectorized(draw, projection, mesh_groups)
+        # Renderizado vectorizado del mesh y la trayectoria con orden de profundidad.
+        self._render_mesh_vectorized(draw, projection, mesh_groups, trail)
 
         # Arcos de rango articular — encima del mesh para que sean visibles
         if points3d and chain and model.visual.get('show_joint_ranges', False):
@@ -1404,28 +1400,101 @@ class Robot3DDrawing:
             return [] if result is None else [result]
         return results
 
-    def _draw_prepared_mesh(self, draw, prepared_chunks):
-        """Dibuja en PIL los triangulos ya proyectados y ordenados globalmente."""
-        if not prepared_chunks:
+    def _prepare_trail_draw_items(self, trail, projection):
+        if trail is None:
+            return []
+        try:
+            trail_len = len(trail)
+        except TypeError:
+            return []
+        if trail_len < 2:
+            return []
+
+        points = np.asarray(trail, dtype=float)
+        r_view = projection['R_view']
+        cam_pos = projection['cam_pos']
+        f = projection['f']
+        cx = projection['cx']
+        cy = projection['cy']
+        mode = projection.get('mode')
+        n_points = points.shape[0]
+        items = []
+
+        for i in range(n_points - 1):
+            p_start = points[i]
+            p_end = points[i + 1]
+            segment = p_end - p_start
+            length = float(np.linalg.norm(segment))
+            pieces = max(1, min(12, int(math.ceil(length / 25.0))))
+
+            for piece in range(pieces):
+                t0 = piece / pieces
+                t1 = (piece + 1) / pieces
+                p0 = p_start + segment * t0
+                p1 = p_start + segment * t1
+                cam_pair = np.stack([p0, p1], axis=0)
+                cam_pair = (cam_pair - cam_pos) @ r_view.T
+                if (cam_pair[:, 2] <= 0.01).any():
+                    continue
+
+                if mode == 'isometrica':
+                    scale = projection['ortho_scale']
+                    sx = cam_pair[:, 0] * scale + cx
+                    sy = -cam_pair[:, 1] * scale + cy
+                else:
+                    sx = (cam_pair[:, 0] / cam_pair[:, 2]) * f + cx
+                    sy = (-cam_pair[:, 1] / cam_pair[:, 2]) * f + cy
+
+                alpha = (i + t0) / max(1, n_points - 1)
+                brightness = 0.25 + 0.75 * alpha
+                color = (
+                    min(255, int(self.TRAIL_COLOR[0] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[1] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[2] * brightness)),
+                )
+                width = 1 if brightness < 0.6 else 2
+                items.append((
+                    float(np.mean(cam_pair[:, 2])),
+                    [(float(sx[0]), float(sy[0])), (float(sx[1]), float(sy[1]))],
+                    color,
+                    width,
+                ))
+
+        return items
+
+    def _draw_prepared_mesh(self, draw, prepared_chunks, trail_items=None):
+        """Dibuja en PIL los triángulos y segmentos ya proyectados por profundidad."""
+        trail_items = trail_items or []
+        if not prepared_chunks and not trail_items:
             return
 
-        pts2d = np.concatenate([chunk[0] for chunk in prepared_chunks], axis=0)
-        depths = np.concatenate([chunk[1] for chunk in prepared_chunks], axis=0)
-        rgb = np.concatenate([chunk[2] for chunk in prepared_chunks], axis=0)
+        draw_items = []
+        if prepared_chunks:
+            pts2d = np.concatenate([chunk[0] for chunk in prepared_chunks], axis=0)
+            depths = np.concatenate([chunk[1] for chunk in prepared_chunks], axis=0)
+            rgb = np.concatenate([chunk[2] for chunk in prepared_chunks], axis=0)
+            for i in range(len(depths)):
+                draw_items.append(('polygon', float(depths[i]), pts2d[i], rgb[i]))
 
-        sort_order = np.argsort(-depths)
-        for i in sort_order:
-            pts = pts2d[i]
-            c = rgb[i]
+        for depth, points, color, width in trail_items:
+            draw_items.append(('line', depth, points, color, width))
+
+        draw_items.sort(key=lambda item: -item[1])
+        for item in draw_items:
             try:
-                draw.polygon(
-                    [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
-                    fill=(int(c[0]), int(c[1]), int(c[2]))
-                )
+                if item[0] == 'polygon':
+                    pts = item[2]
+                    c = item[3]
+                    draw.polygon(
+                        [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
+                        fill=(int(c[0]), int(c[1]), int(c[2]))
+                    )
+                else:
+                    draw.line(item[2], fill=item[3], width=item[4])
             except Exception:
                 pass
 
-    def _render_mesh_vectorized(self, draw, projection, mesh_groups):
+    def _render_mesh_vectorized(self, draw, projection, mesh_groups, trail=None):
         """
         Pipeline de renderizado vectorizado con NumPy.
 
@@ -1434,18 +1503,21 @@ class Robot3DDrawing:
         en bulk, aplica back-face culling y ordena por profundidad (painter's)
         antes de llamar a draw.polygon — eliminando los bucles Python por vértice.
         """
-        if not mesh_groups:
+        has_trail = trail is not None and len(trail) >= 2
+        if not mesh_groups and not has_trail:
             return
 
-        arrays = self._mesh_groups_to_arrays(mesh_groups)
-        if arrays is None:
-            return
+        prepared = []
+        if mesh_groups:
+            arrays = self._mesh_groups_to_arrays(mesh_groups)
+            if arrays is not None:
+                all_tris, colors, shaded_flags = arrays
+                prepared = self._prepare_mesh_draw_items(
+                    all_tris, colors, shaded_flags, projection
+                )
 
-        all_tris, colors, shaded_flags = arrays
-        prepared = self._prepare_mesh_draw_items(
-            all_tris, colors, shaded_flags, projection
-        )
-        self._draw_prepared_mesh(draw, prepared)
+        trail_items = self._prepare_trail_draw_items(trail, projection)
+        self._draw_prepared_mesh(draw, prepared, trail_items)
 
     def _render_mesh(self, draw, camera, all_tris, w, h):
         """Wrapper de compatibilidad — redirige al pipeline vectorizado."""
@@ -1650,6 +1722,35 @@ class Robot3DDrawing:
 
         return center, axis, u, v
 
+    @staticmethod
+    def _rotate_vector_about_axis(vector, axis, angle):
+        vec = np.asarray(vector, dtype=float)
+        ax = np.asarray(axis, dtype=float)
+        ax_n = np.linalg.norm(ax)
+        if ax_n < 1e-9:
+            return vec
+        ax = ax / ax_n
+        c = math.cos(angle)
+        s = math.sin(angle)
+        return (
+            vec * c
+            + np.cross(ax, vec) * s
+            + ax * np.dot(ax, vec) * (1.0 - c)
+        )
+
+    @staticmethod
+    def _joint_arc_anchor_direction(frames, joint_idx, center, axis):
+        for candidate in frames[joint_idx + 1:]:
+            try:
+                delta = np.asarray(candidate['pos'], dtype=float) - center
+            except Exception:
+                continue
+            planar = delta - axis * np.dot(delta, axis)
+            planar_n = np.linalg.norm(planar)
+            if planar_n > 1e-6:
+                return planar / planar_n
+        return None
+
     def _draw_joint_axes(self, draw, model, chain, projection):
         """Dibuja los ejes XYZ locales de cada articulación usando sus frames renderizados."""
         vm = self.resolve_visual_model(model)
@@ -1691,8 +1792,8 @@ class Robot3DDrawing:
         Para cada articulación rotacional i:
           - center = pivote en coordenadas mundo (del modelo visual)
           - axis   = eje de rotación en coordenadas mundo
-          - u/v    = base ortonormal en el plano del arco;
-                     u apunta en la dirección neutro (joints[i]=0)
+          - ref    = dirección actual de la primera geometría hija separada
+                     del eje, o la referencia local si no hay geometría hija
           - Segmentos de arco [mn, mx] grados + líneas radiales.
         """
         lines = []
@@ -1709,8 +1810,7 @@ class Robot3DDrawing:
             basis = self._resolve_joint_basis(frame)
             if basis is None:
                 continue
-            center, axis, u, v = basis
-            u_raw = u
+            center, axis, u, _v = basis
 
             # Normalizar eje
             axis_n = np.linalg.norm(axis)
@@ -1718,32 +1818,28 @@ class Robot3DDrawing:
                 continue
             axis = axis / axis_n
 
-            # Calcular v = cross(axis, u), luego re-ortonormalizar u
-            v_raw = np.cross(axis, u_raw)
-            v_n = np.linalg.norm(v_raw)
-            if v_n < 1e-9:
-                continue
-            v = v_raw / v_n
-            u = np.cross(v, axis)   # re-ortonormalización: u ⟂ axis ⟂ v
-
             # Por defecto el arco barre el rango articular [mn, mx]. Si el frame
             # define 'arc_angles' (p. ej. la pinza, que barre su apertura desde
             # la referencia 'forward'), se usan esos ángulos locales.
             mn, mx = frame.get('arc_angles', model.joint_limits[i])
             r_arc = frame['r_arc']
+            ref_dir = self._joint_arc_anchor_direction(frames, i, center, axis)
+            current_angle = float(frame.get('arc_current_angle', model.joints[i]))
+            if ref_dir is None:
+                ref_dir = u
+                current_angle = 0.0
 
             # Puntos del arco con índice original (para descartar saltos si algún punto
             # queda detrás de la cámara sin crear segmentos erróneos que cruzan la pantalla)
             projected = []
             for k in range(_ARC_STEPS + 1):
                 angle_deg = mn + (mx - mn) * k / _ARC_STEPS
-                angle_rad = math.radians(angle_deg)
-                c_a = math.cos(angle_rad)
-                s_a = math.sin(angle_rad)
+                arc_dir = self._rotate_vector_about_axis(
+                    ref_dir, axis, math.radians(angle_deg - current_angle))
                 p3d = [
-                    center[0] + r_arc * (c_a * u[0] + s_a * v[0]),
-                    center[1] + r_arc * (c_a * u[1] + s_a * v[1]),
-                    center[2] + r_arc * (c_a * u[2] + s_a * v[2]),
+                    center[0] + r_arc * arc_dir[0],
+                    center[1] + r_arc * arc_dir[1],
+                    center[2] + r_arc * arc_dir[2],
                 ]
                 projected.append(self._project_point(p3d, projection))
 
