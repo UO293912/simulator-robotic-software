@@ -31,63 +31,63 @@ void setup() {
   wristRot.attach(5);
   gripper.attach(3);
 
-  delay(1000);
+  delay(3000);
   writeSafePose();
-  delay(1500);
+  delay(4000);
 }
 
 void loop() {
   // Pose de seguridad antes de empezar cada barrido.
   writeSafePose();
-  delay(500);
+  delay(3000);
 
   // BASE: giro completo izquierda -> derecha
   base.write(0);
-  delay(500);
+  delay(5000);
   base.write(180);
-  delay(500);
+  delay(5000);
   writeSafePose();
-  delay(300);
+  delay(3000);
 
   // SHOULDER: subir -> bajar
   shoulder.write(15);
-  delay(500);
+  delay(5000);
   shoulder.write(165);
-  delay(500);
+  delay(5000);
   writeSafePose();
-  delay(300);
+  delay(3000);
 
   // ELBOW: extendido -> plegado
   elbow.write(0);
-  delay(500);
+  delay(5000);
   elbow.write(180);
-  delay(500);
+  delay(5000);
   writeSafePose();
-  delay(300);
+  delay(3000);
 
   // WRIST VERTICAL: arriba -> abajo
   wristVer.write(0);
-  delay(500);
+  delay(5000);
   wristVer.write(180);
-  delay(500);
+  delay(5000);
   writeSafePose();
-  delay(300);
+  delay(3000);
 
   // WRIST ROTATION: giro completo
   wristRot.write(0);
-  delay(500);
+  delay(5000);
   wristRot.write(180);
-  delay(500);
+  delay(5000);
   writeSafePose();
-  delay(300);
+  delay(3000);
 
   // GRIPPER: abrir -> cerrar
   gripper.write(10);
-  delay(500);
+  delay(5000);
   gripper.write(73);
-  delay(500);
+  delay(5000);
   writeSafePose();
-  delay(300);
+  delay(3000);
 
   // COMBINADA: extremos minimos -> extremos maximos
   base.write(0);
@@ -96,7 +96,7 @@ void loop() {
   wristVer.write(0);
   wristRot.write(0);
   gripper.write(10);
-  delay(800);
+  delay(6000);
 
   base.write(180);
   shoulder.write(165);
@@ -104,8 +104,8 @@ void loop() {
   wristVer.write(180);
   wristRot.write(180);
   gripper.write(73);
-  delay(800);
+  delay(6000);
 
   writeSafePose();
-  delay(1000);
+  delay(4000);
 }
