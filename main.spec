@@ -15,7 +15,7 @@ _codes_datas += [
     ('codes/Prueba_Braccio_Library.ino', 'codes'),
     ('codes/Prueba_Servo_Library.ino', 'codes'),
     ('codes/braccio_medicion_real_servo.ino', 'codes'),
-    ('codes/brazo_mixto_6gdl_rprprr', 'codes'),
+    ('codes/brazo_mixto_6gdl_rprprr.ino', 'codes'),
 ]
 
 
