@@ -641,6 +641,8 @@ class Arm3DLayer(Layer):
 
         # Renderizar
         if self._canvas:
+            camera_moving = bool(move_WASD and any(move_WASD.values()))
+            self.motor3d.renderer.set_fast_quality(camera_moving or self.wants_fast_render())
             self.motor3d.draw(self._canvas)
             self._draw_fps_counter()
 
@@ -1106,6 +1108,7 @@ class Arm3DLayer(Layer):
         self._last_sync_time = now
 
         speed = self._ANIM_SPEED_DPS * dt
+        scene_needs_update = self.motor3d.scene.last_chain is None
         for i, servo in enumerate(joint_servos):
             sv = servo.value
             curr = self._current_joints[i]
@@ -1133,9 +1136,13 @@ class Arm3DLayer(Layer):
                     self._current_joints[i] = target
                 else:
                     self._current_joints[i] = curr + speed * (1.0 if diff > 0 else -1.0)
+            prev = model.joints[i] if i < len(model.joints) else None
             self.motor3d.model.set_joint(i, self._current_joints[i])
+            if prev is None or abs(float(model.joints[i]) - float(prev)) > self._FAST_RENDER_EPS:
+                scene_needs_update = True
 
-        self.motor3d.scene.update()
+        if scene_needs_update or self.motor3d.scene.show_trail:
+            self.motor3d.scene.update()
 
     def _update_hud(self, safety):
         ee = self.motor3d.scene.get_end_effector()

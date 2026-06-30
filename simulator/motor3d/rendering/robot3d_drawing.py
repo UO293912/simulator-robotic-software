@@ -28,6 +28,12 @@ _LIGHT_DIR = _LIGHT_DIR / np.linalg.norm(_LIGHT_DIR)
 
 _ARC_COLOR = (0, 150, 130)
 _ARC_STEPS = 32
+_FAST_ARC_STEPS = 14
+_TRAIL_SEGMENT_MM = 25.0
+_FAST_TRAIL_SEGMENT_MM = 55.0
+_TRAIL_MAX_PIECES = 12
+_FAST_TRAIL_MAX_PIECES = 5
+_VIEWPORT_CULL_MARGIN = 64.0
 _AMBIENT = 0.30
 
 
@@ -1096,6 +1102,9 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
     f = projection['f']
     cx = projection['cx']
     cy = projection['cy']
+    width = projection.get('width')
+    height = projection.get('height')
+    cull_margin = projection.get('cull_margin', _VIEWPORT_CULL_MARGIN)
 
     verts = all_tris.reshape(n_tris * 3, 3)
     verts_cam = (verts - cam_pos) @ r_view.T
@@ -1113,6 +1122,17 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
         sx = (verts_cam[:, 0] / z_safe) * f + cx
         sy = (-verts_cam[:, 1] / z_safe) * f + cy
     pts2d = np.stack([sx, sy], axis=1).reshape(n_tris, 3, 2)
+    if width and height:
+        min_xy = pts2d.min(axis=1)
+        max_xy = pts2d.max(axis=1)
+        offscreen = (
+            (max_xy[:, 0] < -cull_margin)
+            | (min_xy[:, 0] > float(width) + cull_margin)
+            | (max_xy[:, 1] < -cull_margin)
+            | (min_xy[:, 1] > float(height) + cull_margin)
+        )
+    else:
+        offscreen = np.zeros(n_tris, dtype=bool)
 
     v0 = all_tris[:, 0, :]
     v1 = all_tris[:, 1, :]
@@ -1134,7 +1154,7 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
     centroids_cam = ((v0 + v1 + v2) / 3.0 - cam_pos) @ r_view.T
     depths = centroids_cam[:, 2]
 
-    mask = ~behind & ~degen & facing
+    mask = ~behind & ~degen & facing & ~offscreen
     visible = np.where(mask)[0]
     if visible.size == 0:
         return None
@@ -1190,6 +1210,8 @@ class Robot3DDrawing:
         self._mesh_worker_count = _resolve_render_worker_count()
         self._mesh_worker_min_tris = _resolve_min_worker_triangles()
         self._mesh_executor = None
+        self._grid_mesh_cache = None
+        self._fast_quality = False
 
     def __del__(self):
         executor = getattr(self, '_mesh_executor', None)
@@ -1207,6 +1229,18 @@ class Robot3DDrawing:
         if visual_mode == 'braccio_exact' and self.braccio_visual.supports_model(model):
             return self.braccio_visual
         return self.generic_visual
+
+    def set_fast_quality(self, enabled):
+        """Reduce detalle no estructural durante interacciones para mantener FPS."""
+        self._fast_quality = bool(enabled)
+
+    def _trail_quality(self):
+        if self._fast_quality:
+            return _FAST_TRAIL_SEGMENT_MM, _FAST_TRAIL_MAX_PIECES
+        return _TRAIL_SEGMENT_MM, _TRAIL_MAX_PIECES
+
+    def _active_arc_steps(self):
+        return _FAST_ARC_STEPS if self._fast_quality else _ARC_STEPS
 
     def get_effective_end_effector(self, model, points3d, chain):
         vm = self.resolve_visual_model(model)
@@ -1301,9 +1335,12 @@ class Robot3DDrawing:
             'f': camera.get_focal(h),
             'cx': w / 2.0 + camera.screen_offset_x,
             'cy': h / 2.0 + camera.screen_offset_y,
+            'width': w,
+            'height': h,
             'mode': camera.projection_mode,
             'ortho_scale': camera.get_projection_scale(h),
             'target_depth': camera.distance,
+            'cull_margin': _VIEWPORT_CULL_MARGIN,
         }
         return projection
 
@@ -1419,13 +1456,14 @@ class Robot3DDrawing:
         mode = projection.get('mode')
         n_points = points.shape[0]
         items = []
+        segment_mm, max_pieces = self._trail_quality()
 
         for i in range(n_points - 1):
             p_start = points[i]
             p_end = points[i + 1]
             segment = p_end - p_start
             length = float(np.linalg.norm(segment))
-            pieces = max(1, min(12, int(math.ceil(length / 25.0))))
+            pieces = max(1, min(max_pieces, int(math.ceil(length / segment_mm))))
 
             for piece in range(pieces):
                 t0 = piece / pieces
@@ -1591,6 +1629,9 @@ class Robot3DDrawing:
 
     def _build_grid_mesh(self):
         """Construye la rejilla del suelo como pequeños segmentos 3D ordenables por profundidad."""
+        if self._grid_mesh_cache is not None:
+            return self._grid_mesh_cache
+
         size = self.GRID_SIZE
         step = self.GRID_STEP
         z = self.GRID_Z_OFFSET
@@ -1618,8 +1659,10 @@ class Robot3DDrawing:
                     tris.append(seg)
 
         if not tris:
-            return np.empty((0, 3, 3), dtype=float)
-        return np.concatenate(tris, axis=0)
+            self._grid_mesh_cache = np.empty((0, 3, 3), dtype=float)
+        else:
+            self._grid_mesh_cache = np.concatenate(tris, axis=0)
+        return self._grid_mesh_cache
 
     def _draw_grid(self, draw, projection):
         """Dibuja la rejilla del plano Z=0."""
@@ -1832,8 +1875,9 @@ class Robot3DDrawing:
             # Puntos del arco con índice original (para descartar saltos si algún punto
             # queda detrás de la cámara sin crear segmentos erróneos que cruzan la pantalla)
             projected = []
-            for k in range(_ARC_STEPS + 1):
-                angle_deg = mn + (mx - mn) * k / _ARC_STEPS
+            arc_steps = self._active_arc_steps()
+            for k in range(arc_steps + 1):
+                angle_deg = mn + (mx - mn) * k / arc_steps
                 arc_dir = self._rotate_vector_about_axis(
                     ref_dir, axis, math.radians(angle_deg - current_angle))
                 p3d = [
