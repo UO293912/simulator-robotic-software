@@ -1,3 +1,4 @@
+import os
 import math
 import re
 import tkinter as tk
@@ -927,12 +928,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         "alpha": 0.0,
     }
     BRACCIO_TABLE_DH_ROWS = [
-        {"theta": 0.0, "d": 72.0, "a": 0.0, "alpha": 90.0},
+        {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0},
         {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
         {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0},
-        {"theta": 0.0, "d": 0.0, "a": 60.0, "alpha": 0.0},
-        {"theta": 0.0, "d": 0.0, "a": math.sqrt(10.0 ** 2 + 30.0 ** 2), "alpha": 90.0},
-        {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
+        {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0},
+        {"theta": 90.0, "d": -60.0, "a": 0.0, "alpha": 180.0},
+        {"theta": -90.0, "d": 126.55, "a": 0.5, "alpha": 0.0},
     ]
     BRACCIO_SERVO_PINS = [11, 10, 9, 6, 5, 3]
 
@@ -966,7 +967,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self.application = application
         self.motor3d = motor3d_api
         self._parent_window = parent
-        # Escala calculada para que el PEOR caso (DOF6 + ayuda desplegada) quepa
+        # Escala calculada para que el PEOR caso (DOF6 + leyenda) quepa
         # entero en la pantalla: así la ventana nunca se sale ni necesita scroll
         # (preferencia del usuario: encoger para que todo sea visible).
         self._ui_scale = self._compute_ui_scale()
@@ -1004,7 +1005,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         self.bind("<Configure>", self._on_window_configure)
 
     def _build_config_body(self):
-        """Construye el cuerpo de la ventana (perfil/DOF/ayuda/tabla/botones).
+        """Construye el cuerpo de la ventana (perfil/DOF/tutorial/tabla/botones).
         Aislado para poder reconstruirlo a otra escala (_ui_scale) al
         redimensionar, encogiendo TODO de forma proporcional."""
         body = self._scroll_inner
@@ -1114,104 +1115,15 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         help_frame = tk.Frame(help_section, bg=SURFACE_BG)
         help_frame.pack(fill=tk.X, padx=self._s(12), pady=(self._s(8), self._s(8)))
         self._help_frame = help_frame
-        self._help_visible = False
         self._help_btn = tk.Button(
             help_frame,
-            text="Mostrar ayuda de configuracion",
-            command=self._toggle_config_help,
+            text="Abrir tutorial de tablas DH (PDF)",
+            command=self._open_dh_tutorial,
             **self._action_button_options(),
         )
         self._help_btn.configure(anchor="w", justify="left", padx=self._s(16))
         self._help_btn.pack(fill=tk.X, pady=self._s(1))
         self._legend_frame = self._build_config_legend(help_frame)
-        self._help_body = tk.Frame(
-            help_section,
-            bg=SURFACE_ALT_BG,
-            bd=1,
-            relief=tk.SOLID,
-            highlightthickness=1,
-            highlightbackground=PANEL_BORDER,
-        )
-        self._help_canvas = tk.Canvas(
-            self._help_body,
-            bg=SURFACE_ALT_BG,
-            bd=0,
-            highlightthickness=0,
-            # Ancho base PEQUEÑO: el canvas rellena por expand, pero su ancho
-            # requerido no debe arrastrar el ancho del contenido (si no, al abrir
-            # la ayuda el contenido se ensancha y rompe el escalado responsive).
-            width=self._s(200),
-            height=self._s(72),
-            yscrollincrement=16,
-        )
-        self._help_scrollbar = tk.Scrollbar(
-            self._help_body,
-            orient=tk.VERTICAL,
-            command=self._help_canvas.yview,
-        )
-        self._help_canvas.configure(yscrollcommand=self._help_scrollbar.set)
-        self._help_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._help_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self._help_content = tk.Frame(self._help_canvas, bg=SURFACE_ALT_BG)
-        self._help_canvas_window = self._help_canvas.create_window(
-            (0, 0), window=self._help_content, anchor="nw"
-        )
-        self._help_content.bind(
-            "<Configure>",
-            lambda _event: self._help_canvas.configure(
-                scrollregion=self._help_canvas.bbox("all")
-            ),
-        )
-        self._help_canvas.bind(
-            "<Configure>",
-            self._on_help_canvas_configure,
-        )
-        self._help_canvas.bind("<MouseWheel>", self._on_help_mousewheel)
-        self._help_content.bind("<MouseWheel>", self._on_help_mousewheel)
-        help_text = (
-            "Como usar la tabla:\n"
-            "  J0 mueve la base completa. Usala para recolocar o reorientar todo el robot.\n"
-            "  J1, J2... son las articulaciones reales del brazo.\n"
-            "  Pin indica el pin del sketch que controla esa joint con Servo.attach o Braccio.\n"
-            "  Theta gira la joint. Si es una R, normalmente es el valor que define su movimiento.\n"
-            "  d adelanta o retrasa el siguiente tramo en la direccion de la propia joint. Si es una P, normalmente es el valor que define su movimiento.\n"
-            "  a separa la siguiente pieza del centro de giro: cuanto mayor sea, mas brazo o palanca aparece.\n"
-            "  Alpha gira la orientacion de la siguiente joint: sirve para cambiar de plano, inclinar el brazo o hacer que el siguiente tramo salga en otra direccion.\n"
-            "  Lim min y Lim max recortan el movimiento permitido.\n"
-            "\n"
-            "Como construir movimientos:\n"
-            "  Giro sobre si mismo: tipo=R y a=0.\n"
-            "  Balanceo o pendulo: tipo=R y a>0.\n"
-            "  Corredera recta: tipo=P.\n"
-            "  En una P, Dir yaw y Dir pitch apuntan hacia donde quieres que deslice antes de mover.\n"
-            "  yaw=0 pitch=0 suele dejarla deslizando hacia delante; yaw=0 pitch=90 la tumba para deslizar de lado.\n"
-            "\n"
-            "Metodo rapido:\n"
-            "  1. Pon el tipo de joint.\n"
-            "  2. Da forma con a y Alpha.\n"
-            "  3. Ajusta Theta si es R o d si es P.\n"
-            "  4. Si es P, orienta con yaw/pitch.\n"
-            "  5. Cierra limites para evitar movimientos absurdos.\n"
-            "\n"
-            "Ejemplo corto:\n"
-            "  J0 alpha=90 reorienta el brazo.\n"
-            "  J1 tipo=R con a=200 crea un brazo que balancea.\n"
-            "  J2 tipo=P con yaw=0 pitch=90 hace que deslice hacia X local."
-        )
-        self._help_label = tk.Label(
-            self._help_content,
-            text=help_text,
-            bg=SURFACE_ALT_BG,
-            fg=TEXT_PRIMARY,
-            justify="left",
-            anchor="w",
-            wraplength=self._s(360),
-            padx=self._s(10),
-            pady=self._s(8),
-            font=self._font(9),
-        )
-        self._help_label.pack(fill=tk.X)
-        self._help_label.bind("<MouseWheel>", self._on_help_mousewheel)
 
         # ---- Tabla DH ----
         table_shell = tk.Frame(
@@ -1333,7 +1245,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     # ------------------------------------------------------------------
     # Escalado adaptativo + cuerpo desplazable
     # ------------------------------------------------------------------
-    # Tamaño del contenido del peor caso (DOF6 + ayuda desplegada) por unidad de
+    # Tamaño del contenido del peor caso (DOF6 + leyenda) por unidad de
     # escala, medido empíricamente: contenido ≈ escala * (K_W, K_H). Sirve para
     # elegir una escala con la que TODO quepa en pantalla sin scroll.
     _CONTENT_K_W = 1010.0
@@ -1437,12 +1349,12 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _sync_scroll_layout(self, set_canvas_size=True):
         """Ajusta scrollregion, scrollbars y el estirado del contenido.
 
-        ``set_canvas_size``: si True (init/DOF/ayuda) fija además el tamaño
+        ``set_canvas_size``: si True (init/DOF/tutorial) fija además el tamaño
         REQUERIDO del canvas al del contenido para que la ventana se abra/ajuste
         a su contenido. Durante el redimensionado (rebuild) se pasa False: la
         ventana ya tiene el tamaño que puso el usuario y fijar el tamaño del
         canvas haría que la ventana se encogiera al contenido (rompía el
-        agrandado y la responsividad al abrir la ayuda)."""
+        agrandado y la responsividad al ajustar el bloque superior)."""
         canvas = getattr(self, "_scroll_canvas", None)
         if canvas is None:
             return
@@ -1575,7 +1487,6 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             "dof": self._dof_var.get() if hasattr(self, "_dof_var") else 6,
             "visual": self._visual_var.get() if hasattr(self, "_visual_var") else None,
             "fps": self._fps_counter_var.get() if hasattr(self, "_fps_counter_var") else True,
-            "help": getattr(self, "_help_visible", False),
         }
         self._ui_scale = scale
         self._fonts = FontScaler()
@@ -1607,8 +1518,6 @@ class Arm3DConfigurationWindow(tk.Toplevel):
         except Exception:
             pass
         self._apply_preset_display(saved["preset"])
-        if saved["help"] and not getattr(self, "_help_visible", False):
-            self._toggle_config_help(refit=False)
         # Un único layout síncrono: ajusta scroll y captura el tamaño natural a
         # fuente de diseño. set_canvas_size=False: NO reajustar la ventana al
         # contenido (la ventana ya tiene el tamaño del usuario durante el
@@ -2321,56 +2230,25 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             if prev_state == "disabled":
                 entry.configure(state="disabled")
 
-    def _toggle_config_help(self, refit=True):
-        if self._help_visible:
-            self._help_body.pack_forget()
-            self._help_frame.pack_configure(pady=(12, 12))
-            self._help_btn.configure(
-                text="Mostrar ayuda de configuracion",
-                relief=tk.RAISED,
-            )
-            self._help_visible = False
-        else:
-            self._help_frame.pack_configure(pady=(12, 0))
-            self._help_body.pack(fill=tk.X, padx=14, pady=(8, 12))
-            try:
-                self._help_canvas.yview_moveto(0.0)
-            except Exception:
-                pass
-            self._help_btn.configure(
-                text="Ocultar ayuda de configuracion",
-                relief=tk.SUNKEN,
-            )
-            self._help_visible = True
-        # refit=False cuando se invoca desde el rebuild de redimensionado: NO
-        # reajustar la ventana al contenido (la dimensiona el usuario); el sync
-        # del propio rebuild se encarga del scroll.
-        if refit:
-            self._sync_scroll_layout()
-            self._fit_window_to_content()
+    def _open_dh_tutorial(self, event=None):
+        path = None
+        for candidate in (
+            os.path.join("tutorials", "Tutorial_tablas_DH.pdf"),
+            os.path.join("tutorials", "Tutorial.pdf"),
+        ):
+            candidate = os.path.abspath(candidate)
+            if os.path.exists(candidate):
+                path = candidate
+                break
 
-    def _on_help_canvas_configure(self, event):
-        """Ajusta el contenido de la ayuda al ancho real del canvas y reenvuelve
-        el texto a ese ancho, para que NUNCA fuerce un ancho mayor que el resto
-        del contenido (lo que rompía la responsividad al abrir la ayuda)."""
-        try:
-            self._help_canvas.itemconfigure(self._help_canvas_window, width=event.width)
-            self._help_label.configure(wraplength=max(80, event.width - self._s(14)))
-        except Exception:
-            pass
-
-    def _on_help_mousewheel(self, event):
-        try:
-            delta = event.delta
-        except Exception:
+        if path is None:
+            path = os.path.abspath(os.path.join("tutorials", "Tutorial_tablas_DH.pdf"))
+            messagebox.showerror(
+                "Tutorial DH no encontrado",
+                "No se encontro el PDF de tablas DH:\n" + path,
+            )
             return
-        if not delta:
-            return
-        step = -1 if delta > 0 else 1
-        try:
-            self._help_canvas.yview_scroll(step, "units")
-        except Exception:
-            pass
+        subprocess.Popen([path], shell=True)
 
     def _collect_config(self):
         """Lee los valores de la tabla y retorna (dict, None) o (None, mensaje_error).
@@ -2421,13 +2299,10 @@ class Arm3DConfigurationWindow(tk.Toplevel):
                     dh_ok = False
 
             if dh_ok:
-                # RF1.1.1.3: longitud de eslabón 'a' ∈ [0, 2000] mm
+                # RF1.1.1.3: parametro DH 'a' con signo, limitado a +/-2000 mm.
                 a = parsed['a']
-                if a < 0:
-                    _mark_invalid(row[2], f"J{joint_n}: 'a' debe ser ≥ 0 mm.")
-                    dh_ok = False
-                elif a > 2000:
-                    _mark_invalid(row[2], f"J{joint_n}: 'a' supera el límite físico (2000 mm).")
+                if abs(a) > 2000:
+                    _mark_invalid(row[2], f"J{joint_n}: 'a' supera el limite fisico (+/-2000 mm).")
                     dh_ok = False
 
             if dh_ok:

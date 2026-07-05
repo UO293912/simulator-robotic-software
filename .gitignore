@@ -10,6 +10,7 @@ arduino-examples.zip
 examples/
 build/
 dist/
+docs/
 doc/
 gamification_logs/
 .VSCodeCounter/

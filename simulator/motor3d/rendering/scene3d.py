@@ -10,6 +10,7 @@ from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 class Scene3D:
 
     MAX_TRAIL_POINTS = 600
+    TRAIL_JOINT_EPS = 1e-6
 
     def __init__(self, model, camera, drawing):
         self.model = model
@@ -76,6 +77,7 @@ class Scene3D:
 
     def clear_trail(self):
         self.trail_points = []
+        self._trail_model = None
         self._trail_signature = None
 
     # ------------------------------------------------------------------
@@ -96,6 +98,7 @@ class Scene3D:
         sig = tuple(r.get('a', 0) for r in self.model.dh_rows)
         if sig != self._trail_signature:
             self.trail_points = []
+            self._trail_model = None
             self._trail_signature = sig
 
         cur_joints = list(self.model.joints)
@@ -119,6 +122,9 @@ class Scene3D:
             max_delta = max(abs(c - p) for c, p in zip(cur_joints, prev_joints))
         else:
             max_delta = 0.0
+
+        if max_delta <= self.TRAIL_JOINT_EPS:
+            return
 
         steps = max(1, min(8, math.ceil(max_delta / 5.0)))
 
@@ -154,7 +160,7 @@ class _ModelJointSnap:
     """Proxy del modelo que sobreescribe únicamente los ángulos articulares.
 
     Permite calcular forward_kinematics_chain con joints intermedios sin
-    modificar el modelo real. Delega dof, dh_rows y tool_offset al modelo base.
+    modificar el modelo real. Delega dof y dh_rows al modelo base.
     """
 
     __slots__ = ('_base', 'joints')

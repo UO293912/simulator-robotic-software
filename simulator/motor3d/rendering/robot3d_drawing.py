@@ -28,6 +28,12 @@ _LIGHT_DIR = _LIGHT_DIR / np.linalg.norm(_LIGHT_DIR)
 
 _ARC_COLOR = (0, 150, 130)
 _ARC_STEPS = 32
+_FAST_ARC_STEPS = 14
+_TRAIL_SEGMENT_MM = 25.0
+_FAST_TRAIL_SEGMENT_MM = 55.0
+_TRAIL_MAX_PIECES = 12
+_FAST_TRAIL_MAX_PIECES = 5
+_VIEWPORT_CULL_MARGIN = 64.0
 _AMBIENT = 0.30
 
 
@@ -262,7 +268,7 @@ class BraccioVisualModel:
 
     def get_effective_end_effector(self, model, points, chain):
         """
-        Devuelve el TCP (tool center point) calculado con la cadena URDF:
+        Devuelve el TCP calculado con la cadena URDF:
         la posición de la punta de las garras cuando están cerradas,
         independiente del estado real de apertura del gripper (joint[5]).
 
@@ -558,9 +564,30 @@ class GenericDhVisualModel:
                 return np.array([1.0, 0.0, 0.0], dtype=float)
         return vec / norm
 
+    @staticmethod
+    def _rotate_about_axis(vector, axis, angle):
+        vec = np.asarray(vector, dtype=float)
+        ax = np.asarray(axis, dtype=float)
+        ax_norm = np.linalg.norm(ax)
+        if ax_norm < 1e-9:
+            return vec
+        ax = ax / ax_norm
+        c = math.cos(angle)
+        s = math.sin(angle)
+        return (
+            vec * c
+            + np.cross(ax, vec) * s
+            + ax * np.dot(ax, vec) * (1.0 - c)
+        )
+
     def _is_gripper_joint(self, model, joint_idx, seg_len, radius):
         jtype = model.joint_types[joint_idx] if joint_idx < len(model.joint_types) else 'R'
-        return joint_idx == model.dof - 1 and jtype != 'P' and seg_len < radius * 2.8
+        if joint_idx != model.dof - 1 or model.dof < 2 or jtype == 'P':
+            return False
+        if seg_len < radius * 2.8:
+            return True
+        mn, mx = model.joint_limits[joint_idx] if joint_idx < len(model.joint_limits) else (-90.0, 90.0)
+        return float(mx) <= 10.0 and float(mn) < float(mx)
 
     def _gripper_ratio(self, model, joint_idx):
         jval = model.joints[joint_idx] if joint_idx < len(model.joints) else 0.0
@@ -588,30 +615,45 @@ class GenericDhVisualModel:
 
         base_T = get_base_transform(model)
         T_prev = matrices[joint_idx - 1] if joint_idx > 0 else base_T
+        row = model.dh_rows[joint_idx] if joint_idx < len(model.dh_rows) else {}
 
         hinge_axis = self._safe_normalize(T_prev[:3, 2], [0.0, 0.0, 1.0])
         forward = self._joint_neutral_xref(model, joint_idx, T_prev)
         forward = np.asarray(forward, dtype=float) - hinge_axis * np.dot(forward, hinge_axis)
         forward = self._safe_normalize(forward, T_prev[:3, 0])
-        side = self._safe_normalize(np.cross(hinge_axis, forward), T_prev[:3, 1])
 
-        palm_depth = max(radius * 0.95, seg_len * 0.9, 18.0)
-        # Separación lateral de los dedos respecto al eje central: lo bastante
-        # pequeña para que las piezas queden cerca del centro (dejando un hueco
-        # interior mínimo) en cualquier configuración.
-        bridge_half_span = radius * 0.34
-        finger_width = radius * 0.36
-        finger_len = max(radius * 2.45, seg_len * 3.0)
-        finger_base_offset = finger_width * 0.25
-        knuckle_radius = max(radius * 0.18, finger_width * 0.42)
+        a_offset = float(row.get('a', 0.0))
+        d_offset = float(row.get('d', 0.0))
+        closed_offset = forward * a_offset + hinge_axis * d_offset
+        tcp = p0 + closed_offset
+        visual_span = float(np.linalg.norm(closed_offset))
+        closed_dir = self._safe_normalize(closed_offset, forward)
 
-        wrist_center = p0 - forward * (palm_depth * 0.10)
-        bridge_center = p0 + forward * (palm_depth * 0.18)
-        hinge_center = p0 + forward * (palm_depth * 0.46)
-        tcp = hinge_center + forward * (finger_base_offset + finger_len)
+        open_axis = hinge_axis - closed_dir * np.dot(hinge_axis, closed_dir)
+        if np.linalg.norm(open_axis) < 1e-9:
+            open_axis = forward - closed_dir * np.dot(forward, closed_dir)
+        open_axis = self._safe_normalize(open_axis, T_prev[:3, 1])
+        side = self._safe_normalize(np.cross(open_axis, closed_dir), np.cross(hinge_axis, forward))
+
+        palm_radius = min(visual_span * 0.09, radius * 0.38)
+        palm_depth = min(visual_span * 0.10, radius * 0.50)
+        # Pinza estilizada: la longitud viene de la fila DH, pero el grosor queda
+        # acotado para que escalas grandes no generen mordazas desproporcionadas.
+        finger_width = min(visual_span * 0.055, radius * 0.24)
+        bridge_half_span = finger_width * 0.58
+        hinge_dist = min(visual_span * 0.24, radius * 1.25)
+        finger_len = max(0.0, visual_span - hinge_dist)
+        knuckle_radius = finger_width * 0.42
+
+        wrist_center = p0 + closed_dir * (palm_depth * 0.50)
+        hinge_center = p0 + closed_dir * hinge_dist
+        bridge_center = hinge_center
+        neck_start = p0 + closed_dir * palm_depth
+        neck_end = hinge_center
+        neck_width = finger_width * 1.05
 
         # Cada dedo se separa del eje un ángulo igual al valor articular: los dedos
-        # quedan paralelos (cerrados, a lo largo de 'forward') en jval=0 y se abren
+        # quedan paralelos (cerrados, a lo largo de 'closed_dir') en jval=0 y se abren
         # a medida que jval se aleja de 0. Así cada límite acota el recorrido de su
         # dedo y el límite más cercano a 0 controla cuánto puede cerrarse la pinza
         # (si no llega a 0 queda un hueco; si lo cruza, se cerraría de más).
@@ -620,12 +662,9 @@ class GenericDhVisualModel:
         for sign in (+1.0, -1.0):
             hinge = hinge_center + side * sign * bridge_half_span
             angle = math.radians(-sign * jval_g)
-            finger_dir = (
-                math.cos(angle) * forward
-                + math.sin(angle) * side
-            )
-            finger_dir = self._safe_normalize(finger_dir, forward)
-            root = hinge + finger_dir * finger_base_offset
+            finger_dir = self._rotate_about_axis(closed_dir, open_axis, angle)
+            finger_dir = self._safe_normalize(finger_dir, closed_dir)
+            root = hinge.copy()
             tip = root + finger_dir * finger_len
             fingers.append({
                 'sign': sign,
@@ -637,17 +676,19 @@ class GenericDhVisualModel:
 
         return {
             'joint_idx': joint_idx,
-            'radius': radius,
+            'palm_radius': palm_radius,
             'palm_depth': palm_depth,
             'finger_width': finger_width,
             'bridge_half_span': bridge_half_span,
             'knuckle_radius': knuckle_radius,
+            'neck_start': neck_start,
+            'neck_end': neck_end,
+            'neck_width': neck_width,
             'wrist_center': wrist_center,
             'bridge_center': bridge_center,
-            'hinge_center': hinge_center,
-            'forward': forward,
+            'forward': closed_dir,
             'side': side,
-            'hinge_axis': hinge_axis,
+            'hinge_axis': open_axis,
             'tcp': tcp,
             'fingers': fingers,
         }
@@ -762,7 +803,7 @@ class GenericDhVisualModel:
 
             # Frame anterior: define el eje de rotación REAL del joint i (col Z)
             T_prev = matrices[i - 1] if i > 0 else base_T
-            # Transform alineado con la dirección del eslabón (p0→p1)
+            # Transform alineado con la direccion del eslabon (p0 -> p1)
             T_link = _axis_aligned_transform(p1 - p0)
 
             jtype    = model.joint_types[i] if i < len(model.joint_types) else 'R'
@@ -785,13 +826,21 @@ class GenericDhVisualModel:
             if is_gripper:
                 palm = _make_cylinder(
                     gripper['wrist_center'],
-                    T_prev,
-                    r * 0.60,
-                    max(r * 0.80, gripper['palm_depth'] * 0.92),
+                    _axis_aligned_transform(gripper['forward']),
+                    gripper['palm_radius'],
+                    gripper['palm_depth'] * 0.92,
                     self.JOINT_STEPS,
                 )
                 if palm.size > 0:
                     yield palm, housing_color
+
+                neck = _make_link_prism(
+                    gripper['neck_start'],
+                    gripper['neck_end'],
+                    gripper['neck_width'],
+                )
+                if neck.size > 0:
+                    yield neck, housing_color
 
                 bridge = _make_link_prism(
                     gripper['bridge_center'] - gripper['side'] * gripper['bridge_half_span'],
@@ -867,7 +916,7 @@ class GenericDhVisualModel:
                 hub = _make_cylinder(p0, T_link, r * 0.38, hub_h, self.JOINT_STEPS)
                 if hub.size > 0:
                     yield hub, actuator_color
-                # Sección de eslabón
+                # Seccion de eslabon: el destino ya combina d y a de la fila DH.
                 prism = _make_link_prism(p0, p1, lw)
                 if prism.size > 0:
                     yield prism, link_color
@@ -899,6 +948,9 @@ class GenericDhVisualModel:
 
 def _make_cylinder(center, transform_mat, radius, height, steps):
     """Genera triángulos de un cilindro orientado según los ejes de transform_mat."""
+    if radius <= 1e-9 or height <= 1e-9 or steps < 3:
+        return np.zeros((0, 3, 3))
+
     tris = []
     angles = [2 * math.pi * k / steps for k in range(steps)]
     # Usar la columna Z de la matriz de transformación como eje del cilindro
@@ -929,15 +981,19 @@ def _make_cylinder(center, transform_mat, radius, height, steps):
         p1t = top + radius * (math.cos(a1) * u + math.sin(a1) * v)
         tris.append(np.array([[p0b, p1b, p0t]]))
         tris.append(np.array([[p1b, p1t, p0t]]))
+        tris.append(np.array([[top, p0t, p1t]]))
+        tris.append(np.array([[bot, p1b, p0b]]))
 
     if tris:
-        result = np.vstack(tris)
-        return result
+        return np.vstack(tris)
     return np.zeros((0, 3, 3))
 
 
 def _make_link_prism(p0, p1, width):
     """Genera triángulos de un prisma cuadrado entre dos puntos."""
+    if width <= 1e-9:
+        return np.zeros((0, 3, 3))
+
     p0 = np.array(p0, dtype=float)
     p1 = np.array(p1, dtype=float)
     axis = p1 - p0
@@ -964,6 +1020,11 @@ def _make_link_prism(p0, p1, width):
         j = (i + 1) % 4
         faces.append([corners_b[i], corners_b[j], corners_t[i]])
         faces.append([corners_b[j], corners_t[j], corners_t[i]])
+
+    faces.append([corners_b[0], corners_b[1], corners_b[2]])
+    faces.append([corners_b[0], corners_b[2], corners_b[3]])
+    faces.append([corners_t[0], corners_t[2], corners_t[1]])
+    faces.append([corners_t[0], corners_t[3], corners_t[2]])
 
     return np.array(faces, dtype=float)
 
@@ -1041,6 +1102,9 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
     f = projection['f']
     cx = projection['cx']
     cy = projection['cy']
+    width = projection.get('width')
+    height = projection.get('height')
+    cull_margin = projection.get('cull_margin', _VIEWPORT_CULL_MARGIN)
 
     verts = all_tris.reshape(n_tris * 3, 3)
     verts_cam = (verts - cam_pos) @ r_view.T
@@ -1058,6 +1122,17 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
         sx = (verts_cam[:, 0] / z_safe) * f + cx
         sy = (-verts_cam[:, 1] / z_safe) * f + cy
     pts2d = np.stack([sx, sy], axis=1).reshape(n_tris, 3, 2)
+    if width and height:
+        min_xy = pts2d.min(axis=1)
+        max_xy = pts2d.max(axis=1)
+        offscreen = (
+            (max_xy[:, 0] < -cull_margin)
+            | (min_xy[:, 0] > float(width) + cull_margin)
+            | (max_xy[:, 1] < -cull_margin)
+            | (min_xy[:, 1] > float(height) + cull_margin)
+        )
+    else:
+        offscreen = np.zeros(n_tris, dtype=bool)
 
     v0 = all_tris[:, 0, :]
     v1 = all_tris[:, 1, :]
@@ -1079,8 +1154,8 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
     centroids_cam = ((v0 + v1 + v2) / 3.0 - cam_pos) @ r_view.T
     depths = centroids_cam[:, 2]
 
-    mask = ~behind & ~degen & facing
-    visible = np.where(mask)[0]
+    mask = ~behind & ~degen & facing & ~offscreen
+    visible = np.nonzero(mask)[0]
     if visible.size == 0:
         return None
 
@@ -1135,6 +1210,8 @@ class Robot3DDrawing:
         self._mesh_worker_count = _resolve_render_worker_count()
         self._mesh_worker_min_tris = _resolve_min_worker_triangles()
         self._mesh_executor = None
+        self._grid_mesh_cache = None
+        self._fast_quality = False
 
     def __del__(self):
         executor = getattr(self, '_mesh_executor', None)
@@ -1152,6 +1229,18 @@ class Robot3DDrawing:
         if visual_mode == 'braccio_exact' and self.braccio_visual.supports_model(model):
             return self.braccio_visual
         return self.generic_visual
+
+    def set_fast_quality(self, enabled):
+        """Reduce detalle no estructural durante interacciones para mantener FPS."""
+        self._fast_quality = bool(enabled)
+
+    def _trail_quality(self):
+        if self._fast_quality:
+            return _FAST_TRAIL_SEGMENT_MM, _FAST_TRAIL_MAX_PIECES
+        return _TRAIL_SEGMENT_MM, _TRAIL_MAX_PIECES
+
+    def _active_arc_steps(self):
+        return _FAST_ARC_STEPS if self._fast_quality else _ARC_STEPS
 
     def get_effective_end_effector(self, model, points3d, chain):
         vm = self.resolve_visual_model(model)
@@ -1200,12 +1289,8 @@ class Robot3DDrawing:
                 continue
             mesh_groups.append((tris_world, color, True))
 
-        # Trayectoria — dibujada ANTES del mesh para que el brazo la ocluya correctamente
-        if trail:
-            self._draw_trail(draw, trail, projection)
-
-        # Renderizado vectorizado del mesh (NumPy pipeline)
-        self._render_mesh_vectorized(draw, projection, mesh_groups)
+        # Renderizado vectorizado del mesh y la trayectoria con orden de profundidad.
+        self._render_mesh_vectorized(draw, projection, mesh_groups, trail)
 
         # Arcos de rango articular — encima del mesh para que sean visibles
         if points3d and chain and model.visual.get('show_joint_ranges', False):
@@ -1250,9 +1335,12 @@ class Robot3DDrawing:
             'f': camera.get_focal(h),
             'cx': w / 2.0 + camera.screen_offset_x,
             'cy': h / 2.0 + camera.screen_offset_y,
+            'width': w,
+            'height': h,
             'mode': camera.projection_mode,
             'ortho_scale': camera.get_projection_scale(h),
             'target_depth': camera.distance,
+            'cull_margin': _VIEWPORT_CULL_MARGIN,
         }
         return projection
 
@@ -1349,28 +1437,178 @@ class Robot3DDrawing:
             return [] if result is None else [result]
         return results
 
-    def _draw_prepared_mesh(self, draw, prepared_chunks):
-        """Dibuja en PIL los triangulos ya proyectados y ordenados globalmente."""
-        if not prepared_chunks:
+    def _prepare_trail_draw_items(self, trail, projection):
+        if trail is None:
+            return []
+        try:
+            trail_len = len(trail)
+        except TypeError:
+            return []
+        if trail_len < 2:
+            return []
+
+        points = np.asarray(trail, dtype=float)
+        if points.ndim != 2 or points.shape[1] < 3:
+            return []
+        points = points[:, :3]
+        if points.shape[0] < 2:
+            return []
+
+        r_view = projection['R_view']
+        cam_pos = projection['cam_pos']
+        f = projection['f']
+        cx = projection['cx']
+        cy = projection['cy']
+        mode = projection.get('mode')
+        n_points = points.shape[0]
+        items = []
+        segment_mm, max_pieces = self._trail_quality()
+        cam_points = (points - cam_pos) @ r_view.T
+        visible = cam_points[:, 2] > 0.01
+
+        if mode == 'isometrica':
+            scale = projection['ortho_scale']
+            sx_all = cam_points[:, 0] * scale + cx
+            sy_all = -cam_points[:, 1] * scale + cy
+        else:
+            z_safe = np.where(visible, cam_points[:, 2], 1.0)
+            sx_all = (cam_points[:, 0] / z_safe) * f + cx
+            sy_all = (-cam_points[:, 1] / z_safe) * f + cy
+        projected = np.stack([sx_all, sy_all], axis=1)
+
+        def project_camera_pair(cam0, cam1):
+            if cam0[2] <= 0.01 or cam1[2] <= 0.01:
+                return None
+            if mode == 'isometrica':
+                scale = projection['ortho_scale']
+                p0 = (cam0[0] * scale + cx, -cam0[1] * scale + cy)
+                p1 = (cam1[0] * scale + cx, -cam1[1] * scale + cy)
+            else:
+                p0 = ((cam0[0] / cam0[2]) * f + cx, (-cam0[1] / cam0[2]) * f + cy)
+                p1 = ((cam1[0] / cam1[2]) * f + cx, (-cam1[1] / cam1[2]) * f + cy)
+            return p0, p1
+
+        for i in range(n_points - 1):
+            p_start = points[i]
+            p_end = points[i + 1]
+            segment = p_end - p_start
+            length = float(np.linalg.norm(segment))
+            if length < 1e-9:
+                continue
+            pieces = max(1, min(max_pieces, int(math.ceil(length / segment_mm))))
+
+            if pieces == 1:
+                if not visible[i] or not visible[i + 1]:
+                    continue
+                p0 = (float(projected[i, 0]), float(projected[i, 1]))
+                p1 = (float(projected[i + 1, 0]), float(projected[i + 1, 1]))
+
+                alpha = i / max(1, n_points - 1)
+                brightness = 0.25 + 0.75 * alpha
+                color = (
+                    min(255, int(self.TRAIL_COLOR[0] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[1] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[2] * brightness)),
+                )
+                width_px = 1 if brightness < 0.6 else 2
+                items.append((
+                    float((cam_points[i, 2] + cam_points[i + 1, 2]) * 0.5),
+                    [p0, p1],
+                    color,
+                    width_px,
+                ))
+                continue
+
+            cam_start = cam_points[i]
+            cam_segment = cam_points[i + 1] - cam_start
+
+            for piece in range(pieces):
+                t0 = piece / pieces
+                t1 = (piece + 1) / pieces
+                cam0 = cam_start + cam_segment * t0
+                cam1 = cam_start + cam_segment * t1
+                pair = project_camera_pair(cam0, cam1)
+                if pair is None:
+                    continue
+                p0, p1 = pair
+
+                alpha = (i + t0) / max(1, n_points - 1)
+                brightness = 0.25 + 0.75 * alpha
+                color = (
+                    min(255, int(self.TRAIL_COLOR[0] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[1] * brightness)),
+                    min(255, int(self.TRAIL_COLOR[2] * brightness)),
+                )
+                width = 1 if brightness < 0.6 else 2
+                items.append((
+                    float((cam0[2] + cam1[2]) * 0.5),
+                    [(float(p0[0]), float(p0[1])), (float(p1[0]), float(p1[1]))],
+                    color,
+                    width,
+                ))
+
+        return items
+
+    def _draw_prepared_mesh(self, draw, prepared_chunks, trail_items=None):
+        """Dibuja en PIL los triángulos y segmentos ya proyectados por profundidad."""
+        trail_items = trail_items or []
+        if not prepared_chunks and not trail_items:
             return
 
-        pts2d = np.concatenate([chunk[0] for chunk in prepared_chunks], axis=0)
-        depths = np.concatenate([chunk[1] for chunk in prepared_chunks], axis=0)
-        rgb = np.concatenate([chunk[2] for chunk in prepared_chunks], axis=0)
+        pts2d = depths = rgb = mesh_order = None
+        if prepared_chunks:
+            pts2d = np.concatenate([chunk[0] for chunk in prepared_chunks], axis=0)
+            depths = np.concatenate([chunk[1] for chunk in prepared_chunks], axis=0)
+            rgb = np.concatenate([chunk[2] for chunk in prepared_chunks], axis=0)
+            mesh_order = np.argsort(-depths)
 
-        sort_order = np.argsort(-depths)
-        for i in sort_order:
-            pts = pts2d[i]
-            c = rgb[i]
-            try:
-                draw.polygon(
-                    [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
-                    fill=(int(c[0]), int(c[1]), int(c[2]))
-                )
-            except Exception:
-                pass
+        if trail_items:
+            trail_items = sorted(trail_items, key=lambda item: -item[0])
 
-    def _render_mesh_vectorized(self, draw, projection, mesh_groups):
+        mesh_pos = 0
+        trail_pos = 0
+        mesh_count = 0 if mesh_order is None else len(mesh_order)
+        trail_count = len(trail_items)
+
+        while mesh_pos < mesh_count or trail_pos < trail_count:
+            if trail_pos < trail_count:
+                trail_depth = trail_items[trail_pos][0]
+            else:
+                trail_depth = None
+
+            if mesh_pos < mesh_count:
+                mesh_idx = mesh_order[mesh_pos]
+                mesh_depth = depths[mesh_idx]
+            else:
+                mesh_idx = None
+                mesh_depth = None
+
+            if trail_depth is not None and (mesh_depth is None or trail_depth > mesh_depth):
+                self._draw_trail_item(draw, trail_items[trail_pos])
+                trail_pos += 1
+            else:
+                self._draw_mesh_item(draw, pts2d[mesh_idx], rgb[mesh_idx])
+                mesh_pos += 1
+
+    @staticmethod
+    def _draw_mesh_item(draw, pts, color):
+        try:
+            draw.polygon(
+                [pts[0, 0], pts[0, 1], pts[1, 0], pts[1, 1], pts[2, 0], pts[2, 1]],
+                fill=(int(color[0]), int(color[1]), int(color[2])),
+            )
+        except Exception:
+            pass
+
+    @staticmethod
+    def _draw_trail_item(draw, item):
+        try:
+            _depth, points, color, width = item
+            draw.line(points, fill=color, width=width)
+        except Exception:
+            pass
+
+    def _render_mesh_vectorized(self, draw, projection, mesh_groups, trail=None):
         """
         Pipeline de renderizado vectorizado con NumPy.
 
@@ -1379,18 +1617,21 @@ class Robot3DDrawing:
         en bulk, aplica back-face culling y ordena por profundidad (painter's)
         antes de llamar a draw.polygon — eliminando los bucles Python por vértice.
         """
-        if not mesh_groups:
+        has_trail = trail is not None and len(trail) >= 2
+        if not mesh_groups and not has_trail:
             return
 
-        arrays = self._mesh_groups_to_arrays(mesh_groups)
-        if arrays is None:
-            return
+        prepared = []
+        if mesh_groups:
+            arrays = self._mesh_groups_to_arrays(mesh_groups)
+            if arrays is not None:
+                all_tris, colors, shaded_flags = arrays
+                prepared = self._prepare_mesh_draw_items(
+                    all_tris, colors, shaded_flags, projection
+                )
 
-        all_tris, colors, shaded_flags = arrays
-        prepared = self._prepare_mesh_draw_items(
-            all_tris, colors, shaded_flags, projection
-        )
-        self._draw_prepared_mesh(draw, prepared)
+        trail_items = self._prepare_trail_draw_items(trail, projection)
+        self._draw_prepared_mesh(draw, prepared, trail_items)
 
     def _render_mesh(self, draw, camera, all_tris, w, h):
         """Wrapper de compatibilidad — redirige al pipeline vectorizado."""
@@ -1464,6 +1705,9 @@ class Robot3DDrawing:
 
     def _build_grid_mesh(self):
         """Construye la rejilla del suelo como pequeños segmentos 3D ordenables por profundidad."""
+        if self._grid_mesh_cache is not None:
+            return self._grid_mesh_cache
+
         size = self.GRID_SIZE
         step = self.GRID_STEP
         z = self.GRID_Z_OFFSET
@@ -1491,8 +1735,10 @@ class Robot3DDrawing:
                     tris.append(seg)
 
         if not tris:
-            return np.empty((0, 3, 3), dtype=float)
-        return np.concatenate(tris, axis=0)
+            self._grid_mesh_cache = np.empty((0, 3, 3), dtype=float)
+        else:
+            self._grid_mesh_cache = np.concatenate(tris, axis=0)
+        return self._grid_mesh_cache
 
     def _draw_grid(self, draw, projection):
         """Dibuja la rejilla del plano Z=0."""
@@ -1595,6 +1841,35 @@ class Robot3DDrawing:
 
         return center, axis, u, v
 
+    @staticmethod
+    def _rotate_vector_about_axis(vector, axis, angle):
+        vec = np.asarray(vector, dtype=float)
+        ax = np.asarray(axis, dtype=float)
+        ax_n = np.linalg.norm(ax)
+        if ax_n < 1e-9:
+            return vec
+        ax = ax / ax_n
+        c = math.cos(angle)
+        s = math.sin(angle)
+        return (
+            vec * c
+            + np.cross(ax, vec) * s
+            + ax * np.dot(ax, vec) * (1.0 - c)
+        )
+
+    @staticmethod
+    def _joint_arc_anchor_direction(frames, joint_idx, center, axis):
+        for candidate in frames[joint_idx + 1:]:
+            try:
+                delta = np.asarray(candidate['pos'], dtype=float) - center
+            except Exception:
+                continue
+            planar = delta - axis * np.dot(delta, axis)
+            planar_n = np.linalg.norm(planar)
+            if planar_n > 1e-6:
+                return planar / planar_n
+        return None
+
     def _draw_joint_axes(self, draw, model, chain, projection):
         """Dibuja los ejes XYZ locales de cada articulación usando sus frames renderizados."""
         vm = self.resolve_visual_model(model)
@@ -1636,8 +1911,8 @@ class Robot3DDrawing:
         Para cada articulación rotacional i:
           - center = pivote en coordenadas mundo (del modelo visual)
           - axis   = eje de rotación en coordenadas mundo
-          - u/v    = base ortonormal en el plano del arco;
-                     u apunta en la dirección neutro (joints[i]=0)
+          - ref    = dirección actual de la primera geometría hija separada
+                     del eje, o la referencia local si no hay geometría hija
           - Segmentos de arco [mn, mx] grados + líneas radiales.
         """
         lines = []
@@ -1654,8 +1929,7 @@ class Robot3DDrawing:
             basis = self._resolve_joint_basis(frame)
             if basis is None:
                 continue
-            center, axis, u, v = basis
-            u_raw = u
+            center, axis, u, _v = basis
 
             # Normalizar eje
             axis_n = np.linalg.norm(axis)
@@ -1663,32 +1937,29 @@ class Robot3DDrawing:
                 continue
             axis = axis / axis_n
 
-            # Calcular v = cross(axis, u), luego re-ortonormalizar u
-            v_raw = np.cross(axis, u_raw)
-            v_n = np.linalg.norm(v_raw)
-            if v_n < 1e-9:
-                continue
-            v = v_raw / v_n
-            u = np.cross(v, axis)   # re-ortonormalización: u ⟂ axis ⟂ v
-
             # Por defecto el arco barre el rango articular [mn, mx]. Si el frame
             # define 'arc_angles' (p. ej. la pinza, que barre su apertura desde
             # la referencia 'forward'), se usan esos ángulos locales.
             mn, mx = frame.get('arc_angles', model.joint_limits[i])
             r_arc = frame['r_arc']
+            ref_dir = self._joint_arc_anchor_direction(frames, i, center, axis)
+            current_angle = float(frame.get('arc_current_angle', model.joints[i]))
+            if ref_dir is None:
+                ref_dir = u
+                current_angle = 0.0
 
             # Puntos del arco con índice original (para descartar saltos si algún punto
             # queda detrás de la cámara sin crear segmentos erróneos que cruzan la pantalla)
             projected = []
-            for k in range(_ARC_STEPS + 1):
-                angle_deg = mn + (mx - mn) * k / _ARC_STEPS
-                angle_rad = math.radians(angle_deg)
-                c_a = math.cos(angle_rad)
-                s_a = math.sin(angle_rad)
+            arc_steps = self._active_arc_steps()
+            for k in range(arc_steps + 1):
+                angle_deg = mn + (mx - mn) * k / arc_steps
+                arc_dir = self._rotate_vector_about_axis(
+                    ref_dir, axis, math.radians(angle_deg - current_angle))
                 p3d = [
-                    center[0] + r_arc * (c_a * u[0] + s_a * v[0]),
-                    center[1] + r_arc * (c_a * u[1] + s_a * v[1]),
-                    center[2] + r_arc * (c_a * u[2] + s_a * v[2]),
+                    center[0] + r_arc * arc_dir[0],
+                    center[1] + r_arc * arc_dir[1],
+                    center[2] + r_arc * arc_dir[2],
                 ]
                 projected.append(self._project_point(p3d, projection))
 

@@ -75,6 +75,8 @@ class Servo:
                     servo = arm_robot.attach_servo_to_pin(pin, self.instance_name)
         if servo is not None:
             self.servo = servo
+            self.min = min
+            self.max = max
             servo.min = min
             servo.max = max
             return self.OK
@@ -100,15 +102,38 @@ class Servo:
 
     def write_microseconds(self, us):
         """
-        Writes speed to servo in microseconds.
-        This method will work exactly the same way as write does (because our
-        servos are rotation ones)
+        Writes a pulse width to the servo.
+
+        Arduino Servo clamps writeMicroseconds() to the attached pulse range.
+        Arm joints keep the raw pulse so the 3D model can map it to the
+        configured physical joint range; regular servo elements keep the
+        equivalent 0..180 value used by Servo.read().
         Arguments:
             servo: the servo to write to
             us: the value of the parameter in microseconds (int)
         """
         if self.servo is not None:
-            self.servo.value = us
+            try:
+                pulse = int(float(us))
+            except (TypeError, ValueError):
+                return self.ERROR
+
+            pulse_min = int(getattr(self.servo, "min", self.min))
+            pulse_max = int(getattr(self.servo, "max", self.max))
+            if pulse_max <= pulse_min:
+                return self.ERROR
+
+            clamped = max(pulse_min, min(pulse_max, pulse))
+            angle = int((clamped - pulse_min) * 180 / (pulse_max - pulse_min))
+            if hasattr(self.servo, "set_pulse_value"):
+                if not self.servo.set_pulse_value(
+                    self.servo.pin, clamped, pulse_min, pulse_max, angle
+                ):
+                    return self.ERROR
+            elif hasattr(self.servo, "set_value"):
+                self.servo.set_value(self.servo.pin, angle)
+            else:
+                self.servo.value = angle
             return self.OK
         return self.ERROR
 

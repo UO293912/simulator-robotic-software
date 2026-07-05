@@ -77,6 +77,18 @@ class FakeServoElement:
         self.value = value
 
 
+class FakePulseServoElement(FakeServoElement):
+    def __init__(self, pin, value=90):
+        super().__init__(pin, value)
+        self.pulses = []
+
+    def set_pulse_value(self, pin, pulse, pulse_min, pulse_max, angle):
+        assert pin == self.pin
+        self.pulses.append((pulse, pulse_min, pulse_max, angle))
+        self.value = angle
+        return True
+
+
 class FakeBoard:
     def __init__(self, elements=None):
         self.elements = dict(elements or {})
@@ -234,12 +246,30 @@ def test_servo_lifecycle_clamps_angles_and_releases_pin():
     motor.write("invalid")
     assert motor.read() == 0
     assert motor.write_microseconds(1500) == motor.OK
-    assert motor.read() == 1500
+    assert motor.read() == 101
+    assert motor.write_microseconds(500) == motor.OK
+    assert motor.read() == 0
+    assert motor.write_microseconds(2500) == motor.OK
+    assert motor.read() == 180
+    assert motor.write_microseconds("invalid") == motor.ERROR
+    assert motor.read() == 180
 
     assert motor.detach() == motor.OK
     assert board.detached == [6]
     assert not motor.attached()
     assert motor.detach() == motor.ERROR
+
+
+def test_servo_write_microseconds_preserves_pulse_for_arm_elements():
+    element = FakePulseServoElement(pin=6)
+    board = FakeBoard({6: element})
+    motor = servo.Servo(board)
+
+    assert motor.attach(6, 500, 2500) == motor.OK
+    assert motor.write_microseconds(2500) == motor.OK
+
+    assert motor.read() == 180
+    assert element.pulses == [(2500, 500, 2500, 180)]
 
 
 def test_servo_reports_failure_when_no_compatible_pin_exists():

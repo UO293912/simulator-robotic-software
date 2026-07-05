@@ -246,11 +246,9 @@ class TestInverseKinematics:
 
     def test_ik_api_refines_single_call_beyond_legacy_tolerance(self, motor3d_api):
         """La API de IK debe refinar en una sola llamada hasta ~1 mm."""
-        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
-
         target = [0.0, 300.0, 200.0]
         converged, _ = motor3d_api.solve_ik(*target)
-        ee = forward_kinematics_chain(motor3d_api.model)['end_effector']
+        ee = motor3d_api.scene.get_end_effector()
         error = math.sqrt(
             (ee[0] - target[0]) ** 2
             + (ee[1] - target[1]) ** 2
@@ -407,7 +405,6 @@ def test_generic_joint_range_arcs_visible_for_zero_length_links():
             {'theta': 0.0, 'd': 0.0, 'a': 150.0, 'alpha': 0.0},
             {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 90.0},
         ],
-        'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
         'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
     })
     renderer = Robot3DDrawing(stl_dir=None)
@@ -605,6 +602,116 @@ class TestRendering:
 
         np.testing.assert_allclose(tcp_open, tcp_closed, atol=1e-9)
         assert np.linalg.norm(fk_open - fk_closed) > 5.0
+
+    def test_generic_gripper_uses_last_dh_offset_as_closed_tip(self):
+        """La pinza usa d/a del ultimo row como su punta cerrada, no como eslabon."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 100.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -10.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[15.0, -20.0, -60.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 25.0, 'd': 80.0, 'a': 60.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        dims = visual._resolve_dimensions(model)
+        chain = forward_kinematics_chain(model)
+        grip = visual._get_gripper_geometry(model, chain, dims)
+        assert grip is not None
+
+        neutral = ArmKinematicState()
+        neutral.load_dict(model.to_dict())
+        neutral.joints[2] = 0.0
+        neutral_chain = forward_kinematics_chain(neutral)
+        np.testing.assert_allclose(grip['tcp'], neutral_chain['positions'][-1], atol=1e-9)
+        assert np.linalg.norm(np.asarray(chain['positions'][-1]) - grip['tcp']) > 5.0
+        np.testing.assert_allclose(
+            visual.get_effective_end_effector(model, chain['positions'], chain),
+            grip['tcp'],
+            atol=1e-9,
+        )
+
+        neutral_grip = visual._get_gripper_geometry(neutral, neutral_chain, dims)
+        tips_midpoint = 0.5 * (
+            neutral_grip['fingers'][0]['tip'] + neutral_grip['fingers'][1]['tip']
+        )
+        np.testing.assert_allclose(neutral_grip['tcp'], tips_midpoint, atol=1e-9)
+
+    def test_generic_gripper_with_d_dominant_tip_still_opens_visually(self):
+        """Una pinza larga por d debe abrir alrededor de un eje visual perpendicular."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=2,
+            link_lengths=[120.0, 2.0],
+            joint_limits=[(-90.0, 90.0), (-80.0, -17.0)],
+            joint_types=['R', 'R'],
+            joints=[0.0, -80.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 0.0, 'a': 120.0, 'alpha': 90.0},
+                {'theta': -90.0, 'd': 126.55, 'a': 0.5, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        grip = visual._get_gripper_geometry(
+            model, forward_kinematics_chain(model), visual._resolve_dimensions(model)
+        )
+
+        assert grip is not None
+        assert abs(float(np.dot(grip['hinge_axis'], grip['forward']))) < 1e-9
+        left = next(f for f in grip['fingers'] if f['sign'] > 0)
+        right = next(f for f in grip['fingers'] if f['sign'] < 0)
+        assert np.dot(left['dir'], grip['side']) > 0.1
+        assert np.dot(right['dir'], grip['side']) < -0.1
+
+    def test_generic_gripper_has_no_minimum_size_with_zero_last_dh_offset(self):
+        """La pinza no debe heredar un tamano minimo si el ultimo d/a es cero."""
+        import numpy as np
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
+        from motor3d.rendering.robot3d_drawing import GenericDhVisualModel
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[0.0, 160.0, 0.0],
+            joint_limits=[(-90.0, 90.0), (-90.0, 90.0), (-80.0, -10.0)],
+            joint_types=['R', 'R', 'R'],
+            joints=[15.0, -20.0, -60.0],
+            dh_rows=[
+                {'theta': 0.0, 'd': 120.0, 'a': 0.0, 'alpha': 90.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 160.0, 'alpha': 0.0},
+                {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
+            ],
+            visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        )
+
+        visual = GenericDhVisualModel()
+        chain = forward_kinematics_chain(model)
+        grip = visual._get_gripper_geometry(model, chain, visual._resolve_dimensions(model))
+
+        assert grip is not None
+        assert grip['palm_depth'] == pytest.approx(0.0)
+        assert grip['finger_width'] == pytest.approx(0.0)
+        np.testing.assert_allclose(grip['tcp'], chain['positions'][-2], atol=1e-9)
 
     def test_generic_gripper_fingers_counter_rotate_symmetrically(self):
         """La pinza genérica debe abrir los dedos en espejo usando un pivote común."""
@@ -881,6 +988,120 @@ def test_arm3d_custom_mode_preserves_full_internal_range_with_visible_servo_offs
     assert abs(layer.motor3d.model.joints[0] - 135.0) < 1e-6
 
 
+def test_arm3d_write_microseconds_spans_configured_rotational_range():
+    """Un eje custom de 240 grados debe recorrer todo su rango con pulsos PWM."""
+    import graphics.layers as layers_mod
+    from libraries.servo import Servo
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[100.0],
+        joint_limits=[(-120.0, 120.0)],
+        joint_types=['R'],
+        joints=[0.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 100.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        servo_pins=[11],
+    )
+    layer.motor3d.active_preset_name = None
+    layer.motor3d.model.preset_name = None
+    layer.apply_servo_pin_mapping()
+    layer._sync_servos_from_model(reset_animation=True)
+
+    motor = Servo(layer.robot.board, "base")
+    assert motor.attach(11, 500, 2500) == Servo.OK
+
+    assert motor.write_microseconds(500) == Servo.OK
+    layer.snap_to_servo_targets()
+    assert layer.motor3d.model.joints[0] == pytest.approx(-120.0)
+    assert motor.read() == 0
+
+    assert motor.write_microseconds(1500) == Servo.OK
+    layer.snap_to_servo_targets()
+    assert layer.motor3d.model.joints[0] == pytest.approx(0.0)
+    assert motor.read() == 90
+
+    assert motor.write_microseconds(2500) == Servo.OK
+    layer.snap_to_servo_targets()
+    assert layer.motor3d.model.joints[0] == pytest.approx(120.0)
+    assert motor.read() == 180
+
+
+def test_arm3d_prismatic_servo_write_moves_as_linear_actuator(monkeypatch):
+    """En una P, Servo.write usa 90 como parada y el resto como velocidad."""
+    import graphics.layers as layers_mod
+    from libraries.servo import Servo
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[0.0],
+        joint_limits=[(0.0, 120.0)],
+        joint_types=['P'],
+        joints=[60.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        servo_pins=[11],
+    )
+    layer.motor3d.active_preset_name = None
+    layer.motor3d.model.preset_name = None
+    layer.apply_servo_pin_mapping()
+    layer._sync_servos_from_model(reset_animation=True)
+
+    clock = {"now": 0.25}
+    monkeypatch.setattr(layers_mod.time, "monotonic", lambda: clock["now"])
+    layer._last_sync_time = 0.0
+
+    servo = Servo(layer.robot.board, "base")
+    assert servo.attach(11) == Servo.OK
+    servo.write(0)
+
+    assert layer.wants_fast_render() is True
+    layer._Arm3DLayer__sync_from_servos()
+    assert layer.motor3d.model.joints[0] == pytest.approx(82.5)
+
+    servo.write(90)
+    clock["now"] = 0.50
+    assert layer.is_motion_active() is False
+    layer._Arm3DLayer__sync_from_servos()
+    assert layer.motor3d.model.joints[0] == pytest.approx(82.5)
+
+
+def test_arm3d_prismatic_servo_write_stops_at_joint_limits(monkeypatch):
+    """La logica de corredera no atraviesa los limites configurados."""
+    import graphics.layers as layers_mod
+    from libraries.servo import Servo
+
+    layer = layers_mod.Arm3DLayer()
+    layer.motor3d.model.configure(
+        dof=1,
+        link_lengths=[0.0],
+        joint_limits=[(0.0, 120.0)],
+        joint_types=['P'],
+        joints=[119.0],
+        dh_rows=[{'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0}],
+        visual={'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
+        servo_pins=[11],
+    )
+    layer.motor3d.active_preset_name = None
+    layer.motor3d.model.preset_name = None
+    layer.apply_servo_pin_mapping()
+    layer._sync_servos_from_model(reset_animation=True)
+
+    clock = {"now": 0.25}
+    monkeypatch.setattr(layers_mod.time, "monotonic", lambda: clock["now"])
+    layer._last_sync_time = 0.0
+
+    servo = Servo(layer.robot.board, "base")
+    assert servo.attach(11) == Servo.OK
+    servo.write(0)
+
+    layer._Arm3DLayer__sync_from_servos()
+    assert layer.motor3d.model.joints[0] == pytest.approx(120.0)
+    assert layer.wants_fast_render() is False
+
+
 def test_braccio_layer_keeps_visible_servo_values_and_internal_dh_values():
     """El Braccio predefinido debe seguir usando la numeración servo tradicional."""
     from graphics.layers import Arm3DLayer
@@ -1060,24 +1281,24 @@ def test_arm3d_config_locked_preset_keeps_confirm_enabled():
     assert window._btn_save.options["state"] == "normal"
 
 
-def test_arm3d_config_braccio_table_defaults_match_visual_lengths():
-    """La tabla del Braccio debe ofrecer longitudes acordes al modelo visual exacto."""
+def test_arm3d_config_braccio_table_defaults_match_calibrated_preset():
+    """La tabla del Braccio debe mostrar la DH calibrada que coincide con el TCP."""
     from graphics.gui import Arm3DConfigurationWindow
 
     defaults = Arm3DConfigurationWindow._braccio_table_defaults()
     rows = defaults["dh_rows"]
 
     assert defaults["base"] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
-    assert rows[0] == {"theta": 0.0, "d": 72.0, "a": 0.0, "alpha": 90.0}
-    assert rows[1]["a"] == 125.0
-    assert rows[2]["a"] == 125.0
-    assert rows[3]["a"] == 60.0
-    assert rows[4]["a"] == pytest.approx(31.6227766017, abs=1e-9)
-    assert rows[5] == {"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
+    assert rows[0] == {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0}
+    assert rows[1] == {"theta": 90.0, "d": 0.0, "a": 125.0, "alpha": 0.0}
+    assert rows[2] == {"theta": 0.0, "d": 0.0, "a": 125.0, "alpha": 0.0}
+    assert rows[3] == {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0}
+    assert rows[4] == {"theta": 90.0, "d": -60.0, "a": 0.0, "alpha": 180.0}
+    assert rows[5] == {"theta": -90.0, "d": 126.55, "a": 0.5, "alpha": 0.0}
 
 
 def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
-    """Seleccionar el preset Braccio debe mostrar en tabla la plantilla visual corregida."""
+    """Seleccionar el preset Braccio debe mostrar la DH calibrada del preset."""
     from graphics.gui import Arm3DConfigurationWindow
 
     class DummyMotor3D:
@@ -1104,10 +1325,11 @@ def test_arm3d_config_table_source_uses_braccio_defaults_when_preset_selected():
 
     config = Arm3DConfigurationWindow._table_source_config(window)
 
-    assert config["dh_rows"][0]["d"] == 72.0
+    assert config["dh_rows"][0] == {"theta": -180.0, "d": 72.0, "a": -2.0, "alpha": 90.0}
     assert config["dh_rows"][1]["a"] == 125.0
-    assert config["dh_rows"][3]["a"] == 60.0
-    assert config["dh_rows"][4]["a"] == pytest.approx(31.6227766017, abs=1e-9)
+    assert config["dh_rows"][3] == {"theta": -90.0, "d": 0.0, "a": 0.0, "alpha": 90.0}
+    assert config["dh_rows"][4] == {"theta": 90.0, "d": -60.0, "a": 0.0, "alpha": 180.0}
+    assert config["dh_rows"][5] == {"theta": -90.0, "d": 126.55, "a": 0.5, "alpha": 0.0}
 
 
 def test_arm3d_unlock_restores_semantic_disabled_fields():
@@ -1516,7 +1738,6 @@ class TestCameraNavigation:
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
             ],
-            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
             'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         }
 
@@ -1541,7 +1762,6 @@ class TestCameraNavigation:
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
                 {'theta': 0.0, 'd': 0.0, 'a': 500.0, 'alpha': 0.0},
             ],
-            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
             'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         }
 
@@ -1970,7 +2190,7 @@ class TestSafetyAndConstraints:
 
     def test_safety_warns_for_true_jacobian_singularity(self, motor3d_api):
         """Una pose extendida con perdida de rango del Jacobiano mantiene el aviso."""
-        motor3d_api.model.joints = [0.0, 0.0, 0.0, 0.0, 0.0, -80.0]
+        motor3d_api.model.joints = [0.0, 0.0, 0.0, 0.0, 81.0, -17.0]
         motor3d_api.scene.update()
 
         result = motor3d_api.evaluate_safety()
@@ -2061,12 +2281,15 @@ class TestPersistence:
 
         assert layer.motor3d.model.joints[0] == pytest.approx(10.0)
 
-    def test_braccio_dh_effector_matches_visual_tcp(self):
-        """Tras recalibrar el DH al STL real, el efector cinematico (objetivo de la
-        IK y valor mostrado) coincide con el TCP visual de las garras: lo que se
-        escribe en la CI = lo mostrado = el brazo dibujado."""
+    def test_braccio_dh_neutral_gripper_tip_matches_visual_tcp(self):
+        """La tabla DH del Braccio lleva la longitud real de la pinza.
+
+        El TCP visual exacto del Braccio se mantiene en el centro de las garras,
+        por eso se compara con la referencia neutra q5=0.
+        """
         import math
         from motor3d.api import Motor3DApi
+        from motor3d.kinematics.kinematics_fk import forward_kinematics_chain
 
         api = Motor3DApi()
         for joints in ([0.0, 0.0, 0.0, 0.0, 0.0, -17.0],
@@ -2074,11 +2297,18 @@ class TestPersistence:
             api.model.joints = list(joints)
             api.scene.update()
 
-            fk_ee = api.scene.last_chain["end_effector"]
             visual_tcp = api.scene.get_end_effector()
-            distance = math.sqrt(sum((a - b) ** 2 for a, b in zip(fk_ee, visual_tcp)))
+            saved_joints = list(api.model.joints)
+            api.model.joints[5] = 0.0
+            neutral_fk_ee = forward_kinematics_chain(api.model)["end_effector"]
+            api.model.joints = saved_joints
 
-            assert distance < 1.0, f"DH y TCP visual divergen {distance:.2f} mm"
+            neutral_distance = math.sqrt(sum(
+                (a - b) ** 2 for a, b in zip(neutral_fk_ee, visual_tcp)
+            ))
+
+            assert neutral_distance < 2.0, (
+                f"DH neutra y TCP visual divergen {neutral_distance:.2f} mm")
             assert visual_tcp[2] <= api.model.max_reach() + 30.0
 
     def test_generic_ik_targets_closed_gripper_tip(self):
@@ -2103,7 +2333,6 @@ class TestPersistence:
                 {'theta': 0.0, 'd': 0.0, 'a': 31.62, 'alpha': 90.0},
                 {'theta': 0.0, 'd': 0.0, 'a': 0.0, 'alpha': 0.0},
             ],
-            'tool': {'parent_joint': -1, 'offset': [0.0, 0.0, 0.0]},
             'visual': {'mode': 'auto_generic', 'theme': 'default', 'sizes': {}},
         })
         api.scene.update()
@@ -2733,27 +2962,13 @@ class TestMotor3DEdgeCases:
 
         np.testing.assert_allclose(jacobian, [[0.0, 0.0, 1.0]], atol=1e-9)
 
-    def test_fk_legacy_rpy_tool_offset_and_invalid_vector_fallback(self):
+    def test_fk_legacy_rpy_and_invalid_vector_fallback(self):
         import numpy as np
         import motor3d.kinematics.kinematics_fk as fk
-        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
 
         model_with_rpy = SimpleNamespace(base_rpy=[0.0, 90.0, 0.0])
         transform = fk.get_base_transform(model_with_rpy)
         np.testing.assert_allclose(transform[:3, 2], [1.0, 0.0, 0.0], atol=1e-9)
-
-        arm = ArmKinematicState()
-        arm.configure(
-            dof=1,
-            link_lengths=[10.0],
-            joint_limits=[(-90.0, 90.0)],
-            joint_types=["R"],
-            joints=[0.0],
-            dh_rows=[{"theta": 0.0, "d": 0.0, "a": 10.0, "alpha": 0.0}],
-            tool={"parent_joint": 0, "offset": [1.0, 2.0, 3.0]},
-        )
-        chain = fk.forward_kinematics_chain(arm)
-        np.testing.assert_allclose(chain["end_effector"], [11.0, 2.0, 3.0], atol=1e-9)
 
         assert fk.get_prismatic_pre_rotation(
             SimpleNamespace(prismatic_pre_rotations=["bad"]), 0
@@ -2865,7 +3080,6 @@ class TestMotor3DEdgeCases:
             joint_types=["R"],
             joints=[0.0],
             dh_rows=[{"theta": 0.0, "d": 0.0, "a": 100.0, "alpha": 0.0}],
-            tool={"parent_joint": 0, "offset": [3.0, 4.0, 0.0]},
             visual={"mode": "auto_generic"},
         )
 
@@ -2876,6 +3090,6 @@ class TestMotor3DEdgeCases:
 
         expected = max(
             api.camera.DEFAULT_DISTANCE,
-            (100.0 + 5.0) * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
+            100.0 * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
         )
         assert math.isclose(api._recommended_camera_distance(), expected)

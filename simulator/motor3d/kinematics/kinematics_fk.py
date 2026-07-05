@@ -95,7 +95,7 @@ def forward_kinematics_chain(model):
         Dict con:
             'matrices'    — lista de matrices 4x4 acumuladas (una por articulación)
             'positions'   — lista de [x, y, z] del origen de cada articulación
-            'end_effector'— [x, y, z] del efector final (con tool_offset)
+            'end_effector'— [x, y, z] del efector final DH
     """
     T = get_base_transform(model)
     matrices = []
@@ -123,14 +123,7 @@ def forward_kinematics_chain(model):
         matrices.append(T.copy())
         positions.append([float(T[0, 3]), float(T[1, 3]), float(T[2, 3])])
 
-    # Efector final con offset de herramienta
-    to = model.tool_offset
-    if to and any(v != 0 for v in to):
-        t_local = np.array([float(to[0]), float(to[1]), float(to[2]), 1.0])
-        t_world = T @ t_local
-        end_effector = [float(t_world[0]), float(t_world[1]), float(t_world[2])]
-    else:
-        end_effector = [float(T[0, 3]), float(T[1, 3]), float(T[2, 3])]
+    end_effector = [float(T[0, 3]), float(T[1, 3]), float(T[2, 3])]
 
     return {
         'matrices': matrices,
