@@ -1155,7 +1155,7 @@ def _prepare_mesh_draw_chunk(all_tris, colors, shaded_flags, projection):
     depths = centroids_cam[:, 2]
 
     mask = ~behind & ~degen & facing & ~offscreen
-    visible = np.where(mask)[0]
+    visible = np.nonzero(mask)[0]
     if visible.size == 0:
         return None
 

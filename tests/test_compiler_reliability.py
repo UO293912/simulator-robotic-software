@@ -1,4 +1,27 @@
+import importlib.util
+from pathlib import Path
 from types import SimpleNamespace
+
+
+def _parse_program(code):
+    from antlr4 import CommonTokenStream, InputStream
+    from compiler.ArduinoLexer import ArduinoLexer
+    from compiler.ArduinoParser import ArduinoParser
+    from compiler.ast_builder_visitor import ASTBuilderVisitor
+
+    lexer = ArduinoLexer(InputStream(code))
+    parser = ArduinoParser(CommonTokenStream(lexer))
+    return ASTBuilderVisitor().visitProgram(parser.program())
+
+
+def _transpile_to_script(code):
+    from compiler import transpiler
+
+    warns, errors, ast = transpiler.transpile(code)
+
+    assert not errors
+    assert ast is not None
+    return Path("temp/script_arduino.py").read_text(encoding="utf-8"), ast
 
 
 def test_semantic_analyzer_handles_missing_optional_nodes():
@@ -84,6 +107,113 @@ def test_ast_builder_declaration_preserves_qualifiers():
     assert result.is_const is True
     assert result.line == 3
     assert result.position == 7
+
+
+def test_arduino_reference_arguments_are_preserved_in_ast():
+    program = _parse_program(
+        """
+        void bump(int &value) {
+          value = value + 1;
+        }
+        void inspect(const int &value) {
+          int copy = value;
+        }
+        void setup() {}
+        void loop() {}
+        """
+    )
+
+    functions = {
+        code.function.name: code.function
+        for code in program.code
+        if code.function is not None
+    }
+
+    ref_arg = functions["bump"].args[0]
+    const_ref_arg = functions["inspect"].args[0]
+
+    assert ref_arg.var_name == "value"
+    assert ref_arg.is_reference is True
+    assert ref_arg.is_const is False
+    assert const_ref_arg.var_name == "value"
+    assert const_ref_arg.is_reference is False
+    assert const_ref_arg.is_const is True
+
+
+def test_transpiled_reference_argument_mutates_the_caller_value(monkeypatch):
+    script, _ast = _transpile_to_script(
+        """
+        void bump(int &value) {
+          value = value + 1;
+        }
+        void setup() {
+          int total = 3;
+          bump(total);
+        }
+        void loop() {}
+        """
+    )
+
+    assert "def bump(value = standard.Ref(0)):" in script
+    assert "value.value = (value.value + 1)" in script
+    assert "total = standard.Ref(3)" in script
+    assert "bump(total)" in script
+
+    spec = importlib.util.spec_from_file_location(
+        "generated_reference_contract",
+        Path("temp/script_arduino.py"),
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module.screen_updater, "debug_line", lambda *_args: None)
+    monkeypatch.setattr(module.standard, "runtime_watchdog_checkpoint", lambda: None)
+
+    value = module.standard.Ref(3)
+    module.bump(value)
+
+    assert value.value == 4
+
+
+def test_reference_defaults_cover_float_boolean_and_string_values():
+    script, _ast = _transpile_to_script(
+        """
+        void configure(float &ratio, bool &enabled, String &label) {
+          ratio = ratio + 0.5;
+          enabled = true;
+          label = "ok";
+        }
+        void setup() {}
+        void loop() {}
+        """
+    )
+
+    assert "ratio = standard.Ref(0.0)" in script
+    assert "enabled = standard.Ref(False)" in script
+    assert 'label = standard.Ref(String.String(""))' in script
+    assert "ratio.value = (ratio.value + 0.5)" in script
+    assert "enabled.value = True" in script
+    assert 'label.value = String.String("ok")' in script
+
+
+def test_const_reference_is_generated_as_read_only_value():
+    script, _ast = _transpile_to_script(
+        """
+        void inspect(const int &value) {
+          int copy = value;
+        }
+        void setup() {
+          int total = 3;
+          inspect(total);
+        }
+        void loop() {}
+        """
+    )
+
+    assert "def inspect(value = 0):" in script
+    assert "copy = value" in script
+    assert "total = 3" in script
+    assert "inspect(total)" in script
+    assert "standard.Ref" not in script
 
 
 def test_standard_abs_uses_builtin_absolute_value():
