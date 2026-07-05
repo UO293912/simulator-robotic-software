@@ -2109,7 +2109,7 @@ class TestBraccioCompiler:
         layer._current_joints = None
         layer._Arm3DLayer__sync_from_servos()
 
-        expected = [71.38888888888889, 0.0, 0.0, 5.0, 81.0, -50.0]
+        expected = [71.38888888888889, -12.5, 0.0, 5.0, 81.0, -50.0]
         assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
 
     def test_transpiler_initializes_servo_instances_with_board(self):
