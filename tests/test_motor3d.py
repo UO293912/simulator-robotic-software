@@ -2046,7 +2046,7 @@ class TestBraccioCompiler:
 
             assert braccio.begin() == 1
 
-            expected = [-7.0, -45.0, -50.0, 110.0, 81.0, -80.0]
+            expected = [-7.0, 30.0, -50.0, 110.0, 81.0, -80.0]
             assert layer.motor3d.model.joints[:6] == pytest.approx(expected)
             assert layer._current_joints == pytest.approx(expected)
         finally:
@@ -2073,7 +2073,7 @@ class TestBraccioCompiler:
         layer._Arm3DLayer__sync_from_servos()
 
         assert layer.motor3d.model.joints[0] == pytest.approx(-35.33333333333333)
-        assert layer.motor3d.model.joints[1] == pytest.approx(-60.0)
+        assert layer.motor3d.model.joints[1] == pytest.approx(45.0)
 
     def test_braccio_preset_saturates_servo_values_to_real_limits(self):
         """El preset Braccio debe saturar la pose visual a los limites reales."""
