@@ -875,7 +875,8 @@ class Arm3DLayer(Layer):
         model_points = getattr(self.motor3d.model, 'servo_calibration', None) or []
         if 0 <= joint_idx < len(model_points) and len(model_points[joint_idx]) >= 2:
             return model_points[joint_idx]
-        if 0 <= joint_idx < len(self.DEFAULT_BRACCIO_SERVO_CALIBRATION):
+        if (self._uses_braccio_calibration()
+                and 0 <= joint_idx < len(self.DEFAULT_BRACCIO_SERVO_CALIBRATION)):
             return self.DEFAULT_BRACCIO_SERVO_CALIBRATION[joint_idx]
         return ()
 
@@ -910,7 +911,7 @@ class Arm3DLayer(Layer):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
-        if self._uses_braccio_calibration() and self._servo_calibration_points(joint_idx):
+        if self._servo_calibration_points(joint_idx):
             return self._braccio_real_to_digital(joint_idx, float(value) + 90.0)
         return float(value) + 90.0
 
@@ -918,13 +919,13 @@ class Arm3DLayer(Layer):
         model = self.motor3d.model
         if joint_idx < len(model.joint_types) and model.joint_types[joint_idx] == 'P':
             return float(value)
-        if self._uses_braccio_calibration() and self._servo_calibration_points(joint_idx):
+        if self._servo_calibration_points(joint_idx):
             return self._braccio_digital_to_real(joint_idx, value) - 90.0
         return float(value) - 90.0
 
     def _pulse_to_model_value(self, joint_idx, servo):
         model = self.motor3d.model
-        if self._uses_braccio_calibration() and not self._is_prismatic_joint(joint_idx):
+        if self._servo_calibration_points(joint_idx) and not self._is_prismatic_joint(joint_idx):
             return self._to_model_value(joint_idx, getattr(servo, "value", 90.0))
         if joint_idx >= len(model.joint_limits):
             return self._to_model_value(joint_idx, getattr(servo, "value", 90.0))
@@ -962,7 +963,7 @@ class Arm3DLayer(Layer):
         if joint_idx >= len(self.robot._joint_servos):
             return False
         servo = self.robot._joint_servos[joint_idx]
-        return getattr(servo, "command_mode", "position") == "velocity"
+        return getattr(servo, "command_mode", "position") in ("velocity", "pulse")
 
     def _prismatic_velocity_steps(self, value):
         try:
@@ -1018,7 +1019,7 @@ class Arm3DLayer(Layer):
                 continue
             target = self._servo_to_model_value(i, servo)
             if i < len(model.joint_limits):
-                mn, mx = model.joint_limits[i]
+                mn, mx = model.effective_joint_limits(i)
                 target = max(mn, min(mx, target))
             if i < len(self._current_joints):
                 if abs(target - self._current_joints[i]) > self._FAST_RENDER_EPS:
@@ -1040,7 +1041,7 @@ class Arm3DLayer(Layer):
                 continue
             target = self._servo_to_model_value(i, servo)
             if i < len(model.joint_limits):
-                mn, mx = model.joint_limits[i]
+                mn, mx = model.effective_joint_limits(i)
                 target = max(mn, min(mx, target))
             if i < len(self._current_joints):
                 if abs(target - self._current_joints[i]) > self._FAST_RENDER_EPS:
@@ -1058,7 +1059,7 @@ class Arm3DLayer(Layer):
             else:
                 target = self._servo_to_model_value(i, servo)
             if i < len(model.joint_limits):
-                mn, mx = model.joint_limits[i]
+                mn, mx = model.effective_joint_limits(i)
                 target = max(mn, min(mx, target))
             targets.append(target)
 
@@ -1093,7 +1094,7 @@ class Arm3DLayer(Layer):
                 else:
                     target = self._servo_to_model_value(i, servo)
                     if i < len(model.joint_limits):
-                        mn, mx = model.joint_limits[i]
+                        mn, mx = model.effective_joint_limits(i)
                         target = max(mn, min(mx, target))
                 self._current_joints.append(target)
             self._last_sync_time = now
@@ -1116,15 +1117,15 @@ class Arm3DLayer(Layer):
                 steps = self._prismatic_velocity_steps(sv)
                 target = curr + steps * self._PRISMATIC_CODE_SPEED_MM_S_PER_STEP * dt
                 if i < len(model.joint_limits):
-                    mn, mx = model.joint_limits[i]
+                    mn, mx = model.effective_joint_limits(i)
                     target = max(mn, min(mx, target))
                 self._current_joints[i] = target
             else:
                 target = self._servo_to_model_value(i, servo)
                 if i < len(model.joint_limits):
-                    mn, mx = model.joint_limits[i]
+                    mn, mx = model.effective_joint_limits(i)
                     target = max(mn, min(mx, target))
-                    if (not self._uses_braccio_calibration()
+                    if (not self._servo_calibration_points(i)
                             and getattr(servo, "command_mode", "position") != "pulse"
                             and i < len(self.robot._joint_servos)):
                         self._set_servo_position_value(
@@ -1162,7 +1163,7 @@ class Arm3DLayer(Layer):
             return min(lo, hi), max(lo, hi)
 
         joints_display = [_jval(i, j) for i, j in enumerate(model.joints)]
-        limits_display = [_jlim(i, mn, mx) for i, (mn, mx) in enumerate(model.joint_limits)]
+        limits_display = [_jlim(i, *model.effective_joint_limits(i)) for i in range(model.dof)]
         self.hud.update(
             dof=model.dof,
             joints=joints_display,

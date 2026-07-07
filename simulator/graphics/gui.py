@@ -2061,6 +2061,7 @@ class Arm3DConfigurationWindow(tk.Toplevel):
     def _on_preset_selected(self, _event=None):
         """Carga el preset seleccionado y repuebla DOF, modo visual y tabla DH."""
         name = self._preset_var.get()
+        previous = self.motor3d.active_preset_name
         if name != "Custom":
             path = self._presets.get(name)
             if not path:
@@ -2078,6 +2079,13 @@ class Arm3DConfigurationWindow(tk.Toplevel):
             self._sync_arm3d_servo_pin_mapping()
             self._build_dh_rows(self._table_frame)
             self._refresh_base_row_entries()
+        elif previous in self._presets:
+            # Solo al pasar de un preset del sistema a Custom se descarta la
+            # servo_calibration heredada (la tabla no la incluye) -> mapeo 1:1.
+            # Un Custom ya existente o importado desde JSON conserva su calibración.
+            config = self.motor3d.get_model_config()
+            config['servo_calibration'] = []
+            self.motor3d.set_model_config(config)
         self._apply_preset_display(name)
         self.motor3d.active_preset_name = name if name != "Custom" else None
         self.motor3d.model.preset_name = self.motor3d.active_preset_name
@@ -2945,7 +2953,10 @@ class Arm3DControlPanel(tk.Frame):
                         item_cache["visible"] = True
 
                     jtype = model.joint_types[i] if i < len(model.joint_types) else 'R'
-                    mn, mx = model.joint_limits[i] if i < len(model.joint_limits) else (-90.0, 90.0)
+                    # Rango REAL alcanzable (para el Braccio la calibración puede
+                    # exceder el joint_limits nominal); así el slider comanda el
+                    # barrido completo del servo, no el recortado al nominal.
+                    mn, mx = model.effective_joint_limits(i) if i < len(model.joint_limits) else (-90.0, 90.0)
                     raw_dh = model.joints[i] if i < len(model.joints) else 0.0
 
                     if jtype == 'P':

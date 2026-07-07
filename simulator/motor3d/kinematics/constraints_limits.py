@@ -9,5 +9,5 @@ def clamp_model_joints(model):
     en model.joint_limits, modificando model.joints in-place.
     """
     for i in range(model.dof):
-        mn, mx = model.joint_limits[i]
+        mn, mx = model.effective_joint_limits(i)
         model.joints[i] = max(mn, min(mx, model.joints[i]))

@@ -477,6 +477,7 @@ def test_arm3d_configuration_window_preset_selection_paths(tmp_path):
         model=model,
         active_preset_name="legacy",
         set_model_config=lambda config: saved_configs.append(config),
+        get_model_config=lambda: {"servo_calibration": [{"pin": 1}]},
     )
     window._table_frame = object()
     window._build_dh_rows = lambda _frame: rebuilt.append("rows")

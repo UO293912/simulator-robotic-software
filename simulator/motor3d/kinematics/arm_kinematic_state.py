@@ -97,7 +97,7 @@ class ArmKinematicState:
 
     def set_joint(self, index, value):
         if 0 <= index < self.dof:
-            mn, mx = self.joint_limits[index]
+            mn, mx = self.effective_joint_limits(index)
             self.joints[index] = max(mn, min(mx, float(value)))
 
     def set_dh(self, dh_rows):
@@ -179,8 +179,36 @@ class ArmKinematicState:
 
     def _clamp_joints(self):
         for i in range(self.dof):
-            mn, mx = self.joint_limits[i]
+            mn, mx = self.effective_joint_limits(i)
             self.joints[i] = max(mn, min(mx, self.joints[i]))
+
+    def effective_joint_limits(self, index):
+        mn, mx = self.joint_limits[index]
+        if index >= len(self.joint_types) or self.joint_types[index] != 'R':
+            return mn, mx
+        points = self.servo_calibration[index] if index < len(self.servo_calibration) else []
+        if len(points) < 2:
+            return mn, mx
+        lo = self._interp_calibration(points, 0.0) - 90.0
+        hi = self._interp_calibration(points, 180.0) - 90.0
+        return (lo, hi) if lo <= hi else (hi, lo)
+
+    @staticmethod
+    def _interp_calibration(points, value):
+        """Interpola linealmente digital→real sobre los puntos de calibración,
+        recortando (clamp) a los extremos fuera del rango muestreado."""
+        value = float(value)
+        ordered = sorted((float(x), float(y)) for x, y in points)
+        if value <= ordered[0][0]:
+            return ordered[0][1]
+        if value >= ordered[-1][0]:
+            return ordered[-1][1]
+        for (x0, y0), (x1, y1) in zip(ordered, ordered[1:]):
+            if x0 <= value <= x1:
+                if x1 == x0:
+                    return y1
+                return y0 + (y1 - y0) * (value - x0) / (x1 - x0)
+        return ordered[-1][1]
 
     @staticmethod
     def _normalize_prismatic_pre_rotation(item):
