@@ -2150,7 +2150,8 @@ class TestSafetyAndConstraints:
         braccio_model.joints = [200.0, 200.0, 200.0, 200.0, 200.0, 200.0]
         clamp_model_joints(braccio_model)
 
-        for i, (q, (mn, mx)) in enumerate(zip(braccio_model.joints, braccio_model.joint_limits)):
+        for i, q in enumerate(braccio_model.joints):
+            mn, mx = braccio_model.effective_joint_limits(i)
             assert mn <= q <= mx, f"Joint {i + 1} = {q} fuera de [{mn}, {mx}] tras clamping"
 
     def test_clamp_negative_joints(self, braccio_model):
@@ -2160,7 +2161,8 @@ class TestSafetyAndConstraints:
         braccio_model.joints = [-200.0] * 6
         clamp_model_joints(braccio_model)
 
-        for i, (q, (mn, mx)) in enumerate(zip(braccio_model.joints, braccio_model.joint_limits)):
+        for i, q in enumerate(braccio_model.joints):
+            mn, mx = braccio_model.effective_joint_limits(i)
             assert mn <= q <= mx, f"Joint {i + 1} = {q} fuera de [{mn}, {mx}]"
 
     def test_safety_manager_in_workspace(self, motor3d_api):
@@ -2245,9 +2247,22 @@ class TestPersistence:
         assert ok
         assert model.dof == 6
         assert len(model.joint_limits) == 6
+        # joint_limits conserva los valores NOMINALES base del fichero (los que
+        # la tabla DH muestra y edita: rango digital del servo).
         assert model.joint_limits == [
-            (-92.0, 78.0),
+            (-90.0, 90.0),
             (-75.0, 75.0),
+            (-90.0, 90.0),
+            (-90.0, 90.0),
+            (-90.0, 90.0),
+            (-80.0, -17.0),
+        ]
+        # El rango REAL alcanzable lo define la servo_calibration (imagen del
+        # barrido servo 0..180 en DH), que puede exceder el nominal.
+        effective = [model.effective_joint_limits(i) for i in range(6)]
+        assert effective == [
+            (-92.0, 78.0),
+            (-75.0, 60.0),
             (-50.0, 110.0),
             (-70.0, 110.0),
             (0.0, 162.0),
@@ -3093,3 +3108,222 @@ class TestMotor3DEdgeCases:
             100.0 * api.AUTO_GENERIC_CAMERA_DISTANCE_FACTOR,
         )
         assert math.isclose(api._recommended_camera_distance(), expected)
+
+    def test_arm_state_defaults_and_legacy_calibration_formats_are_normalized(self):
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=3,
+            link_lengths=[120.0],
+            joint_types=["P", "bad"],
+            prismatic_pre_rotations=[
+                {"yaw": "bad", "pitch": None},
+                [45, "bad"],
+            ],
+            servo_pins=["", "7", "bad"],
+            servo_calibration=[
+                [
+                    {"digital": "0", "real": "10"},
+                    {"servo": "180", "measured": "170"},
+                    {"digital": "bad", "real": "5"},
+                    ["90", "100"],
+                    object(),
+                ],
+                "not-a-calibration-list",
+            ],
+            base={"theta": "bad", "d": 5, "a": None, "alpha": "12.5"},
+        )
+
+        assert model.dof == 3
+        assert model.link_lengths == [120.0, 100.0, 100.0]
+        assert model.joint_limits == [(-90.0, 90.0)] * 3
+        assert model.joints == [0.0, 0.0, 0.0]
+        assert model.dh_rows == [
+            {"theta": 0.0, "d": 0.0, "a": 120.0, "alpha": 0.0},
+            {"theta": 0.0, "d": 0.0, "a": 100.0, "alpha": 0.0},
+            {"theta": 0.0, "d": 0.0, "a": 100.0, "alpha": 0.0},
+        ]
+        assert model.joint_types == ["P", "R", "R"]
+        assert model.prismatic_pre_rotations == [
+            {"yaw": 0.0, "pitch": 0.0},
+            {"yaw": 45.0, "pitch": 0.0},
+            {"yaw": 0.0, "pitch": 0.0},
+        ]
+        assert model.servo_pins == [None, 7, None]
+        assert model.servo_calibration == [
+            [(0.0, 10.0), (180.0, 170.0), (90.0, 100.0)],
+            [],
+            [],
+        ]
+        assert model.base_row == {"theta": 0.0, "d": 5.0, "a": 0.0, "alpha": 12.5}
+        assert model.effective_joint_limits(0) == (-90.0, 90.0)
+
+    def test_arm_state_interpolates_calibration_and_converts_degenerate_base_rpy(self):
+        from motor3d.kinematics.arm_kinematic_state import ArmKinematicState
+
+        points = [(180.0, 180.0), (0.0, 0.0), (90.0, 120.0)]
+
+        assert ArmKinematicState._interp_calibration(points, -5.0) == 0.0
+        assert ArmKinematicState._interp_calibration(points, 45.0) == 60.0
+        assert ArmKinematicState._interp_calibration(points, 999.0) == 180.0
+
+        yaw_only = ArmKinematicState._normalize_base_row({"rpy": [0.0, 0.0, 45.0]})
+        assert yaw_only == {"theta": 45.0, "d": 0.0, "a": 0.0, "alpha": 0.0}
+        assert ArmKinematicState._normalize_base_row({}) == {
+            "theta": 0.0,
+            "d": 0.0,
+            "a": 0.0,
+            "alpha": 0.0,
+        }
+
+        model = ArmKinematicState()
+        model.configure(
+            dof=1,
+            joint_limits=[(-10.0, 10.0)],
+            joint_types=["R"],
+            servo_calibration=[[(0.0, 200.0), (180.0, 20.0)]],
+        )
+
+        assert model.effective_joint_limits(0) == (-70.0, 110.0)
+
+    def test_stl_loader_accepts_ascii_and_rejects_corrupted_binary(self, tmp_path):
+        import struct
+        import numpy as np
+        from motor3d.rendering.robot3d_drawing import _load_stl
+
+        ascii_stl = tmp_path / "triangle.stl"
+        ascii_stl.write_text(
+            "\n".join(
+                [
+                    "solid triangle",
+                    "facet normal 0 0 1",
+                    "outer loop",
+                    "vertex 0 0 0",
+                    "vertex 1 0 0",
+                    "vertex 0 1 0",
+                    "endloop",
+                    "endfacet",
+                    "endsolid triangle",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        triangles = _load_stl(str(ascii_stl))
+
+        assert triangles.shape == (1, 3, 3)
+        np.testing.assert_allclose(triangles[0], [[0, 0, 0], [1, 0, 0], [0, 1, 0]])
+
+        corrupted = tmp_path / "corrupted.stl"
+        corrupted.write_bytes(b"x" * 80 + struct.pack("<I", 1) + b"incomplete")
+
+        assert _load_stl(str(corrupted)).shape == (0, 3, 3)
+
+    def test_rendering_geometry_fallbacks_are_deterministic(self):
+        import numpy as np
+        from motor3d.rendering.robot3d_drawing import BraccioVisualModel, GenericDhVisualModel
+
+        generic = GenericDhVisualModel()
+
+        np.testing.assert_allclose(
+            BraccioVisualModel._Raxis([0.0, 0.0, 0.0], math.pi),
+            np.eye(4),
+        )
+        np.testing.assert_allclose(
+            generic._safe_normalize([0.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
+            [1.0, 0.0, 0.0],
+        )
+        np.testing.assert_allclose(
+            generic._rotate_about_axis(
+                [1.0, 2.0, 3.0],
+                [0.0, 0.0, 0.0],
+                math.pi / 3,
+            ),
+            [1.0, 2.0, 3.0],
+        )
+
+        invalid_ratio_model = SimpleNamespace(joints=[10.0], joint_limits=[(5.0, 5.0)])
+        assert generic._gripper_ratio(invalid_ratio_model, 0) == 0.5
+
+        assert generic._get_gripper_geometry(
+            SimpleNamespace(dof=1),
+            {},
+            {"radius": 10.0},
+        ) is None
+        assert generic._get_gripper_geometry(
+            SimpleNamespace(dof=1),
+            {"matrices": [], "positions": [[0.0, 0.0, 0.0]]},
+            {"radius": 10.0},
+        ) is None
+
+    def test_braccio_visual_tcp_uses_safe_fallbacks_when_exact_transform_fails(
+            self, monkeypatch):
+        from motor3d.rendering.robot3d_drawing import BraccioVisualModel
+
+        visual = BraccioVisualModel.__new__(BraccioVisualModel)
+
+        def fail_offset(*_args, **_kwargs):
+            raise RuntimeError("bad visual transform")
+
+        monkeypatch.setattr(visual, "_build_offset_matrix", fail_offset)
+
+        model = SimpleNamespace(
+            dof=6,
+            joints=[0.0, 0.0, 0.0, 0.0, 0.0, -17.0],
+            base_row={"theta": 0.0, "d": 0.0, "a": 0.0, "alpha": 0.0},
+        )
+
+        assert visual.get_effective_end_effector(
+            model,
+            [[1.0, 2.0, 3.0]],
+            {"end_effector": [4.0, 5.0, 6.0]},
+        ) == [4.0, 5.0, 6.0]
+        assert visual.get_effective_end_effector(model, [[1.0, 2.0, 3.0]], {}) == [
+            1.0,
+            2.0,
+            3.0,
+        ]
+        assert visual.get_effective_end_effector(model, [], {}) == [0.0, 0.0, 0.0]
+
+    def test_robot3d_prepared_mesh_interleaves_trails_and_triangles_by_depth(self):
+        import numpy as np
+        from motor3d.rendering.robot3d_drawing import Robot3DDrawing
+
+        renderer = Robot3DDrawing.__new__(Robot3DDrawing)
+        draw_order = []
+        renderer._draw_trail_item = lambda _draw, item: draw_order.append(
+            ("trail", item[0])
+        )
+        renderer._draw_mesh_item = lambda _draw, pts, _color: draw_order.append(
+            ("mesh", float(pts[0, 0]))
+        )
+
+        pts2d = np.array(
+            [
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                [[10.0, 10.0], [11.0, 10.0], [10.0, 11.0]],
+            ],
+            dtype=float,
+        )
+        depths = np.array([5.0, 1.0], dtype=float)
+        rgb = np.array([[100, 0, 0], [0, 100, 0]], dtype=np.uint8)
+        trail_items = [
+            (3.0, [(0.0, 0.0), (1.0, 1.0)], (0, 220, 180), 2),
+            (6.0, [(2.0, 2.0), (3.0, 3.0)], (0, 220, 180), 2),
+            (0.5, [(4.0, 4.0), (5.0, 5.0)], (0, 220, 180), 1),
+        ]
+
+        renderer._draw_prepared_mesh(
+            None,
+            [(pts2d, depths, rgb)],
+            trail_items=trail_items,
+        )
+
+        assert draw_order == [
+            ("trail", 6.0),
+            ("mesh", 0.0),
+            ("trail", 3.0),
+            ("mesh", 10.0),
+            ("trail", 0.5),
+        ]

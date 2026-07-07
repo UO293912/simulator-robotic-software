@@ -306,7 +306,7 @@ def solve_inverse_kinematics(model, target, max_iter=150, tolerance=25.0, alpha=
     target = (tx, ty, tz)
 
     dof = model.dof
-    limits = model.joint_limits
+    limits = [model.effective_joint_limits(i) for i in range(dof)]
     types = model.joint_types
     joints_internal, limits_internal = _current_internal_state(model, limits, types)
     max_reach = max(1.0, float(model.max_reach()))

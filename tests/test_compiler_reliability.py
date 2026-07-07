@@ -324,6 +324,7 @@ def test_arm3d_slider_sync_locks_manual_input_while_model_moves(monkeypatch):
                     dof=1,
                     joint_types=["R"],
                     joint_limits=[(-90.0, 90.0)],
+                    effective_joint_limits=lambda i: (-90.0, 90.0),
                     joints=[10.0],
                 )
             )

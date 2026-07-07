@@ -84,21 +84,27 @@ class Servo:
 
     def write(self, angle):
         """
-        Writes speed to servo.
-        Our Servos, being rotation ones, will have their speed set by this
-        method. If the angle is 0, the speed is full in one direction, if
-        it is 180, is full speed in the oposite direction; with 90 being no
-        movement done by the servo
+        Writes speed/position to servo, replicando Servo::write() de Arduino.
+
+        Arduino trata los valores por debajo de MIN_PULSE_WIDTH (544) como
+        ángulos [0-180] y los mapea al rango de pulso configurado en attach()
+        [min, max]; los valores >= 544 se interpretan directamente como
+        microsegundos. En ambos casos delega en writeMicroseconds(), de modo
+        que write() y writeMicroseconds() comparten el mismo camino (y así
+        write(180) alcanza el extremo físico del servo, como en el hardware).
         Arguments:
             servo: the servo to write to
-            angle: the value to write [0-180]
+            angle: the value to write [0-180] (o microsegundos si es >= 544)
         """
         if self.servo is not None:
             try:
-                clamped = max(0, min(180, int(float(angle))))
+                value = int(float(angle))
             except (TypeError, ValueError):
                 return
-            self.servo.set_value(self.servo.pin, clamped)
+            if value < 544:
+                value = max(0, min(180, value))
+                value = self.min + value * (self.max - self.min) // 180
+            self.write_microseconds(value)
 
     def write_microseconds(self, us):
         """
@@ -124,7 +130,8 @@ class Servo:
                 return self.ERROR
 
             clamped = max(pulse_min, min(pulse_max, pulse))
-            angle = int((clamped - pulse_min) * 180 / (pulse_max - pulse_min))
+            angle = (clamped + 1 - pulse_min) * 180 // (pulse_max - pulse_min)
+            angle = max(0, min(180, angle))
             if hasattr(self.servo, "set_pulse_value"):
                 if not self.servo.set_pulse_value(
                     self.servo.pin, clamped, pulse_min, pulse_max, angle
